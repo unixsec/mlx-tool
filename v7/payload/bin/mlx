@@ -1,0 +1,24 @@
+#!/bin/bash
+# T0/T1 边界的开启点。三行 exec 垫片，前置集合为空（05-plan §三.7）。
+# 用 `-m mlx_server` 而非直接执行文件：后者丢失包上下文，相对 import 会炸。
+ROOT="${MLX_CODE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+# 解释器的**三级回落**（`00-inheritance` §0.4.2，BCR-2026-09-02）：
+#   ① venv —— 正常路径，装得进 hf 与 mlx_lm
+#   ② Homebrew 的 python3 —— venv 坏了但仍不碰系统解释器
+#   ③ 系统 python3 —— **最后手段**，只执行纯标准库代码，不装包、不写 site-packages
+#
+# 第 ③ 级不能去掉：§0.4.1 的论证依赖「venv 坏了 `mlx check` 也能跑」，
+# 只认前两级会让它在最该工作的时刻连启动都做不到。
+# 候选写**绝对路径**、不走 PATH —— 走 PATH 会让它随环境漂移，
+# 而这个垫片要在「什么都坏了」的时候仍然可预测。
+PY=""
+for _c in "$ROOT/.venv/bin/python3" \
+          /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+          /usr/bin/python3; do
+  [ -x "$_c" ] && { PY="$_c"; break; }
+done
+[ -n "$PY" ] || { echo "找不到可用的解释器（试过 venv / Homebrew / 系统三处）" >&2; exit 3; }
+
+MLX_SHARE_ROOT="${MLX_SHARE_ROOT:-$ROOT/share}" \
+  PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}" exec "$PY" -m mlx_server "$@"

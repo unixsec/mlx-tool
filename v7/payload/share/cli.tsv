@@ -1,0 +1,34 @@
+# 参数面声明表（PROD-07）。**解析器、help、补全三处都从它生成。**
+#
+# 设计 R-OBSERVE-32（P0）：「每个命令的参数面用声明表表达，解析器、补全、
+# 帮助三者都从该表生成」；验收「三处均由该表生成，**不存在手抄的第二份**」。
+# 在此表建立之前，flag 面散在 cli.py 的 BARE_FLAGS 里，help 页一个参数都没有，
+# 而解析错误却让用户「看 `mlx help <cmd>` 看可用参数」—— 承诺的下一步存在，
+# 承诺的内容不存在。
+#
+# 列（8 列，逐字按 `02-architecture.md` SSOT 表第 13 行）：
+#   flag owner_verb takes_value value_domain mutex_group default intent_id help_key
+#
+# `owner_verb` 为 `*` 表示对全部动词有效。
+# **登记面 == 读取点面（双向）**。设计附录 A 里的 --live / --brief /
+# --only / --tail 等属目标状态，本版没有读取点，不登记。
+# 反方向同样要守：有读取点却不登记，用户就查不到它、help 也不列它，
+# 而它却「碰巧能用」—— `--revision` / `--prompt` / `--session` 一度如此。
+# 内部注入键（`_group` / `layers` / `meta` / `files`）不是 flag，
+# 不登记即意味着用户从命令行传它们会被拒 —— 这正是要的。
+--json	*	no	-	output_format	false	output.machine_readable	flag.json
+--dry-run	up,down,restart,bench,install,uninstall,config import,model gc,model install,model register	no	-	-	false	exec.plan_only	flag.dry_run
+--all	down,status	no	-	target_selection	false	target.all	flag.all
+--repo	model register,model install	yes	<hf-repo>	-	-	model.source_repo	flag.repo
+--type	model register,model install	yes	#model_type	-	-	model.backend_type	flag.type
+--port	model register,model install	yes	#port_range	-	-	model.listen_port	flag.port
+--weights	model rm	no	-	-	false	reclaim.include_weights	flag.weights
+--revision	model register,model install	yes	<git-ref>	-	-	model.revision	flag.revision
+--prompt	chat,bench	yes	<text>	-	-	infer.prompt	flag.prompt
+--session	chat	yes	<session-id>	-	-	chat.session	flag.session
+--key	config set,config get,config unset	yes	<config-key>	-	-	config.key	flag.key
+--value	config set	yes	<text>	-	-	config.value	flag.value
+--expect	self check-version	yes	<text>	-	-	meta.expect	flag.expect
+--ignore-fitness	up,restart	no	-	-	false	fit.override	flag.ignore_fitness
+--yes	model rm	no	-	-	false	confirm.skip	flag.yes
+--from	config import	yes	<路径>	-	-	config.import_source	flag.from

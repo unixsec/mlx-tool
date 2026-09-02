@@ -1,0 +1,26 @@
+# 产品代码的运行时下限是 3.9.6（/usr/bin/python3，裁决 D-1）。
+# 告诉 ruff 这个约束，否则它会提 3.10+ 的「现代写法」建议——那些在下限上跑不了。
+target-version = "py39"
+line-length = 100
+
+[lint]
+# 只选真正抓缺陷的规则族。刻意不选：
+#   RUF001/002/003（全角标点「有歧义」）—— 本项目的设计文档与注释是中文，200+ 条纯噪音
+#   D（docstring 风格）、ANN（注解齐全）—— 与注释型注解（# type:）冲突
+select = [
+    "F",      # pyflakes：未使用的 import/变量、未定义名 —— 真缺陷
+    "E9",     # 语法错误与 IO 错误
+    "I",      # import 排序
+    "UP",     # 过时写法（已按 py39 校准，不会提 3.10+ 建议）
+    "B",      # bugbear：可变默认参数、循环里的闭包等真陷阱
+    "SIM",    # 明显可简化的逻辑
+    "PLE",    # pylint 的 error 级
+    "PLW",    # pylint 的 warning 级
+]
+ignore = [
+    "UP035",   # typing.Dict/Tuple deprecated —— 我们用注释型注解，3.9 上求值注解会炸
+    "PLW1641", # 实现了 __eq__ 未实现 __hash__ —— Probe 有意不可哈希
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["E402"]

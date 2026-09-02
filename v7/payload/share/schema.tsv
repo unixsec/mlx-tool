@@ -1,0 +1,44 @@
+# 配置键定义域（PROD-xx）。**出厂默认、可写域、导出白名单、三级链求值的唯一事实来源。**
+#
+# 十一列，逐字按 `04-iface-P.md:86` 的 `KeyDef`：
+#   key type domain default scope level restart exportable secret group readers
+#
+# scope       user|machine —— **`config set` 的可写域 == scope==user**（P-SCH-15 是双向差集）
+# level       global|model|both —— 这个键能设在全局层、per-model 层、还是都行
+# restart     none|model|gateway —— 改了它要重启什么才生效（`config set` 据此给三态文案）
+# exportable  yes|no —— `config export` 的白名单（**肯定白名单**：no 的不导出）
+# secret      yes|no —— 机密，导出时**一律排除**，`config ls` 显示为 ****
+# group       分组，help 与 `config ls` 按它排版
+# readers     谁消费它（逗号分隔的模块名）。**空 readers 是缺陷**：
+#             一个没有消费者的配置键是死旋钮，用户设了它什么都不会发生
+#             （v6 的 `gen.top_p` 就是这么活了一整版）。
+#
+# `revision` 这类 machine 段字段**有意不在本表**：它们不是配置，是磁盘事实，
+# 由 `weights` 产出。`config set <模型> --key=revision` 因此被域校验拒绝 ——
+# 那正是 P-SCH-15 点名的那条。
+# 列（顺序即 tables.COLUMNS）：key type domain default scope level restart exportable secret group readers
+port	int	1-65535	8100	user	both	model	yes	no	service	backendarg,ports,cmd.svc
+backend	str	mlx_lm	mlx_lm	user	both	model	yes	no	service	backendarg
+max_tokens	int	1-1048576	4096	user	both	model	yes	no	service	backendarg
+# ── 投机解码（speculative decoding）────────────────────────────
+# `draft_model` 的值是**另一条记录的短名**，不是路径 —— 路径不进 argv（INV-01 态 A）。
+# 启动时 `supervisor.materialize` 在同一个别名目录里为它建第二条链接，
+# `backendarg` 拼 `--draft-model <短名>-draft`（相对路径，cwd 就是那个别名目录）。
+#
+# **为什么不能传 HF repo id**：`mlx_lm` 解析 `--draft-model` 用的是
+# `snapshot_download(repo, local_files_only=True)`，它要标准 HF 缓存布局
+# （`refs/main` + `snapshots/<commit-hash>/`），而本工具的下载器产出的是
+# `snapshots/main/`（无 refs）—— 传 repo id 会 LocalEntryNotFoundError。实测过。
+draft_model	str	<模型短名>		user	model	model	yes	no	service	backendarg,supervisor,fitness
+num_draft_tokens	int	1-16	3	user	model	model	yes	no	service	backendarg
+api.bind	str	-	127.0.0.1	user	global	gateway	yes	no	api	backendarg,gw.guard,cmd.api
+fit.reserve_pct	int	0-99	20	user	global	none	yes	no	fitness	fitness
+fit.tight_pct	int	1-100	75	user	global	none	yes	no	fitness	fitness
+fit.over_pct	int	1-100	95	user	global	none	yes	no	fitness	fitness
+# ── machine 段字段：**登记在表里但 scope=machine ⇒ 不可写** ────────────
+# 它们不是配置，是磁盘事实（由 `weights` 产出）。登记进来的理由不是
+# 「让用户能设」，恰恰相反：`P-SCH-15` 要拦的 `mlx config set 27b revision abc`
+# 只有在 `revision` **在表里**时才能报出准确原因（「不可写，scope=machine」）；
+# 不登记的话它只会被报成「未知键」—— 而用户明明在 `model info` 里见过它。
+revision	str	^[a-f0-9]{7,40}$|main	-	machine	model	model	no	no	weights	backendarg,weights,cmd.model.query
+size_mb	int	0-	-	machine	model	none	no	no	weights	fitness,ui,cmd.model.query

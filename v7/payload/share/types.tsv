@@ -1,0 +1,13 @@
+# 模型类型定义域。**`--type` 的值域与 `backendarg` 后端模块的唯一事实来源。**
+#
+# 列：type module server_arg
+#   type        主键。`--type` 的合法取值集合 == 本列（相等断言，两道域校验都读它）
+#   module      后端 python 模块（`-m <module>.server`）
+#   server_arg  该类型给后端的模型参数名（保留列：将来 vision 与 text 可能不同）
+#
+# 此前它硬编码在 `schema.MODEL_TYPES`，而设计要求「type ∈ types.tsv 主键集合」。
+# 硬编码时两道域校验（cmd.model.acquire 与 store.commit）读的是同一个常量，
+# 少一处引用就一起失效 —— `--type=banana` 曾因此一路落盘。
+# 列（顺序即 tables.COLUMNS）：type module server_arg
+text	mlx_lm	--model
+vision	mlx_vlm	--model

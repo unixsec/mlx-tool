@@ -1,0 +1,197 @@
+# key	text
+svc.target_required	{cmd} 需要一个目标 id
+svc.spec_unavailable	无法为 {id} 生成启动参数
+svc.no_spawner	执行段缺少进程启动器（{detail}）
+model.not_found	没有登记名为 {id} 的模型
+model.uniqueness	端口 {port} 已被 {holder} 占用
+model.type_domain	type={type} 不在允许集合 {allowed} 内
+model.type_undeterminable	无法判定模型类型，且未取得回答 —— 不落默认值（{detail}）
+model.confirm_rm	确认删除 {id}？此操作移入回收站
+model.confirm_declined	已取消，未删除任何东西
+config.unknown_key	未知配置键 {key}
+config.invalid	配置项 {key} 非法（{kind}）
+caps.drift.detected	venv 三包指纹与缓存不符 —— 请先跑 mlx caps refresh
+caps.undeterminable	能力探测不可判定（{kind}）
+caps.not_collected	尚未采集后端能力信息。先跑一次：mlx caps refresh
+owns.undeterminable	进程所有权不可证（{kind}）—— 未做任何终止动作
+port_owner.foreign	端口 {port} 上是别的进程，而 {pid} 仍在运行 —— 未终止、记录保留
+kill.escalation_exhausted	终止阶梯走完仍有存活：{survivors}
+ports.conflict	端口冲突：{detail}
+ports.exhausted	端口区间 {lo}-{hi} 已用尽
+ports.probe_undeterminable	端口 {port} 的占用状态不可判定（{kind}）—— 不采用
+vault.code_root_not_purgeable	代码根不在整根删除授权集合内（{detail}）
+vault.not_authorized	{path} 不在删除授权面内
+weights.not_found	找不到 {repo} 的权重
+weights.no_fetcher	未注入下载器（{detail}）
+api.honest_no_boundary	同机场景下模型端口本就在回环上无鉴权监听；网关令牌提供零额外阻挡，真正的边界是绑定地址
+bootstrap.manifest_missing	分发清单缺失：{missing}
+check.failed	有检查项未通过（见上）。每一项的下一步写在它自己那行
+check.undeterminable	有检查项无法判定（见上）。通常是探测工具不可用，不代表那一项坏了
+gateway.no_upstream	网关未接上游
+gateway.upstream_error	上游返回错误
+gateway.upstream_timeout	上游超时
+meta.confirm_declined	确认未通过
+bench.no_transport	基准需要一个可用的推理后端，当前没有配置传输层
+bench.not_running	{service} 没在跑。先起它：mlx up {service}
+bench.backend_unreachable	{service} 的进程在跑，但连不上它的端口 {port} —— 多半是模型没加载成功。看日志：{log}
+bootstrap.no_renderer	渲染器未注入 —— 这是装配缺陷，请重装：mlx install
+bootstrap.no_tables	读不到 share/ 下的表，安装可能不完整。重装：mlx install（{detail}）
+caps.drift.undeterminable	venv 三包指纹判定不出来（{kind}）—— 不当成「没漂移」继续启动。跑 `mlx caps refresh` 重新采集
+caps.no_prober	能力探测器未注入 —— 这是装配缺陷，请重装：mlx install
+chat.no_transport	对话需要一个可用的推理后端，当前没有配置传输层
+chat.not_running	{service} 没在跑。先起它：mlx up {service}
+chat.backend_unreachable	{service} 的进程在跑，但连不上它的端口 {port} —— 多半是模型没加载成功。看日志：{log}
+cmd.unknown_verb	没有这个命令：{verb}。`mlx help` 看全部命令
+kill.killpg_failed	终止进程组失败（pid {pid}）。手动确认：ps -p {pid}（{detail}）
+meta.no_tty	需要一个终端来确认这个操作，当前没有可用的 tty
+self.deployer_missing	部署器不在代码根内：{path}（{detail}）
+self.takes_no_target	`mlx {verb}` 管的是工具自身，不接目标（多给了 {got}）
+self.unknown_verb	cmd.self 不认识动词 {verb} —— 这是分派缺陷
+self.hard_gate	部署硬门未通过（rc {gate_rc}）—— 上面的分步输出指明了是哪一项
+self.deployer_failed	部署器返回 {rc_from_t0}，安装/卸载未完成。上面的分步输出是线索
+svc.some_not_stopped	有服务未能停止，已逐个列出。工具被删掉之后你将失去停止它们的手段
+svc.spawn_failed	启动 {service} 失败。日志在数据根的 logs/{service}.log（`mlx status` 能看到数据根位置）
+weights.download_failed	权重下载失败。已完成的分片会保留，重跑可断点续传
+wire.timeout	请求超时（{seconds}s）。后端可能在加载模型，稍后重试（{kind}）
+wire.unreachable	连不上 {url}（{detail}）
+svc.died_before_ready	{service} 起来后立刻退出了（端口 {port}）。常见成因：推理依赖没装好、端口被占、模型权重不完整。日志尾部（完整日志在数据根的 logs/{service}.log）：\n{detail}
+svc.ready_timeout	{service} 在超时内没有就绪（端口 {port}）。进程还在，但端口一直没监听上。大模型首次加载可能超过等待窗口。日志尾部（完整日志在数据根的 logs/{service}.log）：\n{detail}
+self.cancelled	要继续，重跑 `mlx {action}` 并在提示处键入 yes
+help.up	起一个服务（模型 id 或 api）。已在跑则幂等返回
+help.down	停一个服务；--all 停掉全部有运行记录的服务
+help.restart	先 down 再 up，等价于两条命令但只写一次
+help.status	不带目标：工具自身状态（三根·版本·PATH·清单）；带目标：那个服务的状态
+help.chat	与一个模型多轮对话（`--prompt=<问题>` 只发一轮）
+help.bench	跑一次基准，输出吞吐与提示词指纹
+help.check	九项健康检查，各项独立求值后聚合
+help.version	版本、两个解释器、依赖三包指纹、caps 采集时间
+help.help	不带参数给速查表；带命令名给单条详解
+help.install	装/重装**工具自身**。首次安装请跑 deployer/install.sh
+help.uninstall	卸载**工具自身**。只删代码根，数据根与权重根原样保留
+help.model.install	下载并登记一个模型（需要网络）
+help.model.register	登记一个已在盘的模型，零网络
+help.model.rm	删除一个模型的登记；--weights 连权重一起回收
+help.model.gc	回收旧快照与不再被引用的权重
+help.model.repair	按磁盘事实重建 machine 段，只填空不覆盖
+help.model.ls	列出全部已登记的模型
+help.model.info	一个模型的全部 user 段与 machine 段字段
+help.config.get	读一个配置键，逐行标注来源层
+help.config.set	写一个配置键（只能写 scope=user 的键）
+help.config.unset	撤销一个键的用户层取值，回落到下一层
+help.config.ls	列出全部配置键与生效值
+help.config.diff	只列出与默认值不同的键
+help.config.validate	校验配置文件语法与值域
+help.config.export	导出配置为可移植的包
+help.config.import	从包导入配置，逐条事务提交
+help.caps.show	后端能力三态与 venv 三包指纹
+help.caps.refresh	重新采集能力；指纹漂移导致 fail-closed 时用它恢复
+help.bootstrap.render	渲染补全脚本与自启描述文件到指定目录
+help.bootstrap.verify	按分发清单校验安装产物是否齐全
+help.api.info	网关的 base url、可用模型 id、鉴权现状
+help.internal.confirm	（内部）T0 的 /dev/tty 确认通道
+flag.json	输出机读 JSON（默认输出是给人看的）
+flag.dry_run	只打印将要做什么，不真的做（零外部动作）
+flag.all	作用于全部有运行记录的服务
+flag.yes	跳过确认（仅在非交互场景使用）
+flag.force	强制执行
+flag.repo	HuggingFace 仓库名，形如 mlx-community/Qwen3.8-27B-8bit
+flag.type	后端类型，值域见 types 表
+flag.port	监听端口，须落在配置的端口区间内
+flag.weights	连同权重文件一起回收（默认只删登记）
+svc.some_targets_failed	有目标未能完成（逐个结论见上）
+repair.facts_undeterminable	读不到磁盘事实，拒绝重建 —— 不用部分事实覆盖记录
+repair.commit_failed	重建 {id} 时写入失败，原文件逐字节未变（{detail}）
+help.up.long	把一个服务起起来。<目标> 是 `mlx model ls` 里的模型 id，或 `api`（网关）。\n起进程后**会等就绪**再返回：进程若在就绪前退出（最常见是端口被占），\n返回 rc 10 并附上日志尾部，而不是报「已启动」。\n已经在跑的服务再起一次是幂等的。
+help.down.long	停一个服务。停一个没在跑的服务返回 0（幂等，不是错误）。\n终止走阶梯：先 TERM 整个进程组、验证端口释放、再删运行记录，顺序不可反。\n若端口上监听的已经是别的进程（pid 被复用），**不动手**，只清理过期记录。
+help.restart.long	先 down 再 up。等价于两条命令，但只写一次。
+help.status.long	不带目标时报工具自身：三根路径、版本、PATH 是否生效、分发清单完整性，\n以及**每个模型的状态**（仓库全名 / 就绪与否 / 端口 / PID / 内存 / 体积）和网关行。\n带目标时只报那一个服务。\n「PATH 生效」那一行是「装完了但 mlx 找不到」这个最常见故障的诊断入口。
+help.check.long	九项健康检查，每项独立求值后聚合。失败项的 detail 给的是**下一步做什么**，\n不是一个裸的 False。退出码：0 全通过 · 64 含无法判定 · 65 含失败，\n而九行主产物在失败时也不会丢 —— 那正是你最需要它的时候。
+help.version.long	工具版本、系统解释器与 venv 解释器、依赖三包、能力采集时间。排查时先看它。
+help.help.long	不带参数给速查表；带命令名给该命令的详解（本页就是）。
+help.install.long	装 / 重装**工具自身**（不是模型 —— 装模型是 `mlx model install`）。\n首次安装时 mlx 还不在 PATH 上，请跑 `bash <源码树>/deployer/install.sh`；\n本命令的实际用途是重装与升级。它不自己实现部署，只调用部署器。
+help.uninstall.long	一键卸载**工具自身**。会先停掉在跑的服务、清掉 shell rc 里的标记块、\n再按分发清单逐文件移除。\n**数据根与权重根原样保留** —— 注册表、会话、几十 GB 的权重都不动，重装后接着用。\n要彻底清干净，卸载后手动删这两个目录。\n若有服务停不掉，拒绝卸载且零删除：工具被删掉之后你就失去停止它们的手段了。
+help.model.install.long	下载并登记一个模型。需要网络。本版尚未接真实下载。
+help.model.register.long	登记一个**已经在盘上**的模型，零网络。用于先有权重、后补登记的场景。
+help.model.ls.long	列出全部已登记的模型：id、类型、端口、状态。
+help.model.info.long	一个模型的全部字段，含 user 段（你填的）与 machine 段（从磁盘读的）。
+help.model.rm.long	删除一个模型的**登记**。默认**不动权重** —— 加 --weights 才把权重\n移入回收站（可恢复）。删除前会要求你键入模型 id 确认。
+help.model.gc.long	回收磁盘上没有任何登记引用的权重（孤儿）。输出可回收量与实际回收量。\n带 id 时只看那一个，不带则全局。
+help.model.repair.long	按磁盘事实重建注册表的 machine 段：**只填空、不覆盖**已有的非空值，\n输出重建前后的逐字段差异。同时报告「已登记但磁盘上没有」\n与「磁盘上有但未登记」两类不一致，各给收敛动作。
+help.config.get.long	读一个配置键的生效值，并标注它来自哪一层（default / machine / user / cli）。
+help.config.set.long	写一个配置键。只能写 scope=user 的键。
+help.config.ls.long	列出全部配置键、生效值与来源层。
+help.config.validate.long	逐项校验配置，每项一行。退出码 0 / 64 含告警 / 65 含失败。
+help.caps.show.long	看当前缓存的后端能力：依赖三包、指纹、采集时间。
+help.caps.refresh.long	重新采集后端能力，输出**这次采集改变了什么**（无变化则是空数组）。\n首次使用必须先跑一次 —— 能力从未采集时工具会拒绝启动服务，\n而本命令就是那条拒绝指名的恢复动作。
+help.api.info.long	网关的 base url、可用模型 id 列表，以及关于鉴权边界的诚实陈述。
+help.bench.long	对一个在跑的模型做一次基准，输出吞吐与提示词指纹。
+help.chat.long	与一个模型对话。不给 `--prompt` 就进入**多轮模式**：一行一句，`/exit` 或 Ctrl-D 结束。\n每一轮都会存进会话，中途断了不丢；用 `--session=<id>` 接着上次聊。\n**回复正文走 stdout，提示符走 stderr** —— `mlx chat x > out.txt` 存下来的是纯回复。
+help.bootstrap.render.long	渲染补全脚本与自启描述文件到指定目录。
+help.bootstrap.verify.long	按分发清单校验安装产物是否齐全。
+help.up.example	mlx up api            # 起网关\nmlx up qwen27b api    # 一次起多个
+help.down.example	mlx down api\nmlx down --all        # 停掉全部有运行记录的服务
+help.status.example	mlx status            # 工具全局 + 每个模型的状态\nmlx status api        # 只看网关\nmlx status --json     # 给脚本用
+help.model.rm.example	mlx model rm qwen27b             # 只删登记，权重保留\nmlx model rm qwen27b --weights   # 连权重一起回收
+help.model.register.example	mlx model register qwen27b \\n    --repo=mlx-community/Qwen3.8-27B-8bit --type=text --port=8100
+help.check.example	mlx check             # 九项逐行\nmlx check --json      # 给脚本用
+help.install.example	bash ~/dev/projects/mlx-toolkit/v7/deployer/install.sh   # 首次\nmlx install                                            # 重装 / 升级
+help.uninstall.example	mlx uninstall         # 会要求键入 yes 确认
+help.config.diff.long	只列出与默认值不同的键 —— 一眼看出你改过什么。
+help.config.export.long	把当前配置导出成可移植的包，用于换机或备份。
+help.config.import.long	从导出包恢复配置，逐条事务提交；任一条失败都会指名已提交的部分。
+help.config.unset.long	撤销一个键的用户层取值，让它回落到下一层（machine 或 default）。
+weights.no_downloader	下载器不可用 —— venv 里没有 hf 命令。{repo} 未下载，记录已登记为「已登记未下载」
+weights.place_failed	{repo} 下载完了但没能放进权重根（{detail}）
+svc.weights_missing	{id} 的权重不在盘上（仓库 {repo}）。先下载：`mlx model install {id} --repo={repo}`，或跑 `mlx model repair` 让工具重新扫盘
+store.unparseable	注册表整文件不可解析，工具**不做空表重建**（那会丢掉全部登记信息）。先备份 `models.jsonl`，再删掉它让工具重建空表，然后用 `mlx model register` 重新登记；**权重文件不受影响**。详情：{detail}
+store.uniqueness	唯一性冲突：{detail}
+lock.timeout	另一条命令正在写同一个文件，等了 10 秒还没轮到。**陈旧锁会自动清理**，所以这说明持有者进程确实还活着（或它的存活判定不出来 —— 那种情况下工具宁可等，也不抢一个可能正被使用的锁）。详情：{detail}
+tables.unreadable	读不了工具自己的表 —— 这是安装缺陷，重装：`mlx install`。详情：{detail}
+config.value_required	config set 需要一个值：`mlx config set {key} --value=<值>`
+cmd.interrupted	已取消（Ctrl-C）。没有留下未收敛的资源；若刚才正在下载，已下完的部分保留着
+ports.gateway_conflict	端口 {port} 是网关在用的（见 `mlx status` 的「网关」行）。给这个模型换一个端口
+trash.not_found	回收站里没有 {id}。`mlx model trash ls` 看现有条目
+trash.origin_occupied	{id} 的原路径已经被占用了：{origin}。先把那里挪开再恢复 —— 不覆盖是刻意的
+trash.restore_failed	恢复 {id} 失败（{detail}）。东西还在回收站里，没有丢
+trash.target_required	`mlx model trash restore` 需要一个条目 id（`mlx model trash ls` 里的第一列）
+trash.confirm_declined	已取消，回收站原样保留
+help.model.trash	回收站：看 · 恢复 · 清空
+help.model.trash.ls	列出回收站里的条目
+help.model.trash.ls.long	列出回收站里现存的条目：id、原路径、体积。\n`model rm --weights` 与 `model gc` 移进来的东西都在这里。
+help.model.trash.restore	把一个条目恢复到它的原路径
+help.model.trash.restore.long	把回收站里的条目移回**原路径**（台账里记着）。\n原路径已被占用时**拒绝**，不覆盖 —— 那会让一次恢复变成一次覆盖删除。
+help.model.trash.restore.example	mlx model trash restore models--org--demo.1788196214596
+help.model.trash.empty	清空回收站（不可恢复）
+help.model.trash.empty.long	永久删除回收站里的全部条目。**不可恢复**，会要求键入 empty 确认。
+chat.nothing_said	会话 {session} 一轮都没聊成 —— 没有输入。多轮模式一行一句，`/exit` 结束；或用 `--prompt=<问题>` 发单轮
+chat.no_reader	多轮模式需要一个输入源（{detail}）
+fit.over	{id} 装不下：它的体积加上已在跑的模型，超过了这台机器的可分配内存预算。先 `mlx down <别的模型>` 腾出内存，或换一个更小/量化更狠的版本。确实要试就加 --ignore-fitness（起完可能开始换页，机器会很慢）
+fit.undeterminable	容量判定不出来（{detail}）—— **不在容量不明时启动一个装不下的模型**。修好探测再试，或加 --ignore-fitness 跳过判档
+weights.scan_undeterminable	权重目录扫不完整（{detail}）—— **不用部分事实覆盖记录**，那会把扫不到的模型当成孤儿。检查权重根的权限与挂载后重试
+run.unreadable	运行记录存在但读不出来（{detail}）。这**不等于「没在跑」**：后端可能还活着。先看 `mlx status`，必要时手工确认进程后删掉那个 run 记录
+flag.yes	跳过确认（**只对 `model rm --weights` 有效**；`model trash empty` 不可跳过，它是唯一不可恢复的动作）
+config.not_writable	{key} 不能用 `config set` 改（scope={scope}）—— 它是磁盘事实，由工具自己填，不是配置
+config.import_needs_from	`mlx config import` 需要 `--from=<文件>`
+config.import_unreadable	读不了 {path}（{detail}）
+config.import_bad_json	{path} 不是合法 JSON（{detail}）
+config.import_partial	有键没能导入（逐条结论见上）—— **前面成功的保持生效**，不回滚
+help.config.import.example	mlx config import --from=./mlx-config.json --dry-run
+# ── `mlx check` 九项各自的「下一步」。**进文案表的理由**：
+# 它们此前是 `cmd/check.py` 的一个字典字面量，逃在 `G-PC-05` 射程之外 ——
+# 而它们每一条都提到了某条命令（`mlx install` / `mlx caps refresh` / …），
+# 那正是那条守卫要盯的东西（它刚抓出过「文案指向不存在的 mlx logs」）。
+check.hint.caps	能力从未采集 —— 跑 `mlx caps refresh`
+check.hint.code_root	代码根不可读 —— 重装：`mlx install`
+check.hint.data_root	数据根不可读 —— 检查权限，或换 MLX_ROOT_DATA 重装
+check.hint.models_file	注册表不可读 —— 部分行坏：`mlx model repair` 按磁盘事实补齐；整文件坏：备份并删掉 models.jsonl 让工具重建，再 `mlx model register` 重新登记（权重不受影响）
+check.hint.ports	端口冲突或区间探测失败 —— `mlx model ls` 看各模型端口，与 `mlx status` 里的网关端口比对；改端口用 `mlx config set <模型id> --key=port --value=<新端口>`
+check.hint.run_dir	运行记录目录不可写 —— 检查数据根权限
+check.hint.tables	share/ 下的表缺失或损坏 —— 重装：`mlx install`
+check.hint.venv	推理 venv 缺失或解释器太旧（要 ≥ 3.10）—— `mlx up` 会起不来新模型。`mlx version` 看当前版本；修：`brew install python@3.13` 后重跑安装器 `bash ~/dev/projects/mlx-toolkit/v7/deployer/install.sh`（它会用新解释器重建 venv，权重与注册表不动）
+check.hint.weights_root	权重根不可读 —— 检查权限或磁盘挂载
+config.not_a_config_key	{key} 不是配置项（scope={scope}）—— 它是工具从磁盘读出来的事实。用 `mlx model info <id>` 看它的值
+svc.draft_not_found	{id} 配了 draft_model={draft}，但没有登记名为 {draft} 的模型。`mlx model ls` 看有哪些；不想用投机解码就 `mlx config unset {id} --key=draft_model`
+svc.draft_weights_missing	{id} 的 drafter「{draft}」权重不在盘上（仓库 {repo}）。先 `mlx model install {draft} --repo={repo}`
+svc.draft_is_self	{id} 的 draft_model 指向了它自己 —— drafter 必须是另一个（更小的）模型
+chat.model_not_found	没有名为「{id}」的模型。已登记：{known}\nchat 的第一个参数是**模型 id**，问题用 --prompt= 传：\n  mlx chat {example} --prompt="{id}"\n不带 --prompt 则进入多轮对话：mlx chat {example}
+bench.model_not_found	没有名为「{id}」的模型。已登记：{known}\nbench 的第一个参数是模型 id：mlx bench {known_first}

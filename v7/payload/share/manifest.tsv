@@ -1,0 +1,67 @@
+# path	kind	on_uninstall
+# 分发清单：安装写入面 ⊇ 卸载扫描面（G-DEPLOY-01）
+bin/mlx	代码	删除
+lib/mlx_server/__init__.py	代码	删除
+lib/mlx_server/__main__.py	代码	删除
+lib/mlx_server/result.py	代码	删除
+lib/mlx_server/ctx.py	代码	删除
+lib/mlx_server/proc.py	代码	删除
+lib/mlx_server/probe.py	代码	删除
+lib/mlx_server/atomic.py	代码	删除
+lib/mlx_server/tables.py	代码	删除
+lib/mlx_server/cleanup.py	代码	删除
+lib/mlx_server/ui.py	代码	删除
+lib/mlx_server/wire.py	代码	删除
+lib/mlx_server/schema.py	代码	删除
+lib/mlx_server/backendarg.py	代码	删除
+lib/mlx_server/store.py	代码	删除
+lib/mlx_server/fitness.py	代码	删除
+lib/mlx_server/ports.py	代码	删除
+lib/mlx_server/weights.py	代码	删除
+lib/mlx_server/vault.py	代码	删除
+lib/mlx_server/sessions.py	代码	删除
+lib/mlx_server/supervisor.py	代码	删除
+lib/mlx_server/caps.py	代码	删除
+lib/mlx_server/checks.py	代码	删除
+lib/mlx_server/runtime.py	代码	删除
+lib/mlx_server/cli.py	代码	删除
+lib/mlx_server/entry.py	代码	删除
+gateway/__init__.py	代码	删除
+gateway/routes.py	代码	删除
+gateway/guard.py	代码	删除
+gateway/translate.py	代码	删除
+gateway/app.py	代码	删除
+gateway/server.py	代码	删除
+gateway/__main__.py	代码	删除
+lib/mlx_server/cmd/__init__.py	代码	删除
+lib/mlx_server/cmd/self_deploy.py	代码	删除
+lib/mlx_server/cmd/svc.py	代码	删除
+lib/mlx_server/cmd/model_acquire.py	代码	删除
+lib/mlx_server/cmd/model_reclaim.py	代码	删除
+lib/mlx_server/cmd/model_query.py	代码	删除
+lib/mlx_server/cmd/config.py	代码	删除
+lib/mlx_server/cmd/caps.py	代码	删除
+lib/mlx_server/cmd/check.py	代码	删除
+lib/mlx_server/cmd/api.py	代码	删除
+lib/mlx_server/cmd/bench.py	代码	删除
+lib/mlx_server/cmd/bootstrap.py	代码	删除
+lib/mlx_server/cmd/meta.py	代码	删除
+lib/mlx_server/cmd/chat.py	代码	删除
+lib/mlx_server/cmd/render_model.py	代码	删除
+lib/mlx_server/cmd/render_meta.py	代码	删除
+lib/mlx_server/cmd/render_config.py	代码	删除
+lib/mlx_server/cmd/render_svc.py	代码	删除
+share/cli.tsv	表	删除
+share/verbs.tsv	表	删除
+share/schema.tsv	表	删除
+share/types.tsv	表	删除
+share/messages.tsv	模板	删除
+share/manifest.tsv	模板	删除
+share/caps.json	生成	删除
+share/constants.env	生成	删除
+deployer/install.sh	脚本	删除
+deployer/uninstall.sh	脚本	删除
+# 目录条目（路径以 / 结尾）：整棵子树，卸载时递归处置。
+# `payload/` 是**载荷的副本**，供 `mlx install` 重装自己时作源（R-DEPLOY-37）。
+# 逐文件登记会让本表翻倍且必须与上面的条目同步维护 —— 那正是「两份事实」。
+payload/	目录	删除
