@@ -2,8 +2,14 @@
 # 提交前必跑。把「记得跑复检」变成一条命令（归档 checklist 第 8 条）。
 set -uo pipefail
 cd "$(dirname "$0")"
-ROOT="$(pwd)"       # 扁平化后仓库根就是这里，不再是上一层
-VENV="$ROOT/.venv/bin"
+# **venv 自己找，不假设布局**。它可能在产品根（扁平仓库）或产品根的
+# 上一级（`v7/` 布局的开发仓库）。写死任一边，另一边就跑不了 ——
+# 2026-09-02 扁平化时踩过：改成 `$(pwd)` 之后源仓库的 pre-commit 当场断。
+VENV=""
+for _c in "$(pwd)/.venv" "$(cd .. && pwd)/.venv"; do
+  [ -x "$_c/bin/python3" ] && { VENV="$_c/bin"; break; }
+done
+[ -n "$VENV" ] || { echo "找不到 .venv（产品根与其上一级都没有）" >&2; exit 3; }
 fail=0
 
 step() { printf '\n\033[1m── %s\033[0m\n' "$1"; }

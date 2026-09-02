@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cardinality import Cardinality  # noqa: E402
 
+
 # 设计文档在**仓库根**下，而产品可能在 `v7/` 子目录里 ——
 # 所以这里不能用 conftest 的产品根。向上找到含 `docs/design` 的那一层。
 def _repo_root():
