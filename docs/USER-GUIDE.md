@@ -63,7 +63,7 @@ venv 只服务**下载权重**与**跑推理**这两件事。
 ### 1.2 装
 
 ```
-$ bash ~/dev/projects/mlx-toolkit/v7/deployer/install.sh
+$ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
 == 建三根
 == 拷载荷
 == 写 constants.env（三根的兜底来源，裁决 R4-3 断口②）
@@ -826,14 +826,14 @@ $ mlx install
 cd ~/dev/projects/mlx-toolkit && git pull
 
 # 装到默认位置：
-bash v7/deployer/install.sh
+bash deployer/install.sh
 
 # 装在自定义根上的（`mlx status` 能看到你的三根），要带上原来的根，
 # 否则会在默认位置装出**第二套**，而你的 PATH 还指着旧的那套：
 MLX_ROOT_CODE=<你的代码根> \
 MLX_ROOT_DATA=<你的数据根> \
 MLX_ROOT_WEIGHTS=<你的权重根> \
-  bash v7/deployer/install.sh
+  bash deployer/install.sh
 ```
 
 **数据不会丢**：升级只替换代码根，注册表、会话、权重都在另外两个根里，原样不动。
@@ -1189,7 +1189,7 @@ cat ~/.local/share/mlx_server/share/constants.env
 ## 十五 · 给开发者
 
 ```bash
-cd ~/dev/projects/mlx-toolkit/v7
+cd ~/dev/projects/mlx-toolkit
 bash check.sh           # ruff + pytest + 3.9.6 真解释器编译
 ```
 

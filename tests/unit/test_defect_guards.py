@@ -1168,3 +1168,33 @@ def test_version_string_is_single_sourced(payload, repo):
                         stale.append(f"{doc.name}:{i} 标着「版本 {v}」，"
                                      f"而 meta.VERSION 是 {version}")
     Cardinality.check("版本串的重复定义与文档失配", sorted(dup + stale), rel="empty")
+
+
+def test_documented_absolute_paths_exist(payload, repo):
+    """文档与文案里写出的 `~/dev/projects/...` 绝对路径必须真实存在。
+
+    2026-09-03 抓到两处死路径：`~/dev/projects/mlx-toolkit/v7/deployer/install.sh`
+    （扁平化后 `v7/` 没了）和 `~/dev/projects/mlx-tool/...`（那个目录要删）。
+    前者是我替换 `.git` 之后 `git add -A` 把工作区的旧文件提交上去造成的 ——
+    工作区相对新 HEAD 显示为「修改」，而我没看内容就提交了。
+
+    **文案里给出的路径，用户会照着敲。** 指向一个不存在的位置，
+    比不给路径更糟：他会以为是自己的环境有问题。
+
+    只查 `~/dev/projects/` 开头的（本机开发路径）；`<源码目录>` 这类
+    占位符和 `~/.local/share/...`（运行时产生）不在射程内。
+    """
+    import re
+    pat = re.compile(r"~/dev/projects/[A-Za-z0-9._/-]+")
+    bad = []
+    for f in [repo / "docs" / "USER-GUIDE.md", repo / "docs" / "KNOWN-ISSUES.md",
+              payload / "share" / "messages.tsv", repo / "README.md",
+              repo / "README_cn.md"]:
+        if not f.exists():
+            continue
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            for m in pat.findall(line):
+                target = Path(m.replace("~", str(Path.home()), 1))
+                if not target.exists():
+                    bad.append(f"{f.name}:{i} {m} 不存在")
+    Cardinality.check("文案里指向不存在位置的路径", sorted(set(bad)), rel="empty")
