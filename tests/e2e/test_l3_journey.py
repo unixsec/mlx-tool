@@ -26,7 +26,7 @@ def cli(tmp_path, repo):
              "MLX_ROOT_WEIGHTS": tmp_path / "weights"}
     env = dict(os.environ, PATH="/usr/bin:/bin", MLX_GATEWAY_PORT="8099",
                **{k: str(v) for k, v in roots.items()})
-    r = subprocess.run(["bash", str(repo / "v7" / "deployer" / "install.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
                        capture_output=True, text=True, timeout=60, check=False, env=env)
     assert r.returncode == 0, r.stderr
     code = roots["MLX_ROOT_CODE"]
@@ -199,7 +199,7 @@ def test_l3_uninstall_leaves_no_files(cli, tmp_path, repo):
 
     env = dict(os.environ, PATH="/usr/bin:/bin", MLX_ASSUME_YES="1",
                MLX_ROOT_CODE=str(code), MLX_ROOT_DATA=str(data))
-    r = subprocess.run(["bash", str(repo / "v7" / "deployer" / "uninstall.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "uninstall.sh")],
                        capture_output=True, text=True, timeout=30, check=False, env=env)
     assert r.returncode == 0, f"卸载失败：{r.stderr}"
 
@@ -248,7 +248,7 @@ def test_l3_uninstall_after_running_service(cli, tmp_path, repo):
     code, data = tmp_path / "code", tmp_path / "data"
     assert (data / "run").is_dir(), "run/ 应当已被创建 —— 否则这条路径没被覆盖到"
 
-    r = subprocess.run(["bash", str(repo / "v7" / "deployer" / "uninstall.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "uninstall.sh")],
                        capture_output=True, text=True, timeout=60, check=False,
                        env={"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", ""),
                             "MLX_ASSUME_YES": "1", "MLX_ROOT_CODE": str(code),

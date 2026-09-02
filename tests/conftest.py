@@ -11,7 +11,14 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[2]
+# **产品根** —— `payload/` `deployer/` `tests/` 的共同父目录，
+# 也就是 `tests/` 的上一级。**不是仓库根**，两者不一定相同：
+#   · 扁平布局（发布仓库）：产品根 == 仓库根
+#   · `v7/` 布局（开发仓库）：产品根 == `<仓库根>/v7`
+# 按「相对 tests 的位置」算而不是按「仓库根往下数」算，两种布局下
+# 同一份测试代码都对 —— 否则发布仓库一扁平化，测试就要改一遍，
+# 两边从此分叉。
+REPO = Path(__file__).resolve().parents[1]
 SYS_PY = "/usr/bin/python3"
 
 
@@ -22,7 +29,7 @@ def repo() -> Path:
 
 @pytest.fixture(scope="session")
 def payload(repo: Path) -> Path:
-    return repo / "v7" / "payload"
+    return repo / "payload"
 
 
 @pytest.fixture(scope="session")

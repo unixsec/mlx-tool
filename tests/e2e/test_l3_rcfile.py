@@ -50,7 +50,7 @@ def _install(repo, tmp_path, rc_path, extra_env=None):
                MLX_ROOT_WEIGHTS=str(tmp_path / "weights"),
                MLX_RC_FILES=str(rc_path))
     env.update(extra_env or {})
-    return subprocess.run(["bash", str(repo / "v7" / "deployer" / "install.sh")],
+    return subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
                           capture_output=True, text=True, timeout=120,
                           check=False, env=env)
 
@@ -145,7 +145,7 @@ def test_l3_rc_no_marker_literal_in_scripts(repo):
     """
     counts = {}
     for name in ("install.sh", "uninstall.sh"):
-        src = (repo / "v7" / "deployer" / name).read_text()
+        src = (repo / "deployer" / name).read_text()
         counts[name] = sum(1 for line in src.splitlines()
                            if not line.strip().startswith("#") and ">>> " in line)
 
@@ -192,7 +192,7 @@ def test_l3_rc_block_removed_on_uninstall(repo, tmp_path, rc):
     after_install = rc.read_text()
     assert "# >>> mlx_server:" in after_install
 
-    r = subprocess.run(["bash", str(repo / "v7" / "deployer" / "uninstall.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "uninstall.sh")],
                        capture_output=True, text=True, timeout=60, check=False,
                        env=dict(os.environ, PATH="/usr/bin:/bin", MLX_ASSUME_YES="1",
                                 MLX_ROOT_CODE=str(tmp_path / "code"),
@@ -264,7 +264,7 @@ def test_l3_rc_uninstall_when_file_contains_only_our_block(repo, tmp_path):
     assert _install(repo, tmp_path, rc_path).returncode == 0
     assert "# >>> mlx_server:" in rc_path.read_text()
 
-    r = subprocess.run(["bash", str(repo / "v7" / "deployer" / "uninstall.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "uninstall.sh")],
                        capture_output=True, text=True, timeout=60, check=False,
                        env=dict(os.environ, PATH="/usr/bin:/bin", MLX_ASSUME_YES="1",
                                 MLX_ROOT_CODE=str(code), MLX_ROOT_DATA=str(data)))

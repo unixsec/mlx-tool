@@ -2,7 +2,7 @@
 # 提交前必跑。把「记得跑复检」变成一条命令（归档 checklist 第 8 条）。
 set -uo pipefail
 cd "$(dirname "$0")"
-ROOT="$(cd .. && pwd)"
+ROOT="$(pwd)"       # 扁平化后仓库根就是这里，不再是上一层
 VENV="$ROOT/.venv/bin"
 fail=0
 

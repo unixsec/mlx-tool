@@ -27,7 +27,7 @@ def installed(tmp_path, repo):
               ("MLX_ROOT_WEIGHTS", "weights"))}
     env = dict(os.environ, PATH="/usr/bin:/bin",
                **{k: str(v) for k, v in roots.items()})
-    r = subprocess.run(["bash", str(repo / "v7" / "deployer" / "install.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
                        capture_output=True, text=True, timeout=60, check=False, env=env)
     assert r.returncode == 0, f"安装器失败：{r.stderr}"
     # 模型要**登记且权重在盘**：`up --dry-run` 走完整个校验段才分叉。
@@ -142,8 +142,8 @@ def test_l3_uninstall_refuses_when_service_cannot_be_stopped(installed):
              "started_at": lstart}))
 
         before = sorted(p.name for p in code_root.rglob("*"))
-        r = subprocess.run(["bash", str(Path(__file__).resolve().parents[3] /
-                                        "v7" / "deployer" / "uninstall.sh")],
+        r = subprocess.run(["bash", str(Path(__file__).resolve().parents[2] /
+                                        "deployer" / "uninstall.sh")],
                            capture_output=True, text=True, timeout=30, check=False,
                            env=dict(env, MLX_ASSUME_YES="1"))
         after = sorted(p.name for p in code_root.rglob("*"))
@@ -164,8 +164,8 @@ def test_l3_uninstall_refuses_when_service_cannot_be_stopped(installed):
 def test_l3_uninstall_removes_declared_products(installed):
     """无服务在跑时，卸载按清单移除，**残留集合为空**（`L3-02`）。"""
     code_root, _, env = installed
-    r = subprocess.run(["bash", str(Path(__file__).resolve().parents[3] /
-                                    "v7" / "deployer" / "uninstall.sh")],
+    r = subprocess.run(["bash", str(Path(__file__).resolve().parents[2] /
+                                    "deployer" / "uninstall.sh")],
                        capture_output=True, text=True, timeout=30, check=False,
                        env=dict(env, MLX_ASSUME_YES="1"))
     assert r.returncode == 0, f"卸载失败：{r.stderr}"
@@ -213,8 +213,8 @@ def test_l3_uninstall_confirm_path_expands_variables(installed):
     错误实现能否通过：`$VAR（` 写法在本用例下 stderr 出现 unbound variable ⇒ 红。
     """
     code_root, data_root, env = installed
-    r = subprocess.run(["bash", str(Path(__file__).resolve().parents[3] /
-                                    "v7" / "deployer" / "uninstall.sh")],
+    r = subprocess.run(["bash", str(Path(__file__).resolve().parents[2] /
+                                    "deployer" / "uninstall.sh")],
                        capture_output=True, text=True, timeout=30, check=False,
                        stdin=subprocess.DEVNULL,
                        env={k: v for k, v in env.items() if k != "MLX_ASSUME_YES"})

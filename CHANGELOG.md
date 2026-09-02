@@ -35,7 +35,7 @@
 
 ### 已知缺口
 
-见 [KNOWN-ISSUES.md](v7/docs/KNOWN-ISSUES.md)。主要是：`mlx up` 报「已启动」
+见 [KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)。主要是：`mlx up` 报「已启动」
 时后端可能仍在加载模型；`model rm --dry-run` 等若干动词尚未实现预览；
 `logs` / `model convert` / `model upgrade` 未实现。
 

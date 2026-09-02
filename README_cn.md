@@ -9,11 +9,11 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Backend](https://img.shields.io/badge/backend-mlx--lm-orange)](https://github.com/ml-explore/mlx-lm)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-158%20passing-success)](v7/tests)
+[![Tests](https://img.shields.io/badge/tests-158%20passing-success)](tests)
 
 [English](README.md) · 🌐 **简体中文**
 
-📖 [用户手册](v7/docs/USER-GUIDE.md) · 🐛 [已知缺口](v7/docs/KNOWN-ISSUES.md) · 📝 [变更记录](CHANGELOG.md)
+📖 [用户手册](docs/USER-GUIDE.md) · 🐛 [已知缺口](docs/KNOWN-ISSUES.md) · 📝 [变更记录](CHANGELOG.md)
 
 </div>
 
@@ -41,7 +41,7 @@ brew install python@3.13
 
 ```bash
 git clone https://github.com/<你>/mlx-tool.git && cd mlx-tool
-bash v7/deployer/install.sh
+bash deployer/install.sh
 source ~/.zshrc          # 或者新开一个终端
 mlx check                # 9 项检查，应该全过
 ```
@@ -171,7 +171,7 @@ chat 的第一个参数是**模型 id**，问题用 --prompt= 传：
 
 ## 📖 用户手册
 
-[完整手册](v7/docs/USER-GUIDE.md)有 15 章，里面每个 `$` 开头的块**都是从真实
+[完整手册](docs/USER-GUIDE.md)有 15 章，里面每个 `$` 开头的块**都是从真实
 运行里粘出来的** —— 安装、找模型、下载、登记、起服务、使用、接入外部工具、
 卸载、排查。
 
@@ -216,6 +216,7 @@ result → 原语 → 策略 → 资源 → 编排 → 解析 → 装配
 |---|---|
 | 产品代码 | 7.2k 行，50 个文件 |
 | 测试 | 5.9k 行，158 个函数，435 处断言 |
+| | 其中 18 条断言「产品表与设计台账一致」。台账属于开发过程材料、不发布，所以它们在本仓库里**带明确原因 skip** —— `140 passed, 18 skipped` 就是预期结果。 |
 | 运行依赖（CLI） | 无 |
 | 运行依赖（推理） | 由工具托管的 venv 里的 `mlx` + `mlx-lm` |
 

@@ -1,0 +1,479 @@
+{
+ "sysctl.memsize": {
+  "scenario": "查物理内存字节数",
+  "argv_template": [
+   "sysctl",
+   "-n",
+   "hw.memsize"
+  ],
+  "stability": "byte-exact",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^\\d+\\n$"
+  },
+  "sample_stdout_b64": "MTM3NDM4OTUzNDcyCg==",
+  "sample_stderr_b64": "",
+  "note": "本机固定值，换机器会变但同机稳定",
+  "scenario_key": "memsize",
+  "command": "sysctl -n",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "sysctl.maxproc": {
+  "scenario": "查 pid 空间上限",
+  "argv_template": [
+   "sysctl",
+   "-n",
+   "kern.maxproc"
+  ],
+  "stability": "byte-exact",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^\\d+\\n$"
+  },
+  "sample_stdout_b64": "MTYwMDAK",
+  "sample_stderr_b64": "",
+  "note": "",
+  "scenario_key": "maxproc",
+  "command": "sysctl -n",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "sysctl.badkey": {
+  "scenario": "查不存在的 sysctl key",
+  "argv_template": [
+   "sysctl",
+   "-n",
+   "kern.no_such_key_xyz"
+  ],
+  "stability": "byte-exact",
+  "rc": 1,
+  "shape": {
+   "rc": 1,
+   "stdout": "",
+   "stderr_re": "unknown oid"
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "c3lzY3RsOiB1bmtub3duIG9pZCAna2Vybi5ub19zdWNoX2tleV94eXonCg==",
+  "note": "错误消息文本稳定，可逐字节",
+  "scenario_key": "badkey",
+  "command": "sysctl -n",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "ps.lstart.toolarge": {
+  "scenario": "pid 超出范围",
+  "argv_template": [
+   "ps",
+   "-o",
+   "lstart=",
+   "-p",
+   "999999"
+  ],
+  "stability": "byte-exact",
+  "rc": 1,
+  "shape": {
+   "rc": 1,
+   "stdout": "",
+   "stderr_re": "process id too large"
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "cHM6IHByb2Nlc3MgaWQgdG9vIGxhcmdlOiA5OTk5OTkK",
+  "note": "错误消息稳定 —— 这是区分 UNKNOWN 与 DEAD 的关键证据",
+  "scenario_key": "toolarge",
+  "command": "ps -o lstart=",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "ps.lstart.alive": {
+  "scenario": "对一个**当前存活**的进程查启动时间",
+  "argv_template": [
+   "ps",
+   "-o",
+   "lstart=",
+   "-p",
+   "42975"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^\\w{3} \\w{3} +\\d+ \\d\\d:\\d\\d:\\d\\d \\d{4} *\\n$"
+  },
+  "sample_stdout_b64": "U2F0IEF1ZyAyOSAwMjoxNzoyOCAyMDI2ICAgIAo=",
+  "sample_stderr_b64": "",
+  "note": "含时间戳与尾部空白填充；LS 断言必须重新起一个进程再查，不能复用录制时的 pid",
+  "scenario_key": "alive",
+  "command": "ps -o lstart=",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "ps.pgid.alive": {
+  "scenario": "对一个存活进程查 pgid",
+  "argv_template": [
+   "ps",
+   "-o",
+   "pgid=",
+   "-p",
+   "42975"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^ *\\d+\\n$"
+  },
+  "sample_stdout_b64": "NDI5NzMK",
+  "sample_stderr_b64": "",
+  "note": "含前导空格",
+  "scenario_key": "alive",
+  "command": "ps -o pgid=",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "ps.lstart.dead": {
+  "scenario": "对一个**已退出**的 pid 查启动时间",
+  "argv_template": [
+   "ps",
+   "-o",
+   "lstart=",
+   "-p",
+   "42982"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc": 1,
+   "stdout": "",
+   "stderr": ""
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "",
+  "note": "三通道全空 —— 与 toolarge 的区别只在 stderr",
+  "scenario_key": "dead",
+  "command": "ps -o lstart=",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "pgrep.P.haschildren": {
+  "scenario": "对一个**有子进程**的父 pid 枚举子进程",
+  "argv_template": [
+   "pgrep",
+   "-P",
+   "42984"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^(\\d+\\n)+$",
+   "stdout_lines": ">=1"
+  },
+  "sample_stdout_b64": "NDI5ODUKNDI5ODYK",
+  "sample_stderr_b64": "",
+  "note": "",
+  "scenario_key": "haschildren",
+  "command": "pgrep -P",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "pgrep.P.nochildren": {
+  "scenario": "对一个**无子进程**的 pid 枚举子进程",
+  "argv_template": [
+   "pgrep",
+   "-P",
+   "42989"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc": 1,
+   "stdout": "",
+   "stderr": ""
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "",
+  "note": "",
+  "scenario_key": "nochildren",
+  "command": "pgrep -P",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "lsof.listen.occupied": {
+  "scenario": "对一个**有监听者**的端口查归属",
+  "argv_template": [
+   "lsof",
+   "-nP",
+   "-iTCP:64669",
+   "-sTCP:LISTEN",
+   "-t"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^\\d+\\n$"
+  },
+  "sample_stdout_b64": "NDI5NzUK",
+  "sample_stderr_b64": "",
+  "note": "",
+  "scenario_key": "occupied",
+  "command": "lsof",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "lsof.listen.free": {
+  "scenario": "对一个**无监听者**的端口查归属",
+  "argv_template": [
+   "lsof",
+   "-nP",
+   "-iTCP:64669",
+   "-sTCP:LISTEN",
+   "-t"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc": 1,
+   "stdout": "",
+   "stderr": ""
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "",
+  "note": "「知道没有」—— 与命令失败的 Unknown 必须区分，但两者 rc 都是 1",
+  "scenario_key": "free",
+  "command": "lsof",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "vm_stat.normal": {
+  "scenario": "查内存统计",
+  "argv_template": [
+   "vm_stat"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "page size of (\\d+) bytes",
+   "must_parse": "页大小必须从首行解析，禁止假设 4096"
+  },
+  "sample_stdout_b64": "TWFjaCBWaXJ0dWFsIE1lbW9yeSBTdGF0aXN0aWNzOiAocGFnZSBzaXplIG9mIDE2Mzg0IGJ5dGVzKQpQYWdlcyBmcmVlOiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAxMjk3ODQ5LgpQYWdlcyBhY3RpdmU6ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAzMjQ5Mjg3LgpQYWdlcyBpbmFjdGl2ZTogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAyNTYyMjcxLgpQYWdlcyBzcGVjdWxhdGl2ZTogICAgICAgICAgICAgICAgICAgICAgICAgICAgODI4MDI1LgpQYWdlcyB0aHJvdHRsZWQ6ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAwLgpQYWdlcyB3aXJlZCBkb3duOiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgMjk4ODE4LgpQYWdlcyBwdXJnZWFibGU6ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDczMTcxLgoiVHJhbnNsYXRpb24gZmF1bHRzIjogICAgICAgICAgICAgICAgICAgICAxMTM1MTI2NDM2LgpQYWdlcyBjb3B5LW9uLXdyaXRlOiAgICAgICAgICAgICAgICAgICAgICAgMTM4OTY5ODY0LgpQYWdlcyB6ZXJvIGZpbGxlZDogICAgICAgICAgICAgICAgICAgICAgICAgODYzMTEyNjQwLgpQYWdlcyByZWFjdGl2YXRlZDogICAgICAgICAgICAgICAgICAgICAgICAgICAxNjE4Njk2LgpQYWdlcyBwdXJnZWQ6ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA2MDM3Mzc2LgpGaWxlLWJhY2tlZCBwYWdlczogICAgICAgICAgICAgICAgICAgICAgICAgICAyNzIwMDkwLgpBbm9ueW1vdXMgcGFnZXM6ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAzOTE5NDkzLgpQYWdlcyBzdG9yZWQgaW4gY29tcHJlc3NvcjogICAgICAgICAgICAgICAgICAgMTA3MDc2LgpQYWdlcyBvY2N1cGllZCBieSBjb21wcmVzc29yOiAgICAgICAgICAgICAgICAgIDUwNjg5LgpEZWNvbXByZXNzaW9uczogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgMjcxMzMzLgpDb21wcmVzc2lvbnM6ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgNDgzNjg5LgpQYWdlaW5zOiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDE4NDgxMTAyLgpQYWdlb3V0czogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAxMzk1LgpTd2FwaW5zOiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAwLgpTd2Fwb3V0czogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAwLgpQYWdlcyB0YWdnZWQ6ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgMjc4MzYwLgpQYWdlcyB0YWdnZWQgcmVzaWRlbnQ6ICAgICAgICAgICAgICAgICAgICAgICAgMjcwNDgzLgpQYWdlcyB0YWdnZWQgY29tcHJlc3NlZDogICAgICAgICAgICAgICAgICAgICAgICA3ODc3LgpQYWdlcyB0YWctc3RvcmFnZTogICAgICAgICAgICAgICAgICAgICAgICAgICAgMjYyMTQ0LgpQYWdlcyB0YWctc3RvcmFnZSBob2xkaW5nIHRhZ3M6ICAgICAgICAgICAgICAgICA4NzU0LgpQYWdlcyB0YWctc3RvcmFnZSBmcmVlOiAgICAgICAgICAgICAgICAgICAgICAgIDIwNDI2LgpQYWdlcyB0YWctc3RvcmFnZSBub24tdGFnIHBhZ2VhYmxlOiAgICAgICAgICAgMjMyOTU2LgpQYWdlcyB0YWctc3RvcmFnZSBub24tdGFnIHdpcmVkOiAgICAgICAgICAgICAgICAgICA4LgpCeXRlcyBvZiBjb21wcmVzc2VkIHRhZ3M6ICAgICAgICAgICAgICAgICAgICAxMDA4NTc2LgpUYWdnZWQgY29tcHJlc3Npb25zOiAgICAgICAgICAgICAgICAgICAgICAgICAgIDE1NTcyLgpUYWdnZWQgZGVjb21wcmVzc2lvbnM6ICAgICAgICAgICAgICAgICAgICAgICAgICA1NzAwLgo=",
+  "sample_stderr_b64": "",
+  "note": "",
+  "scenario_key": "normal",
+  "command": "vm_stat",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "df.home": {
+  "scenario": "查 HOME 所在卷的磁盘余量",
+  "argv_template": [
+   "df",
+   "-k",
+   "/Users/alex"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_lines": "2",
+   "header_re": "^Filesystem"
+  },
+  "sample_stdout_b64": "RmlsZXN5c3RlbSAgIDEwMjQtYmxvY2tzICAgICAgIFVzZWQgIEF2YWlsYWJsZSBDYXBhY2l0eSBpdXNlZCAgICAgICBpZnJlZSAlaXVzZWQgIE1vdW50ZWQgb24KL2Rldi9kaXNrM3M1ICAzOTAyNjE0MTYwIDE5NjcwMTE4MjggMTkxMjI3MDU3NiAgICA1MSUgMjI3NDE4OCAxOTEyMjcwNTc2MCAgICAwJSAgIC9TeXN0ZW0vVm9sdW1lcy9EYXRhCg==",
+  "sample_stderr_b64": "",
+  "note": "用 -k 固定单位；-h 会本地化与舍入",
+  "scenario_key": "home",
+  "command": "df -k",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "ps.pgid.dead": {
+  "scenario": "对一个**已退出**的 pid 查 pgid",
+  "argv_template": [
+   "ps",
+   "-o",
+   "pgid=",
+   "-p",
+   "97791"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc": 1,
+   "stdout": "",
+   "stderr": ""
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "",
+  "note": "与 ps.lstart.dead 同构：三通道全空。pgid 判据在目标已死时也必须能区分 DEAD 与 UNKNOWN",
+  "scenario_key": "dead",
+  "command": "ps -o pgid=",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "ps.pgid.other": {
+  "scenario": "对一个**属于别的进程组**的存活进程查 pgid（start_new_session=True 构造）",
+  "argv_template": [
+   "ps",
+   "-o",
+   "pgid=",
+   "-p",
+   "97793"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^ *\\d+\\n$",
+   "differs_from_caller": true
+  },
+  "sample_stdout_b64": "OTc3OTMK",
+  "sample_stderr_b64": "",
+  "note": "port_owner 的 pgid 判据要能判出「监听者不属于我记录的 pgid」—— 这一格是它的正面样本",
+  "scenario_key": "other",
+  "command": "ps -o pgid=",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "lsof.notfound": {
+  "scenario": "对一个**从未被监听过**的低端口查归属",
+  "argv_template": [
+   "lsof",
+   "-nP",
+   "-iTCP:1",
+   "-sTCP:LISTEN",
+   "-t"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc": 1,
+   "stdout": "",
+   "stderr": ""
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "",
+  "note": "与 lsof.listen.free 三通道同形 ⇒ 「端口刚释放」与「端口从未被用」在 lsof 层不可分，两者都是 Ok(∅)「知道没有」，不是 Unknown",
+  "scenario_key": "notfound",
+  "command": "lsof",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "pgrep.P.badopt": {
+  "scenario": "给 pgrep -P 传一个非数字 ⇒ 命令自身失败",
+  "argv_template": [
+   "pgrep",
+   "-P",
+   "not-a-number"
+  ],
+  "stability": "byte-exact",
+  "rc": 2,
+  "shape": {
+   "rc": 2,
+   "stdout": "",
+   "stderr_nonempty": true
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "dXNhZ2U6IHBncmVwIFstTGZpbG5vcXZ4XSBbLWQgZGVsaW1dIFstRiBwaWRmaWxlXSBbLUcgZ2lkXQogICAgICAgICAgICAgWy1QIHBwaWRdIFstVSB1aWRdIFstZyBwZ3JwXSBbLXQgdHR5XSBbLXUgZXVpZF0KICAgICAgICAgICAgIHBhdHRlcm4gLi4uCg==",
+  "note": "**rc=2 是「命令失败」，rc=1 是「无匹配」** —— 混同会把 UNKNOWN 读成「没有子进程」，于是 kill_tree 以为已经清干净了",
+  "scenario_key": "badopt",
+  "command": "pgrep -P",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "ps.pgid.narrow": {
+  "scenario": "对 **pgid 位数少于字段宽度**的进程查 pgid（pid 1 的 pgid 通常是 1）",
+  "argv_template": [
+   "ps",
+   "-o",
+   "pgid=",
+   "-p",
+   "1"
+  ],
+  "stability": "shape-only",
+  "rc": 0,
+  "shape": {
+   "rc": 0,
+   "stdout_re": "^ *\\d+\\n$",
+   "field_width": 5,
+   "align": "right"
+  },
+  "sample_stdout_b64": "ICAgIDEK",
+  "sample_stderr_b64": "",
+  "note": "**BCR-4-04 的前提「无前导空格」为假**：字段宽度固定 5、右对齐 ⇒ pgid 位数 <5 时有前导空格。实测 pgid of 1 = b'    1\\n'，pgid of 五位数 = 无前导空格。前两次录制都碰巧录到 5 位数因此未发现。坏样本 int(b' 6477\\n') **不抛异常** ⇒ 依赖「解析失败」的守卫恒绿，必须改为断言字节形态。",
+  "scenario_key": "narrow",
+  "command": "ps -o pgid=",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "lsof.badexec": {
+  "scenario": "**`MLX_BIN_LSOF` 指向的二进制可执行、但拒绝该组参数**（rc≠0 ∧ stdout 空 ∧ stderr 非空）。**不写成「非数字端口」** —— `port: int`，产品永不产生那种 argv（裁决 R5-2）。断言只针对三通道形态，不针对此处的具体 argv。",
+  "scenario_key": "badexec",
+  "command": "lsof",
+  "argv_template": [
+   "lsof",
+   "--badopt"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc_nonzero": true,
+   "stdout_empty": true,
+   "stderr_nonempty": true,
+   "stderr_re": "^lsof: "
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "bHNvZjogaWxsZWdhbCBvcHRpb24gY2hhcmFjdGVyOiAtCmxzb2YgNC45MQogbGF0ZXN0IHJldmlzaW9uOiBmdHA6Ly9sc29mLml0YXAucHVyZHVlLmVkdS9wdWIvdG9vbHMvdW5peC9sc29mLwogbGF0ZXN0IEZBUTogZnRwOi8vbHNvZi5pdGFwLnB1cmR1ZS5lZHUvcHViL3Rvb2xzL3VuaXgvbHNvZi9GQVEKIGxhdGVzdCBtYW4gcGFnZTogZnRwOi8vbHNvZi5pdGFwLnB1cmR1ZS5lZHUvcHViL3Rvb2xzL3VuaXgvbHNvZi9sc29mX21hbgogdXNhZ2U6IFstP2FiaGxuTm9PUFJ0VXZWWF0gWyt8LWMgY10gWyt8LWQgc10gWytEIERdIFsrfC1mW2NnR11dCiBbLUYgW2ZdXSBbLWcgW3NdXSBbLWkgW2ldXSBbK3wtTCBbbF1dIFsrfC1NXSBbLW8gW29dXSBbLXAgc10KIFsrfC1yIFt0XV0gWy1zIFtwOnNdXSBbLVMgW3RdXSBbLVQgW3RdXSBbLXUgc10gWyt8LXddIFsteCBbZmxdXSBbLS1dIFtuYW1lc10KVXNlIHRoZSBgYC1oJycgb3B0aW9uIHRvIGdldCBtb3JlIGhlbHAgaW5mb3JtYXRpb24uCg==",
+  "note": "裁决 R5-2 补录：「跑完了但失败」态。此前 lsof/df/vm_stat 三个命令该列零夹具、零用例、零开口登记。",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "df.badpath": {
+  "scenario": "`df` 跑完但失败：rc=1 + stdout 空 + stderr 非空。消费者若写 `splitlines()[1]` 会抛 `IndexError` 穿透成 `Failed(1)`，写 `except: return Ok(0)` 则磁盘余量恒 0 ⇒ `fitness` 恒 `OVER` ⇒ `install` 恒拒绝（裁决 R5-2）。",
+  "scenario_key": "badpath",
+  "command": "df -k",
+  "argv_template": [
+   "df",
+   "-k",
+   "/no/such/path"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc_nonzero": true,
+   "stdout_empty": true,
+   "stderr_nonempty": true,
+   "stderr_re": "No such file"
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "ZGY6IC9uby9zdWNoL3BhdGg6IE5vIHN1Y2ggZmlsZSBvciBkaXJlY3RvcnkK",
+  "note": "裁决 R5-2 补录：「跑完了但失败」态。此前 lsof/df/vm_stat 三个命令该列零夹具、零用例、零开口登记。",
+  "pending": false,
+  "provenance": "recorded"
+ },
+ "vm_stat.badopt": {
+  "scenario": "`vm_stat` 跑完但失败：rc=1 + stdout 空 + stderr 非空。使 `Budget` 的内存一支有可回放的 `Unknown` 夹具 —— 此前三支里只有 swap（`sysctl.badkey`）有（裁决 R5-2）。",
+  "scenario_key": "badopt",
+  "command": "vm_stat",
+  "argv_template": [
+   "vm_stat",
+   "-x"
+  ],
+  "stability": "shape-only",
+  "rc": 1,
+  "shape": {
+   "rc_nonzero": true,
+   "stdout_empty": true,
+   "stderr_nonempty": true,
+   "stderr_re": "^vm_stat: "
+  },
+  "sample_stdout_b64": "",
+  "sample_stderr_b64": "dm1fc3RhdDogaWxsZWdhbCBvcHRpb24gLS0geAp1c2FnZTogdm1fc3RhdCBbWy1jIGNvdW50XSBpbnRlcnZhbF0K",
+  "note": "裁决 R5-2 补录：「跑完了但失败」态。此前 lsof/df/vm_stat 三个命令该列零夹具、零用例、零开口登记。",
+  "pending": false,
+  "provenance": "recorded"
+ }
+}

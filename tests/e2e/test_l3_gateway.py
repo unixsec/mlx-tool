@@ -86,7 +86,7 @@ def stack(tmp_path, repo):
     env = dict(os.environ, PATH="/usr/bin:/bin",
                MLX_GATEWAY_PORT=str(gw_port),
                **{k: str(v) for k, v in roots.items()})
-    r = subprocess.run(["bash", str(repo / "v7" / "deployer" / "install.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
                        capture_output=True, text=True, timeout=60, check=False, env=env)
     assert r.returncode == 0, r.stderr
 

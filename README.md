@@ -9,11 +9,11 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Backend](https://img.shields.io/badge/backend-mlx--lm-orange)](https://github.com/ml-explore/mlx-lm)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-158%20passing-success)](v7/tests)
+[![Tests](https://img.shields.io/badge/tests-158%20passing-success)](tests)
 
 🌐 **English** · [简体中文](README_cn.md)
 
-📖 [User Guide](v7/docs/USER-GUIDE.md) · 🐛 [Known Issues](v7/docs/KNOWN-ISSUES.md) · 📝 [Changelog](CHANGELOG.md)
+📖 [User Guide](docs/USER-GUIDE.md) · 🐛 [Known Issues](docs/KNOWN-ISSUES.md) · 📝 [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -42,7 +42,7 @@ brew install python@3.13
 
 ```bash
 git clone https://github.com/<you>/mlx-tool.git && cd mlx-tool
-bash v7/deployer/install.sh
+bash deployer/install.sh
 source ~/.zshrc          # or open a new terminal
 mlx check                # 9 checks — all should pass
 ```
@@ -173,7 +173,7 @@ chat 的第一个参数是**模型 id**，问题用 --prompt= 传：
 
 ## 📖 User Guide
 
-The [full guide](v7/docs/USER-GUIDE.md) has 15 chapters, and every `$` block in
+The [full guide](docs/USER-GUIDE.md) has 15 chapters, and every `$` block in
 it is pasted from a real run — install, find models, download, register, serve,
 use, connect external tools, uninstall, troubleshoot.
 
@@ -222,6 +222,7 @@ result → primitives → policy → resources → orchestration → parsing →
 |---|---|
 | Product code | 7.2k lines, 50 files |
 | Tests | 5.9k lines, 158 functions, 435 assertions |
+| | 18 of those assert the product tables match the design ledger. That ledger is development material and is not published, so they **skip** here with an explicit reason — `140 passed, 18 skipped` is the expected result. |
 | Runtime deps (CLI) | none |
 | Runtime deps (inference) | `mlx` + `mlx-lm` in a managed venv |
 

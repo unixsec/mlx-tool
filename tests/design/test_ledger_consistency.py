@@ -16,11 +16,36 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cardinality import Cardinality  # noqa: E402
 
-DOCS = Path(__file__).resolve().parents[3] / "docs" / "design" / "v7"
+# 设计文档在**仓库根**下，而产品可能在 `v7/` 子目录里 ——
+# 所以这里不能用 conftest 的产品根。向上找到含 `docs/design` 的那一层。
+def _repo_root():
+    for d in Path(__file__).resolve().parents:
+        if (d / "docs" / "design").is_dir():
+            return d
+    return Path(__file__).resolve().parents[2]
+
+
+DOCS = _repo_root() / "docs" / "design" / "v7"
 LEDGERS = DOCS / "03b-ledgers.md"
 ARCH = DOCS / "02-architecture.md"
 
-pytestmark = pytest.mark.design
+# **没有设计台账时整层 skip，而不是 fail。**
+# 本层求值的是「产品表与设计台账一致」——台账不在，这条判据**无法求值**，
+# 那既不是通过也不是失败。发布仓库故意不含 `docs/design/`（那是开发过程
+# 记录），此前它会让这里 10 条测试直接 FileNotFoundError 变红：
+# 一个从 GitHub clone 下来的人第一次跑测试就看到一片红，而产品完全正常。
+#
+# **skip 必须带原因**：静默跳过和「判据不存在」一样坏。pytest 的 -rs
+# 会把这条理由打出来。
+pytestmark = [
+    pytest.mark.design,
+    pytest.mark.skipif(
+        not LEDGERS.exists(),
+        reason=(f"设计台账不在（{LEDGERS.name}）—— 本层断言的是「产品表与"
+                f"设计台账一致」，台账不在则判据无法求值。发布仓库不含 "
+                f"docs/design/，这是预期的；开发仓库里出现这条 skip 才是问题"),
+    ),
+]
 
 
 def _section(text, start, end):

@@ -288,7 +288,7 @@ def test_shell_vars_braced_before_multibyte(repo: Path):
     """
     import re
     bad = []
-    for sh in sorted((repo / "v7" / "deployer").glob("*.sh")):
+    for sh in sorted((repo / "deployer").glob("*.sh")):
         for i, line in enumerate(sh.read_text().splitlines(), 1):
             if line.strip().startswith("#"):
                 continue
@@ -342,7 +342,7 @@ def test_no_test_writes_to_real_home_rc(repo: Path):
     """
     import re
     offenders = []
-    for f in sorted((repo / "v7" / "tests").rglob("test_*.py")):
+    for f in sorted((repo / "tests").rglob("test_*.py")):
         src = f.read_text()
         if "install.sh" not in src:
             continue
@@ -920,7 +920,7 @@ def test_required_packages_are_actually_installed_by_the_installer(payload, repo
     sys.path.insert(0, str(payload / "lib"))
     from mlx_server.caps import OPTIONAL, PACKAGES, REQUIRED  # noqa: PLC0415
 
-    src = (repo / "v7" / "deployer" / "install.sh").read_text()
+    src = (repo / "deployer" / "install.sh").read_text()
     m = re.search(r"for\s+pkg\s+in\s+([^\n;]+?)\s*;\s*do", src)
     assert m, "install.sh 里找不到装包的 for 循环 —— 守卫的提取面失效了"
     # pip 名 → import 名（`mlx-lm` 装出来的模块叫 `mlx_lm`）
@@ -960,7 +960,7 @@ def test_value_flags_are_shown_in_equals_form(payload, repo):
     pat = re.compile(r"(" + "|".join(re.escape(f) for f in value_flags)
                      + r")\s+[<A-Za-z0-9]")
     targets = [payload / "share" / "messages.tsv",
-               repo / "v7" / "docs" / "USER-GUIDE.md"]
+               repo / "docs" / "USER-GUIDE.md"]
     targets += sorted((payload / "lib" / "mlx_server").rglob("*.py"))
 
     # **别的程序的 flag 不归本守卫管**。`hf` 与 `mlx_lm.server` 都是 GNU 风格，
@@ -1156,7 +1156,7 @@ def test_version_string_is_single_sourced(payload, repo):
                 r"工具版本\s+(\d+\.\d+\.\d+(?:-\w+)?)",
                 r"[Vv]ersion[:\s]+(\d+\.\d+\.\d+(?:-\w+)?)")
     stale = []
-    for doc in [repo / "v7" / "docs" / "USER-GUIDE.md",
+    for doc in [repo / "docs" / "USER-GUIDE.md",
                 repo / "README.md", repo / "README_cn.md",
                 repo / "CHANGELOG.md"]:
         if not doc.exists():
