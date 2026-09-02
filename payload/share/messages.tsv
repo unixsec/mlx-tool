@@ -134,7 +134,7 @@ help.status.example	mlx status            # 工具全局 + 每个模型的状态
 help.model.rm.example	mlx model rm qwen27b             # 只删登记，权重保留\nmlx model rm qwen27b --weights   # 连权重一起回收
 help.model.register.example	mlx model register qwen27b \\n    --repo=mlx-community/Qwen3.8-27B-8bit --type=text --port=8100
 help.check.example	mlx check             # 九项逐行\nmlx check --json      # 给脚本用
-help.install.example	bash <源码目录>/deployer/install.sh                        # 首次\nmlx install                                            # 重装 / 升级
+help.install.example	bash ~/dev/projects/mlx-toolkit/v7/deployer/install.sh   # 首次\nmlx install                                            # 重装 / 升级
 help.uninstall.example	mlx uninstall         # 会要求键入 yes 确认
 help.config.diff.long	只列出与默认值不同的键 —— 一眼看出你改过什么。
 help.config.export.long	把当前配置导出成可移植的包，用于换机或备份。
@@ -187,7 +187,7 @@ check.hint.models_file	注册表不可读 —— 部分行坏：`mlx model repai
 check.hint.ports	端口冲突或区间探测失败 —— `mlx model ls` 看各模型端口，与 `mlx status` 里的网关端口比对；改端口用 `mlx config set <模型id> --key=port --value=<新端口>`
 check.hint.run_dir	运行记录目录不可写 —— 检查数据根权限
 check.hint.tables	share/ 下的表缺失或损坏 —— 重装：`mlx install`
-check.hint.venv	推理 venv 缺失或解释器太旧（要 ≥ 3.10）—— `mlx up` 会起不来新模型。`mlx version` 看当前版本；修：`brew install python@3.13` 后重跑安装器 `bash <源码目录>/deployer/install.sh`（它会用新解释器重建 venv，权重与注册表不动）
+check.hint.venv	推理 venv 缺失或解释器太旧（要 ≥ 3.10）—— `mlx up` 会起不来新模型。`mlx version` 看当前版本；修：`brew install python@3.13` 后重跑安装器 `bash ~/dev/projects/mlx-toolkit/v7/deployer/install.sh`（它会用新解释器重建 venv，权重与注册表不动）
 check.hint.weights_root	权重根不可读 —— 检查权限或磁盘挂载
 config.not_a_config_key	{key} 不是配置项（scope={scope}）—— 它是工具从磁盘读出来的事实。用 `mlx model info <id>` 看它的值
 svc.draft_not_found	{id} 配了 draft_model={draft}，但没有登记名为 {draft} 的模型。`mlx model ls` 看有哪些；不想用投机解码就 `mlx config unset {id} --key=draft_model`

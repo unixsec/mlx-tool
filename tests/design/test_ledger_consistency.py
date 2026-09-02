@@ -17,16 +17,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cardinality import Cardinality  # noqa: E402
 
 
-# 设计文档在**仓库根**下，而产品可能在 `v7/` 子目录里 ——
-# 所以这里不能用 conftest 的产品根。向上找到含 `docs/design` 的那一层。
-def _repo_root():
+# 设计文档的位置**随仓库而异**，而且它可能根本不在：
+#   · 开发仓库：`_local/design/v7/`（本地保留，不发布）
+#   · 历史布局：`docs/design/v7/`
+#   · 发布仓库：不存在 —— 那时本层整体 skip（见下面的 skipif）
+# 逐个候选去找，别写死任何一个。
+def _find_design_docs():
     for d in Path(__file__).resolve().parents:
-        if (d / "docs" / "design").is_dir():
-            return d
-    return Path(__file__).resolve().parents[2]
+        for rel in (("_local", "design", "v7"), ("docs", "design", "v7")):
+            cand = d.joinpath(*rel)
+            if cand.is_dir():
+                return cand
+    return Path(__file__).resolve().parents[2] / "docs" / "design" / "v7"
 
 
-DOCS = _repo_root() / "docs" / "design" / "v7"
+DOCS = _find_design_docs()
 LEDGERS = DOCS / "03b-ledgers.md"
 ARCH = DOCS / "02-architecture.md"
 
