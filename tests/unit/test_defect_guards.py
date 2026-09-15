@@ -189,15 +189,16 @@ def test_d4_ports_conflict_wins_over_spec(payload: Path, sys_py: str):
         os.makedirs(os.path.join(_d, "data"), exist_ok=True)
         _snap = os.path.join(_d, "w", "hub", "models--org--qwen", "snapshots", "main")
         os.makedirs(_snap, exist_ok=True)
+        open(os.path.join(_snap, "config.json"), "w").write("{}")
         with open(os.path.join(_d, "data", "models.jsonl"), "w") as _fh:
             _fh.write(json.dumps({"id": "qwen",
                                   "user": {"repo": "org/qwen", "type": "text"},
                                   "machine": {"port": 8177, "revision": "main"}}) + "\\n")
         ctx = Ctx(_d, os.path.join(_d, "data"), os.path.join(_d, "w"),
-                  os.path.join(_d, "venv"), 8340, (8100, 8199), None)
+                  os.path.join(_d, "venv"), 8340, (8100, 8199), None, share_root="@SHARE@")
         calls = []
         deps = {
-            "backendarg_spec": lambda t, layers=None: calls.append("spec") or None,
+            "backendarg_spec": lambda t, cfg, route: calls.append("spec") or None,
             # 桩返回**产品的真类型**（`conflict_check` 产的是带 detail 的
             # `Refused(7)`，不是 bool）。返回裸 True 时，消费点一旦改成读
             # `.rc` 就静静失效 —— 而那正是「端口冲突：」后面空着的成因。
@@ -207,7 +208,7 @@ def test_d4_ports_conflict_wins_over_spec(payload: Path, sys_py: str):
         }
         out = run(ctx, None, Invocation("up", "qwen"), deps)   # 端口冲突在校验段，到不了执行段
         print(json.dumps({"rc": out.rc, "spec_called": calls}))
-    """)
+    """.replace("@SHARE@", str(payload / "share")))
     assert got["rc"] == 7, f"端口冲突应 rc 7，实得 {got['rc']}"
     assert got["spec_called"] == [], "spec 在端口冲突之后仍被调用 ⇒ 顺序没被钉死"
 

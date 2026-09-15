@@ -5,7 +5,7 @@
 import os
 import sys
 
-from . import backendarg, cli, ctx, runtime, schema
+from . import backendarg, cli, ctx, runtime
 from .cmd import api as cmd_api
 from .cmd import bench as cmd_bench
 from .cmd import bootstrap as cmd_bootstrap
@@ -94,40 +94,7 @@ def _dispatch(inv, c, stack, verbs):
 
     _load_renderers()          # 渲染器自我登记（装配期，一次）
     deps = runtime.build_deps(c)
-    def _spec(target, layers=None):
-        # `api` 的端口来自 ctx.gateway_port（它是 §6 登记的单例槽位），
-        # 不是模型端口区间里的值。
-        # 模型服务的层由**调用方**（`cmd.svc` 校验段）递进来 —— 注册表里的
-        # 端口是 machine 层。此前这里恒传 `{}`，于是 `DEFAULTS["port"]`
-        # 永远生效，登记在别的端口上的模型全被起在 8100。
-        if target == "api":
-            # 网关端口来自 `ctx`（§6 登记的单例槽位），**其余键走全局设置** ——
-            # 只给 cli 层的话 `api.bind` 永远是出厂值，用户设了也不生效。
-            from . import store
-            glob = {k: v for k, v in store.load_settings(c).items()
-                    if k in schema.DEFAULTS and k != "port"}
-            layers = {"cli": {"port": c.gateway_port}}
-            if glob:
-                layers["machine"] = glob
-        # 解释器路径**由 ctx 注入**，让 `spec()` 直接产出可执行的 argv。
-        import os as _os
-        venv_py = _os.path.join(c.venv, "bin", "python3") if c.venv else ""
-        if venv_py and not _os.path.exists(venv_py):
-            venv_py = ""                       # venv 没建成 ⇒ 回落（§0.4.2）
-        cfg = schema.effective(target, layers or {}, venv_python=venv_py,
-                               defaults=_factory_defaults(c))
-        rt = None
-        if target != "api":
-            # **过渡**：Task 9 把判定接进校验段之前，模型目标恒走 mlx_lm 行 ——
-            # 与本改动前的行为逐字一致（argv 只多出 --host 与并发参数）。
-            from . import route as _route
-            from .tables import open_tables
-            rows = {r["backend"]: r for r in open_tables(c).backends()}
-            rt = _route.Route("mlx_lm", rows["mlx_lm"], "R4", False, [], "", None,
-                              cfg.values.get("max_concurrency"), None)
-        return backendarg.spec(target, cfg, rt)
-
-    deps["backendarg_spec"] = _spec
+    deps["backendarg_spec"] = backendarg.spec
     return mod.run(c, stack, inv, deps)
 
 
@@ -259,6 +226,21 @@ def main(argv, out=None, err=None):
             out.write(json.dumps(list(pay["argv"])) + "\n")
             for k, layer in sorted(pay.get("sources", {}).items()):
                 err.write(f"  {k}: {layer}\n")
+            if pay.get("env"):
+                err.write("  env   " + "  ".join(f"{k}={v}" for k, v in pay["env"].items())
+                          + "\n")
+            rt = pay.get("route")
+            if rt:
+                err.write(f"  判定  {rt['rule']} · {rt['backend']} · 依据 {rt['vision_src']}"
+                          f" · thinking={'开' if rt['thinking'] else '关'}"
+                          f" · effort={','.join(rt['effort_domain']) or '（不传）'}"
+                          + (f"（模板判不出：{rt['template_note']}，按不传处理）"
+                             if rt.get("template_note") else "") + "\n")
+                err.write(f"  就绪  {rt['ready']} · 最多等 {pay.get('ready_timeout_sec')} 秒"
+                          f" · 并发上限 {rt.get('max_concurrency')}\n")
+            if pay.get("dropped"):
+                err.write("  已退役的键：" + "、".join(pay["dropped"])
+                          + "（`mlx model repair` 清除）\n")
         elif inv.dry_run:
             # **其余动词的 dry-run 与正常输出同一出口** —— `--dry-run` 不是
             # 输出格式上的特例，它只是「不真做」。此前这里自行 json.dumps，

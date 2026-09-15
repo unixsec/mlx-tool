@@ -144,11 +144,12 @@ def test_l2_gateway_skips_venv_drift(payload, sys_py):
     坏样本：查了 ⇒ 「venv 没装」把网关也挡住，而网关根本不用 venv。
     """
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
+        C.share_root = "@SHARE@"
         from mlx_server.cmd.svc import run
         from mlx_server.result import Unknown
         calls = []
         deps = {
-            "backendarg_spec": lambda t, layers=None: type("S", (), {
+            "backendarg_spec": lambda t, cfg, route: type("S", (), {
                 "service": t, "argv": ("/usr/bin/python3", "-m", "gateway"),
                 "env": {"MLX_GATEWAY_PORT": "8099"}, "cwd_rel": "",
                 "model_arg": None, "sources": {}})(),
@@ -158,6 +159,6 @@ def test_l2_gateway_skips_venv_drift(payload, sys_py):
         }
         out = run(ctx, CleanupStack(), Inv("up", "api"), deps)
         print(json.dumps({"drift_called": calls, "key": getattr(out, "msg_key", None)}))
-    ''')
+    '''.replace("@SHARE@", str(payload / "share")))
     assert got["drift_called"] == [], "网关启动查了 venv 漂移"
     assert got["key"] == "svc.spawn_failed", f"没走到 spawn 就被挡了：{got['key']}"

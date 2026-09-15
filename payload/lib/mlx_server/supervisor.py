@@ -193,6 +193,14 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce):
     rec = {"pid": pid, "pgid": pgid, "port": port, "started_at": started_at,
            "model_arg": spec.model_arg, "type": "model" if spec.model_arg else "api",
            "schema_ver": 1, "nonce": nonce}
+    rt = getattr(spec, "route", None)
+    if rt is not None:
+        # 运行侧读这些**快照**，不在查看时重新判定（spec §3.4）
+        rec.update({"backend": rt.backend,
+                    "backend_auth": rt.row.get("key_env") not in ("", "-", None),
+                    "max_concurrency": rt.max_concurrency,
+                    "effort_domain": list(rt.effort_domain),
+                    "key_fp": rt.key_fp})
     from . import atomic
     # **0600**：运行记录含密钥指纹与后端信息（spec §3.4）
     with atomic.replace(_record_path(ctx, spec.service), mode=0o600) as fh:

@@ -207,3 +207,5 @@ svc.backend_key_missing	{id} 走带鉴权的后端，需要 backend.api_key，�
 svc.size_undeterminable	量不出 {id} 的权重体积 —— 就绪等待的超时按体积算，量不出就不启动。`mlx model repair` 重新扫盘后再试
 chat.model_not_found	没有名为「{id}」的模型。已登记：{known}\nchat 的第一个参数是**模型 id**，问题用 --prompt= 传：\n  mlx chat {example} --prompt="{id}"\n不带 --prompt 则进入多轮对话：mlx chat {example}
 bench.model_not_found	没有名为「{id}」的模型。已登记：{known}\nbench 的第一个参数是模型 id：mlx bench {known_first}
+svc.loading_notice	{backend} 启动即加载权重（约 {gb} GB），加载完成才开始监听 —— 最多等 {sec} 秒
+svc.still_loading_hint	等了 {sec} 秒仍未监听。这个后端加载完权重才开始监听，可能只是还没加载完：稍后跑 `mlx status {service}` 看它是否已在跑

@@ -319,9 +319,11 @@ def build_deps(ctx):
         "confirm": confirm,
         "caps_drift": lambda: _drift(ctx, venv_py),
         "checks": checks.ALL,          # 九项健康检查的生产实现
-        "wait_ready": lambda spec, port: wait_ready(
-            ctx, spec, port,
+        "wait_ready": lambda spec, port, timeout_sec: wait_ready(
+            ctx, spec, port, timeout_sec=timeout_sec,
             log_path=os.path.join(ctx.root_data, "logs", f"{spec.service}.log")),
+        # 过程说明（spec §3.3 的加载提示）走 stderr（INV-17）
+        "notice": lambda text: (sys.stderr.write(text + "\n"), sys.stderr.flush()),
         # `bootstrap verify` 要按分发清单核对产物 —— 没有它就恒返回
         # 「读不到 share/ 下的表」，而表明明在（实测过）
         "tables": _tables(ctx),

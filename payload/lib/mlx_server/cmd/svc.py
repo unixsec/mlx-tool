@@ -12,7 +12,8 @@ from ..result import Done, Failed, Ok, Refused, is_unknown
 
 # `BCR-R-27` 钉死的求值顺序。写成数据而不是散在代码里的 if：
 # 不钉死的后果是「端口冲突 + 容量 OVER」时 rc 在 6/7 之间随实现顺序漂移。
-VALIDATE_STEPS = ("目标域", "记录", "权重解析", "ports.conflict_check", "backendarg.spec")
+VALIDATE_STEPS = ("目标域", "记录", "权重解析", "生效配置", "后端判定",
+                  "ports.conflict_check", "backendarg.spec")
 EXECUTE_STEPS = ("已在跑", "端口即时可监听性", "容量判档", "venv 漂移", "资源创建")
 
 
@@ -47,11 +48,11 @@ def enter_execute():
     return None
 
 
-def _fit_verdict(ctx, target, deps):
-    # type: (object, str, dict) -> object
+def _fit_verdict(ctx, target, deps, cfg):
+    # type: (object, str, dict, object) -> object
     """把三个探针值喂给 `fitness.classify`。**探针在这里取，判定在那里做**
     （`fitness` 是纯函数，不调探针 —— 那是它能被逐样例对拍的前提）。"""
-    from .. import fitness, schema, store, supervisor
+    from .. import fitness, store, supervisor
     avail = deps["avail_mem_mb"]()
     recs = store.load(ctx, store.MODELS)
     rec = recs.by_id(target)
@@ -77,12 +78,6 @@ def _fit_verdict(ctx, target, deps):
             m = rss_of(snap["pid"])
             if not is_unknown(m) and m.value:
                 total += int(m.value) // 1024
-    from ..tables import open_tables
-    try:
-        _fac = schema.defaults_from(open_tables(ctx))
-    except Exception:                              # noqa: BLE001
-        _fac = dict(schema.DEFAULTS)
-    cfg = schema.effective(target, {}, defaults=_fac)
     th = fitness.FitThresholds(cfg.values["fit.reserve_pct"],
                                cfg.values["fit.tight_pct"],
                                cfg.values["fit.over_pct"])
@@ -174,7 +169,119 @@ def _v_weights(state, inv, deps):
         return Refused(6, "svc.draft_weights_missing", id=inv.target,
                        draft=draft_id, repo=drec.user.get("repo", ""))
     state["draft_path"] = dr.value["path"]
+    state["draft_record"] = drec
     return None
+
+
+def _v_config(state, inv, deps):
+    """校验段步 4 · 生效配置 —— **cfg 的唯一产出点**（spec §2.2）。
+
+    此前 cfg 在 `entry._spec` 里现造：user 层按硬编码 `DEFAULTS` 过滤（per-model
+    `modality` 被静默丢掉），也没有 settings 层（`config set fit.*` 从不生效）。
+    层序（低→高）：出厂默认 < machine（settings ∪ 注册表端口）< user（记录 user 段）< cli。
+    """
+    import os
+
+    from .. import schema
+    from ..tables import open_tables
+    ctx = state["ctx"]
+    tv = open_tables(ctx)
+    defs = schema.keydefs(tv)
+    settings = store.load_settings(ctx)
+    dropped = sorted(k for k in settings if k not in defs)
+    machine = {k: val for k, val in settings.items()
+               if k in defs and defs[k]["scope"] == "user"
+               and defs[k]["level"] in ("global", "both")
+               and not (inv.target != "api" and k == "port")}
+    layers = {}
+    if inv.target == "api":
+        layers["cli"] = {"port": ctx.gateway_port}
+    else:
+        rec = state["record"]
+        port = store.model_port(rec)
+        if port is not None:
+            machine["port"] = int(port)
+        user = {}
+        for k in list(rec.user):
+            d = defs.get(k)
+            if d is None:
+                if k not in ("repo", "type"):       # 非配置字段（repo）与旧字段（type）
+                    dropped.append(k)
+                continue
+            if d["scope"] == "user" and d["level"] in ("model", "both"):
+                user[k] = dict.get(rec.user, k)
+        if user:
+            layers["user"] = user
+    if machine:
+        layers["machine"] = machine
+    venv_py = os.path.join(ctx.venv, "bin", "python3") if getattr(ctx, "venv", "") else ""
+    if venv_py and not os.path.exists(venv_py):
+        venv_py = ""                           # venv 没建成 ⇒ 回落（§0.4.2）
+    try:
+        cfg = schema.effective(inv.target, layers, venv_python=venv_py,
+                               defaults=schema.defaults_from(tv))
+    except schema.ConfigError as exc:
+        return Refused(6, "config.invalid", key=exc.key, kind=str(exc))
+    for k, val in cfg.values.items():
+        if cfg.sources.get(k) == "default":
+            continue
+        bad = schema.check_domain(k, val, defs)
+        if bad:
+            return Refused(6, "config.invalid", key=k, kind=bad)
+    state.update(cfg=cfg, tables=tv, dropped=sorted(set(dropped)))
+    return None
+
+
+def _size_mb(rec, path):
+    # type: (object, str) -> object
+    """登记的体积优先；缺失（register 从不写、flat 布局 repair 填不上）就现场量（spec P3）。"""
+    v = rec.machine.get("size_mb") if rec is not None else None
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+        return float(v)
+    s = weights.size(path)
+    return None if is_unknown(s) else round(s.value / (1024 * 1024), 1)
+
+
+def _v_backend(state, inv, deps):
+    """校验段步 5 · 后端判定（spec §2.3–§2.4）。**采证在这里，裁决在 `route`**。"""
+    if inv.target == "api":
+        return None
+    from .. import caps, route, templates
+    ctx, cfg, tv = state["ctx"], state["cfg"], state["tables"]
+    attach = [r["model_type"] for r in tv.drafters()]
+    facts = weights.inspect_config(state["weights_path"], attach)
+    if is_unknown(facts):
+        return Refused(9, "svc.inspect_undeterminable", id=inv.target,
+                       detail=facts.reason or "")
+    draft, size = None, _size_mb(state["record"], state["weights_path"])
+    if state.get("draft_path"):
+        d = weights.inspect_config(state["draft_path"], attach)
+        draft = (state["cfg_draft"], None if is_unknown(d) else d.value)
+        dsize = _size_mb(state.get("draft_record"), state["draft_path"])
+        size = None if (size is None or dsize is None) else size + dsize
+    template = None
+    # 模板只影响走模板开关的后端（mlx_vlm）；纯文本不必付 5 s 上限的子进程代价
+    if draft is None and route.effective_vision(facts.value.get("vision"),
+                                                cfg.values.get("modality")):
+        template = templates.inspect_template(
+            state["weights_path"], cfg.venv_python,
+            ps_path=(getattr(ctx, "bins", None) or {}).get("ps", "/bin/ps"))
+    out = route.decide(inv.target, facts.value, template, draft, cfg.values,
+                       (caps.get(ctx) or {}).get("packages") or [],
+                       {r["backend"]: r for r in tv.backends()}, size)
+    if not isinstance(out, route.Route):
+        return out
+    state["route"] = out
+    return None
+
+
+def ready_timeout(rt):
+    # type: (object) -> int
+    """就绪超时（spec §3.3）：先监听后加载的后端 20 s；加载完才监听的按体积算。"""
+    import math
+    if rt is None or rt.row.get("ready") != "load":
+        return 20
+    return 20 + 3 * int(math.ceil((rt.size_mb or 0) / 1024.0))
 
 
 def _v_ports(state, inv, deps):
@@ -193,27 +300,8 @@ def _v_ports(state, inv, deps):
 
 
 def _v_spec(state, inv, deps):
-    """校验段步 5 · backendarg.spec。
-
-    **注册表那一层在这里注入**：层序是 `DEFAULTS < machine < user < cli`，
-    模型的端口登记在记录的 machine 段，所以它就是 machine 层。
-    只注入配置域里有的键（`ServiceConfig` **零 machine 段字段**，
-    `BCR-P-06`）—— `revision` 这类字段不得进 cfg。
-    """
-    layers = {}
-    rec = state.get("record")
-    if rec is not None:
-        port = store.model_port(rec)
-        if port is not None:
-            layers["machine"] = {"port": int(port)}
-        # 配置域里有的 user 段键（`draft_model` / `num_draft_tokens` / …）
-        # 一并注入 —— 它们是 per-model 覆盖，层序里属 user 层。
-        from .. import schema as _schema
-        user = {k: v for k, v in rec.user.items() if k in _schema.DEFAULTS
-                or k in ("draft_model", "num_draft_tokens")}
-        if user:
-            layers["user"] = user
-    spec = deps["backendarg_spec"](inv.target, layers)
+    """校验段步 7 · backendarg.spec。cfg 与判定结论都来自前两步，这里不再造第二份 cfg。"""
+    spec = deps["backendarg_spec"](inv.target, state["cfg"], state.get("route"))
     if spec is None:
         return Refused(5, "svc.spec_unavailable", id=inv.target)
     state["spec"] = spec
@@ -226,6 +314,8 @@ VALIDATORS = {
     "目标域": _v_target,
     "记录": _v_record,
     "权重解析": _v_weights,
+    "生效配置": _v_config,
+    "后端判定": _v_backend,
     "ports.conflict_check": _v_ports,
     "backendarg.spec": _v_spec,
 }
@@ -418,7 +508,15 @@ def run(ctx, stack, inv, deps):
     # 执行段整段不跑，外部命令计数自然 == 0（DE-T-018），
     # 而 caps.drift 仍留在执行段（BCR-R-27），两条同真。
     if inv.dry_run:
-        return Done({"argv": spec.argv, "sources": spec.sources})
+        from .. import schema as _schema
+        pay = {"argv": spec.argv, "sources": spec.sources,
+               "env": {k: (_schema.MASK if k in spec.secret_env and val else val)
+                       for k, val in sorted(spec.env.items())},
+               "dropped": state.get("dropped") or []}
+        if state.get("route") is not None:
+            pay["route"] = state["route"].to_dict()
+            pay["ready_timeout_sec"] = ready_timeout(state["route"])
+        return Done(pay)
 
     enter_execute()                                  # ── stage_split ──
 
@@ -459,7 +557,7 @@ def run(ctx, stack, inv, deps):
     # 所以 `Unknown` 也拒绝（rc 9），并指名是哪个输入不确定。
     avail = deps.get("avail_mem_mb")
     if avail is not None and inv.target != "api":
-        verdict = _fit_verdict(ctx, inv.target, deps)
+        verdict = _fit_verdict(ctx, inv.target, deps, state["cfg"])
         if is_unknown(verdict):
             return Refused(9, "fit.undeterminable", detail=verdict.reason)
         if verdict.value == fitness.OVER and not (inv.args or {}).get("ignore_fitness"):
@@ -490,16 +588,34 @@ def run(ctx, stack, inv, deps):
     # 下一条 `mlx status` 却说「未运行」。报成功但没产生效果。
     wait = deps.get("wait_ready")
     if wait is not None:
-        verdict = wait(spec, port)
+        rt = state.get("route")
+        timeout = ready_timeout(rt)
+        if rt is not None and rt.row.get("ready") == "load":
+            # 加载完才监听的后端：用户会等上一两分钟，先说清楚在等什么
+            from ..tables import open_tables
+            tvn = open_tables(ctx)
+            deps["notice"](tvn.text(tvn.msg("svc.loading_notice"), backend=rt.backend,
+                                    gb=round((rt.size_mb or 0) / 1024.0, 1), sec=timeout))
+        verdict = wait(spec, port, timeout)
         if verdict is not None:
             reason, tail = verdict
             rc, key = (10, "svc.died_before_ready") if reason == "dead" \
                 else (4, "svc.ready_timeout")
+            detail = tail or "（日志为空）"
+            if reason != "dead" and rt is not None and rt.row.get("ready") == "load":
+                # spec §3.3：加载完才监听的后端，超时多半是还没加载完 —— 要说出来，
+                # 否则用户看到「就绪超时」会以为起失败了而去重复启动
+                from ..tables import open_tables
+                tvh = open_tables(ctx)
+                detail += "\n" + tvh.text(tvh.msg("svc.still_loading_hint"),
+                                          sec=timeout, service=spec.service)
             return Failed(rc, key, [f"run/{spec.service}.json"],
-                          service=spec.service, port=port,
-                          detail=tail or "（日志为空）")
-    return Done({"kind": "svc", "started": inv.target,
-                 "pid": started["pid"], "port": port})
+                          service=spec.service, port=port, detail=detail)
+    rt = state.get("route")
+    return Done(dict({"kind": "svc", "started": inv.target,
+                      "pid": started["pid"], "port": port},
+                     **({"backend": rt.backend, "max_concurrency": rt.max_concurrency}
+                        if rt is not None else {})))
 
 
 def spec_port(spec):

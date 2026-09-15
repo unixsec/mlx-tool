@@ -50,14 +50,7 @@ def _run_on_floor(payload: Path, sys_py: str, body: str):
 
         calls = []
         deps = {
-            # 桩必须返回**产品的真类型**，不是 dict——否则是拿桩和桩对拍（审视 P0-1）
-            "backendarg_spec": lambda t, layers=None: backendarg.spec(
-                t, schema.effective(t, layers or {}),
-                __import__("mlx_server.route", fromlist=["Route"]).Route(
-                    "mlx_lm", {r["backend"]: r for r in
-                               __import__("mlx_server.tables", fromlist=["TablesView"])
-                               .TablesView(SHARE).backends()}["mlx_lm"],
-                    "R4", False, [], "", None, 8, None)),
+            "backendarg_spec": backendarg.spec,
             "caps_drift": lambda: (calls.append("caps.drift"), False)[1],
         }
     """) + textwrap.dedent(body)
