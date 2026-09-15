@@ -57,4 +57,11 @@ def _never_touch_real_rc(tmp_path_factory, monkeypatch):
     # `pip install mlx-lm` 要几分钟，乘以每个 e2e 用例就是测试套件不可用。
     # 真装依赖的验证走单独一条用例。
     monkeypatch.setenv("MLX_SKIP_DEPS", "1")
+    # **开发者 shell 导出的变量不得进入测试**。L3 以 `dict(os.environ, …)` 造子进程环境：
+    # shell 里导出的 `MLX_GATEWAY_TOKEN` / `MLX_BACKEND_API_KEY` 会覆盖安装生成的密钥，
+    # `MLX_ROOT_*` 可能把安装指向真实目录 —— 结果随机器变化。
+    # 需要它们的用例经自己的 env dict 显式传入，不受影响。
+    for name in ("MLX_GATEWAY_TOKEN", "MLX_BACKEND_API_KEY",
+                 "MLX_ROOT_CODE", "MLX_ROOT_DATA", "MLX_ROOT_WEIGHTS"):
+        monkeypatch.delenv(name, raising=False)
     yield
