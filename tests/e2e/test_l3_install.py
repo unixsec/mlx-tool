@@ -316,3 +316,68 @@ def test_l3_fresh_install_generates_keys_without_printing_them(tmp_path, repo):
         assert re.fullmatch(r"[A-Za-z0-9_-]{32,128}", v), f"{k} 没有生成或格式不对"
         assert v not in out and v[:8] not in out, f"安装器输出里出现了 {k} 的值"
         assert k in out, f"安装器输出应列出生成了哪些键（只列键名）：缺 {k}"
+
+
+def test_l3_route_follows_config_on_installed_product(installed):
+    """spec §8.1「D · 生效配置」：真 `bin/mlx`、真安装产物，配置改动真的改变判定与 argv。"""
+    code_root, data_root, env = installed
+
+    def dry():
+        r = _mlx(code_root, env, "up", "qwen", "--dry-run")
+        line = [ln for ln in r.stdout.splitlines() if ln.startswith("[")]
+        return r.returncode, (json.loads(line[-1]) if line else None), r.stderr
+
+    r = _mlx(code_root, env, "config", "set", "qwen", "--key=modality", "--value=vison")
+    assert r.returncode == 6, f"modality 值域拼错应 rc 6：{r.stderr}"
+
+    assert _mlx(code_root, env, "config", "set", "qwen", "--key=modality",
+                "--value=vision").returncode == 0
+    rc, _, err = dry()
+    assert rc == 6 and "mlx_vlm" in err, f"venv 没装 mlx_vlm 时强制 vision 应拒绝（P1）：{err}"
+
+    assert _mlx(code_root, env, "config", "set", "qwen", "--key=modality",
+                "--value=text").returncode == 0
+    assert _mlx(code_root, env, "config", "set", "max_concurrency", "--value=2").returncode == 0
+    settings = data_root / "settings.json"
+    s = json.loads(settings.read_text())
+    s["backend"] = "mlx_lm"                     # 1.0.0 留下的退役键
+    settings.write_text(json.dumps(s))
+    rc, argv, err = dry()
+    assert rc == 0, err
+    assert argv[1:3] == ["-m", "mlx_lm.server"], argv
+    assert argv[-4:] == ["--decode-concurrency", "2", "--prompt-concurrency", "2"], argv
+    assert "判定  R4" in err and "已退役的键：backend" in err, err
+    assert "Traceback" not in err
+
+
+def test_l3_keys_never_leak_into_files_or_output(installed):
+    """spec §8.3「密钥 · 泄漏」的计划 1 子集：跑遍会碰密钥的命令，再扫三根与全部输出。"""
+    code_root, data_root, env = installed
+    settings = data_root / "settings.json"
+    s = json.loads(settings.read_text())
+    secrets = [s["backend.api_key"], s["api.token"]]
+    needles = secrets + [v[:8] for v in secrets]
+
+    outputs = []
+    for argv in (("bootstrap", "keys"), ("config", "ls"), ("config", "get", "--key=api.token"),
+                 ("config", "diff"), ("up", "qwen", "--dry-run"), ("up", "api", "--dry-run"),
+                 ("model", "repair"), ("model", "info", "qwen"), ("status",), ("status", "--json")):
+        r = _mlx(code_root, env, *argv)
+        outputs.append((" ".join(argv), r.stdout + r.stderr))
+    leaked_out = [cmd for cmd, text in outputs if any(n in text for n in needles)]
+    Cardinality.check("输出里出现密钥的命令", leaked_out, rel="empty")
+
+    scanned, leaked = [], []
+    root = code_root.parent
+    for base in (code_root, data_root, root / "weights"):
+        for p in base.rglob("*"):
+            if p.is_symlink() or not p.is_file() or p == settings or ".venv" in p.parts:
+                continue
+            if p.stat().st_size > 50 * 1024 * 1024:
+                continue
+            scanned.append(p)
+            data = p.read_bytes()
+            if any(n.encode() in data for n in needles):
+                leaked.append(str(p))
+    Cardinality.require_nonempty("被扫描的文件", scanned, "一个文件都没扫到 ⇒ 空真")
+    Cardinality.check("含密钥的文件", leaked, rel="empty")
