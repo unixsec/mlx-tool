@@ -15,12 +15,13 @@ config 四命令 · Record 段归属 · ui 渲染器归位）
 
 ## 一、用户会撞上的
 
-### `mlx up` 报「已启动」时后端可能是坏的
+### `mlx up` 报「已启动」时后端可能是坏的（仅 mlx_lm）
 
 `wait_ready` 的判据是 `port_owner`（端口上的监听者是不是我们记录的那个 pid）。
 它挡住了「端口被别人占」，但挡不住这一类：**`mlx_lm.server` 先 bind 端口、
 首次请求才加载模型**，所以端口 LISTEN 时模型还没碰过。加载失败也不会让进程
 立刻退出 —— 它就那样挂着，端口开着，什么也服务不了。
+mlx_vlm 加载完权重才监听，端口 LISTEN 即模型可用，不受此影响。
 
 2026-09-02 实测：`mlx up qwen38`（绑了一个 mlx_lm 不支持的 drafter）报
 `✓ qwen38 已启动 port 8100 pid 94134`，五分钟后 `mlx chat` 仍连不上，
@@ -34,20 +35,6 @@ config 四命令 · Record 段归属 · ui 渲染器归位）
 `GET /v1/models` 的探测 —— 但要先解决超时：27 GB 模型的首次加载远超现在的
 `timeout_sec=20`，而 `up` 又不该阻塞几分钟。可能的形状是「端口就绪即返回，
 但文案说清『首次请求时才加载模型』」，把承诺降到实现做得到的程度。
-
-### 投机解码：`Qwen3.8-27B-MTP-4bit` 在 mlx_lm 上用不了
-
-`mlx-community/Qwen3.8-27B-MTP-4bit` 的 `model_type` 是 `qwen3_5_mtp`，
-而 `mlx_lm 0.31.3` 的 `_get_classes` 不认识它：
-`ValueError: Model type qwen3_5_mtp not supported`。
-
-MTP（Multi-Token Prediction）是 Qwen3.8 自带的多 token 预测头，
-**不是通用的 draft model**。mlx_lm 的 `--draft-model` 要的是一个能独立
-`load()` 的完整小模型。两者不是一回事。
-
-要用投机解码，drafter 得换成 mlx_lm 支持的架构（例如同系列的小参数量模型），
-且必须与主模型**同 tokenizer**。权重已下（0.24 GB），留着不碍事；
-`qwen38` 的 `draft_model` 已 unset。
 
 ### `--dry-run` 仍未覆盖的动词（**已不再危险，但也预览不了**）
 
@@ -66,23 +53,35 @@ MTP（Multi-Token Prediction）是 Qwen3.8 自带的多 token 预测头，
 补任何一个都要同步改 `cli.tsv:20` 的 `owner_verb` —— 守卫
 `test_dry_run_ownership_equals_implementation` 是**相等断言**，两边不同步会红。
 
-### `--type vision` 起不来时不说原因
+---
 
-`types.tsv` 有 `vision → mlx_vlm`，`--type vision` 因此**能通过域校验**登记成功。
-但安装器只装 `huggingface_hub mlx mlx-lm`（`install.sh:170`，故意 —— `mlx_vlm`
-会拖进 torch/transformers），于是 `backendarg` 拼出的 `python3 -m mlx_vlm.server`
-在子进程里 `ModuleNotFoundError`，`svc.up` 只报 `svc.died_before_ready`（rc 10）。
+## 一之二、1.1.0 的已知限制（有意为之）
 
-**用户看到的**：「起来前就死了」。**看不到的**：死因是缺一个包，以及装法。
+### MTP drafter 不支持
 
-落点：`cmd/svc.py:474` 那条 `svc.died_before_ready` 之前，应查
-`v['backend'] in caps.get(ctx)['packages']`，缺则 `Refused(6)` 并给出
-`pip install mlx-vlm` + `mlx caps refresh`。判据是 fail-closed 提前到执行段之前
-（与 `caps.drift` 同一位置，`BCR-R-27`）。
+mlx_vlm 在并发请求下会静默输出损坏的内容（上游 mlx-vlm #2033，2026-09 本机两路并发复现）。
+附属 drafter 被 `mlx up` 拒绝；上游修复并经本机并发逐字比对复验后另立设计。
 
-发现于 2026-09-02：修 `mlx version` 的「依赖三包」措辞时顺着自己新写的
-「仅 `--type vision` 需要」这句话查下去撞到的 —— 那句话把用户指向一条
-失败信息不可读的路径。
+### 81920 × 8 在长上下文下可能超出内存
+
+`max_tokens` 81920 与 `max_concurrency` 8 同时打满时 KV 缓存最坏约 14 GB/路。
+缓解：调低 `max_concurrency`，或提高 `iogpu.wired_limit_mb`（sudo，重启失效）。
+
+### mlx_lm 后端端口无鉴权
+
+上游没有鉴权机制。它只绑 127.0.0.1；挂完整 drafter 时串行处理请求。
+
+### mlx_vlm 不读 `chat_template_kwargs`
+
+除 `enable_thinking` / `reasoning_effort` 外的模板参数（如 `preserve_thinking`）对 mlx_vlm 不生效。
+
+### `config set` 设密钥时值短暂出现在进程列表
+
+命令行参数对同机其他用户的 `ps` 可见。敏感环境下改用 `mlx bootstrap keys` 生成后 `--reveal` 读取。
+
+### 判定依赖钉住的上游副本
+
+附属 drafter 的 model_type 集合（`share/drafters.tsv`）与 effort 取值顺序取自 mlx-vlm 0.6.17；升级上游后需复核。
 
 ---
 

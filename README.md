@@ -53,7 +53,7 @@ mlx check                # 9 checks — all should pass
 # Download + register in one step (~27 GB, resumable, shows progress)
 mlx model install qwen38 \
   --repo=mlx-community/Qwen3.8-27B-8bit \
-  --type=text --port=8100
+  --port=8100
 
 mlx up qwen38
 mlx chat qwen38 --prompt="Explain speculative decoding in one sentence"
@@ -118,10 +118,10 @@ $ mlx check
 ```console
 $ mlx status
 模型（2）
-     ID        模型                                状态  端口   PID    内存      体积
-  ─  ────────  ──────────────────────────────────  ────  ─────  ─────  ────────  ────────
-  ✓  qwen38    mlx-community/Qwen3.8-27B-8bit      就绪  :8100  43699  27788 MB  28164 MB
-  ·  qwen38-d  mlx-community/Qwen3.8-27B-MTP-4bit  就绪  :8101  —      —         253 MB
+     ID        模型                                状态  端口   后端     并发  PID    内存      体积
+  ─  ────────  ──────────────────────────────────  ────  ─────  ───────  ────  ─────  ────────  ────────
+  ✓  qwen38    mlx-community/Qwen3.8-27B-8bit      就绪  :8100  mlx_vlm  8     43699  27788 MB  28164 MB
+  ·  qwen38-d  mlx-community/Qwen3.8-27B-MTP-4bit  就绪  :8101  —        —     —      —         253 MB
 
   2 个已登记，1 个在跑，共占 27788 MB 内存
 
@@ -132,7 +132,7 @@ $ mlx status
 **Download progress — computed from disk, not scraped from the downloader**
 
 ```console
-$ mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --type=text --port=8100
+$ mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
   ↓ 下载 mlx-community/Qwen3.8-27B-8bit
    … 已下 23.3 GB  21.7 MB/s  84.8%  约剩 3 分
   installed  qwen38

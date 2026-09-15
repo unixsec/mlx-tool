@@ -52,7 +52,7 @@ mlx check                # 9 项检查，应该全过
 # 下载 + 登记一步到位（约 27 GB，可续传，有进度）
 mlx model install qwen38 \
   --repo=mlx-community/Qwen3.8-27B-8bit \
-  --type=text --port=8100
+  --port=8100
 
 mlx up qwen38
 mlx chat qwen38 --prompt="用一句话说明什么是投机解码"
@@ -116,10 +116,10 @@ $ mlx check
 ```console
 $ mlx status
 模型（2）
-     ID        模型                                状态  端口   PID    内存      体积
-  ─  ────────  ──────────────────────────────────  ────  ─────  ─────  ────────  ────────
-  ✓  qwen38    mlx-community/Qwen3.8-27B-8bit      就绪  :8100  43699  27788 MB  28164 MB
-  ·  qwen38-d  mlx-community/Qwen3.8-27B-MTP-4bit  就绪  :8101  —      —         253 MB
+     ID        模型                                状态  端口   后端     并发  PID    内存      体积
+  ─  ────────  ──────────────────────────────────  ────  ─────  ───────  ────  ─────  ────────  ────────
+  ✓  qwen38    mlx-community/Qwen3.8-27B-8bit      就绪  :8100  mlx_vlm  8     43699  27788 MB  28164 MB
+  ·  qwen38-d  mlx-community/Qwen3.8-27B-MTP-4bit  就绪  :8101  —        —     —      —         253 MB
 
   2 个已登记，1 个在跑，共占 27788 MB 内存
 
@@ -130,7 +130,7 @@ $ mlx status
 **下载进度 —— 自己扫盘算出来的，不依赖下载器的输出**
 
 ```console
-$ mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --type=text --port=8100
+$ mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
   ↓ 下载 mlx-community/Qwen3.8-27B-8bit
    … 已下 23.3 GB  21.7 MB/s  84.8%  约剩 3 分
   installed  qwen38

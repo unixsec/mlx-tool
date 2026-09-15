@@ -4,6 +4,37 @@
 
 ---
 
+## [Unreleased]
+
+### 新增
+
+- **按权重自动选择后端**：每次 `mlx up` 读 `config.json` 判定多模态，走 `mlx_vlm.server` 或 `mlx_lm.server`；
+  `--dry-run` 打印判定规则、依据、thinking 默认、effort 值域与就绪等待上限
+- **两把密钥**：`backend.api_key`（mlx_vlm 后端）与 `api.token`（网关），安装时由 `mlx bootstrap keys` 生成，
+  `settings.json` 与运行记录一律 0600，所有显示打码，`config get --reveal` 看原值；`status` 提示轮换后需重启的服务
+- **新配置键**：`modality`（auto / text / vision）、`max_concurrency`（默认 8）
+- `mlx model info` 显示模态依据、模板默认的思考开关与 effort 值域；`model ls` 增「模态」列；`status` 增「后端」「并发」列
+- `mlx model repair` 清除 1.0.0 旧字段与退役配置键
+
+### 变更
+
+- `max_tokens` 默认 4096 → **81920**
+- `--type` 变为可选，含义改为「模态覆盖」，写进该模型的 `modality`；不给不再报「无法判定类型」
+- 安装器默认安装 **mlx-vlm**（会带入 torch 等依赖，安装时间变长）；采集失败时打印原因
+- `MLX_GATEWAY_TOKEN` 仍可覆盖，但须满足令牌值域（32–128 位 `[A-Za-z0-9_-]`），过短的会被 `mlx up api` 拒绝
+
+### 移除
+
+- `share/types.tsv`、`backend` 配置键、登记期类型判定链
+
+### 升级须知
+
+1. 重跑 `bash deployer/install.sh`（会删除退役的 `share/types.tsv`、装 mlx-vlm、生成密钥）
+2. 跑一次 `mlx model repair` 清除旧字段
+3. MTP drafter 不再可用（mlx-vlm #2033）；配过 `draft_model` 指向 MTP 模型的，`mlx config unset <id> --key=draft_model`
+
+---
+
 ## [1.0.0] — 2026-09-02
 
 首个发布版本。全链路已在真机（Apple Silicon / macOS 26.6）跑通并验证：

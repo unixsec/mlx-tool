@@ -20,6 +20,7 @@
 | 下载权重 | ✅ 可用 | 第三节。工具自己下，直接落到规划目录 |
 | 登记模型 | ✅ 可用 | 第四节 |
 | 启动模型服务 | ✅ 可用 | 第五节 |
+| 启动多模态模型（图像输入） | ✅ 可用 | 第五节「自动选择后端」。按权重自动选 mlx_vlm |
 | 用模型对话 / 跑基准 | ✅ 可用 | 第六节 |
 | 起网关 | ✅ 可用 | 第七节 |
 | 接入 Cherry Studio | ✅ 可用 | 第七节。三项配置填完即可对话 |
@@ -202,15 +203,14 @@ mlx status | grep 权重根
 
 ```bash
 mlx model install qwen05b \
-    --repo=mlx-community/Qwen2.5-0.5B-Instruct-4bit \
-    --type=text --port=8100
+    --repo=mlx-community/Qwen2.5-0.5B-Instruct-4bit --port=8100
 ```
 
 ```
-  evidence   CLI_EXPLICIT
   installed  qwen05b
+  modality   auto
   path       ~/lab/models/mlx/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
-  type       text
+  state      就绪
 ```
 
 `path` 那行就是它落下去的地方 —— 和 3.1 的规划目录一致，不需要你算。
@@ -292,7 +292,7 @@ modelscope download \
 
 ```bash
 mlx model register qwen05b \
-    --repo=mlx-community/Qwen2.5-0.5B-Instruct-4bit --type=text --port=8100
+    --repo=mlx-community/Qwen2.5-0.5B-Instruct-4bit --port=8100
 mlx model repair          # 用磁盘事实校对注册表
 mlx model ls              # 状态应该从「已登记未下载」变成「就绪」
 ```
@@ -313,10 +313,9 @@ mlx model info qwen05b
 之后所有命令都用这个短名，不用敲长长的仓库名。
 
 ```
-$ mlx model register qwen27b --repo=mlx-community/Qwen3.8-27B-8bit --type=text --port=8100
-  evidence    CLI_EXPLICIT
-  registered  qwen27b
-  type        text
+$ mlx model register qwen27b --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
+  ✓ 已登记  qwen27b
+    模态    auto（auto = 每次 up 按权重判定）
 ```
 
 三个参数的含义：
@@ -325,17 +324,17 @@ $ mlx model register qwen27b --repo=mlx-community/Qwen3.8-27B-8bit --type=text -
 |---|---|
 | `<短名>` | 你自己起的 id，之后 `mlx up <短名>` 用它 |
 | `--repo` | HuggingFace 仓库名，要和你下载时用的**一致** |
-| `--type` | 后端类型。文本模型填 `text` |
+| `--type` | 可选。模态覆盖：`text` / `vision`。不给则每次 `mlx up` 按权重自动判定（见[自动选择后端](#backend)） |
 | `--port` | 这个模型的监听端口。每个模型一个，不能重复 |
 
 登记完看一眼：
 
 ```
 $ mlx model ls
-  ID                       类型  端口  状态  
-  ───────────────────────  ────  ────  ──────
-  mlx-community/NoSuch-7B  text  8199  已登记
-  qwen27b                  text  8100  就绪  
+  ID                       模态    端口  状态  
+  ───────────────────────  ────    ────  ──────
+  mlx-community/NoSuch-7B  vision  8199  已登记
+  qwen27b                  vision  8100  就绪  
 
   共 2 个
 ```
@@ -364,25 +363,25 @@ $ mlx model repair
 
 ## 五 · 启动模型
 
-```bash
-mlx up qwen05b
 ```
-
-```
-  ✓ qwen05b   已启动   port 8150   pid 90731
+  ✓ qwen05b 已启动 · mlx_lm · 并发 8 · port 8150
 ```
 
 端口取的是**登记时给的那个**，不是默认值。想先看会跑什么命令，用 `--dry-run`：
 
 ```
 $ mlx up qwen05b --dry-run
-  backend: default
-  max_tokens: default
+["/…/.venv/bin/python3", "-m", "mlx_lm.server", "--model", "qwen05b", "--port", "8150",
+ "--max-tokens", "81920", "--host", "127.0.0.1", "--decode-concurrency", "8", "--prompt-concurrency", "8"]
   port: machine
-["mlx_lm", "-m", "mlx_lm.server", "--model", "qwen05b", "--port", "8150", "--max-tokens", "4096"]
+  max_tokens: default
+  …（每个配置项一行来源）
+  env   HF_HUB_OFFLINE=1
+  判定  R4 · mlx_lm · 依据 config.json 无非空 vision_config · thinking=关 · effort=（不传）
+  就绪  bind · 最多等 20 秒 · 并发上限 8
 ```
 
-上面三行是**每个配置项的来源层**（`default` = 内置默认值，`machine` = 注册表里登记的）。
+来源层：`default` = 内置默认值，`machine` = 全局设置或注册表里登记的，`user` = 这个模型自己的设置。
 `port: machine` 说明端口来自你登记的 8150，而不是内置的 8100。
 
 ### 它会等到真的就绪才返回
@@ -443,47 +442,56 @@ mlx restart qwen05b           # 停了再起
 
 ---
 
+### 自动选择后端 {#backend}
+
+每次 `mlx up` 都读一遍权重目录里的 `config.json` 现场判定，不在登记时定死：
+
+| 权重 | 后端 | 说明 |
+|---|---|---|
+| 带非空 `vision_config`（如 Qwen3.8-27B） | `mlx_vlm.server` | 能收图像；加载完权重才监听，所以 `up` 会先打印「最多等 N 秒」 |
+| 其他 | `mlx_lm.server` | 纯文本 |
+
+- **强制走文本**（放弃视觉，换 mlx_lm 的并发与投机解码）：`mlx config set qwen38 --key=modality --value=text`；撤销：`mlx config unset qwen38 --key=modality`。
+- **思考开关跟随模型模板的默认**：模板默认开的（Qwen3.8）就带 `--enable-thinking` 起；`mlx model info <id>` 能看到「思考默认」与模板接受的 effort 值域。
+- **并发上限**默认 8（`max_concurrency`，1–256）；**输出上限**默认 81920 token（`max_tokens`）。两者都能按模型或全局改，改完 `mlx restart <id>`。
+- mlx_vlm 后端**要求密钥**：安装器已生成 `backend.api_key`（见[密钥](#keys)），`mlx up` 自动带上，`mlx chat` / `mlx bench` 与网关转发也会自动带。
+
+判定不下来时**拒绝启动而不是猜**，文案会给出下一步：
+
+| 提示 | 原因 | 怎么办 |
+|---|---|---|
+| 判不出是否多模态 | `config.json` 读不到或字段自相矛盾 | `mlx config set <id> --key=modality --value=text`（或 `vision`） |
+| 需要 mlx_vlm 后端，但 venv 里没有 | 装包失败或旧安装 | 重跑 `bash deployer/install.sh`，再 `mlx caps refresh` |
+| 需要 backend.api_key，但它是空的 | 密钥没生成 | `mlx bootstrap keys` |
+| 是附属 drafter，不能单独启动 | 你 `up` 的是 MTP 预测头 | 它只能配给主模型，而本版不支持（见 5.4） |
+
+---
+
 ### 5.4 投机解码（speculative decoding） {#draft}
 
-用一个**小模型**先猜若干 token，大模型一次性校验——吞吐能明显提升，
+用一个**小模型**先猜若干 token，大模型一次性校验 —— 吞吐能明显提升，
 输出与不用它时**逐字节一致**（校验不通过就回退，不是近似）。
 
-两个模型都要登记，然后把小的配给大的：
+**本版只支持「完整的小模型」当 drafter，且只在文本后端（mlx_lm）上**：
 
 ```bash
-mlx model install qwen38 \
-    --repo=mlx-community/Qwen3.8-27B-8bit --type=text --port=8100
-mlx model install qwen38-d \
-    --repo=mlx-community/Qwen3.8-27B-MTP-4bit --type=text --port=8199
-
-mlx config set qwen38 --key=draft_model --value=qwen38-d
-mlx up qwen38
+mlx model install qwen38-small --repo=<同一家族、同一词表的小模型仓库> --port=8199
+mlx config set qwen38 --key=modality --value=text      # 多模态模型要先放弃视觉
+mlx config set qwen38 --key=draft_model --value=qwen38-small
+mlx up qwen38 --dry-run      # argv 里应出现 --draft-model qwen38-draft --num-draft-tokens 3
 ```
 
-`mlx up qwen38 --dry-run` 可以确认参数拼上了：
+猜多少个可调（默认 3，范围 1–16）：`mlx config set qwen38 --key=num_draft_tokens --value=4`。
+不用了就撤销：`mlx config unset qwen38 --key=draft_model`。
 
-```
-[".../python3", "-m", "mlx_lm.server", "--model", "qwen38", "--port", "8100",
- "--max-tokens", "4096", "--draft-model", "qwen38-draft", "--num-draft-tokens", "3"]
-```
-
-猜多少个可调（默认 3，范围 1–16）：
-
-```bash
-mlx config set qwen38 --key=num_draft_tokens --value=4
-```
-
-不用了就撤销：`mlx config unset qwen38 --key=draft_model`
-
-**几点说明**：
+**MTP 预测头（如 `Qwen3.8-27B-MTP-4bit`）本版不支持**，配上会被拒绝：
+它只能跑在 mlx_vlm 上，而 mlx_vlm 在**并发请求**下会静默输出损坏的内容
+（上游 mlx-vlm #2033，2026-09 实测复现：两路并发即出现 `!!!!` 退化输出）。
+研究与 AI coding 这类多子 agent 场景恰好是并发的，所以宁可不提供。
+上游修复并经本机并发逐字比对复验之后再开放。
 
 - drafter 那条记录**占一个端口号但永远不 `up`** —— 端口只是注册表的占位。
-  它不是独立服务，是主模型启动时的一个参数。
-- **两个模型同时驻留内存**，容量判档会把它们的体积加在一起算。
-  26.6 GB + 0.27 GB 在 128 GB 机器上仍是「宽裕」。
-- drafter 的权重**必须先在盘上**。不在的话 `mlx up` 拒绝并指名
-  （rc 6），而不是让后端起来之后自己去下载——那会在启动路径上引入一次
-  没有上界的网络等待。
+- 多模态模型挂 drafter 会被拒绝：drafter 只能在 mlx_lm 上用，而 mlx_lm 处理不了图像。
 
 ---
 
@@ -590,7 +598,7 @@ Cherry Studio / OpenWebUI / 任何 OpenAI 兼容客户端，填这三项：
 | 配置项 | 填什么 | 从哪来 |
 |---|---|---|
 | **API 地址 / Base URL** | `http://127.0.0.1:8080/v1` | `mlx api info` 的「地址」行 |
-| **API 密钥 / API Key** | 任意非空字符串，例如 `local` | 网关不校验，但多数客户端不让留空 |
+| **API 密钥 / API Key** | 回环绑定时任意非空串；局域网绑定时填网关令牌 | 令牌：`mlx config get --key=api.token --reveal` |
 | **模型 ID / Model** | `qwen38` | `mlx api info` 的「可用」行，或 `mlx model ls` |
 
 在 Cherry Studio 里的位置：**设置 → 模型服务 → 添加提供商 → 选「OpenAI 兼容」**，
@@ -620,6 +628,8 @@ $ curl ... -d '{"model":"qwen38","messages":[...],"max_tokens":20}'
 
 在客户端里，前一种显示为**空白回复且没有任何报错** —— OpenAI 兼容格式里
 `content` 为空是合法响应，客户端无从判断出了什么事。**建议设 2048 以上。**
+
+服务端的默认上限已经是 81920（`max_tokens`）；这里说的是**客户端请求里自己带的** `max_tokens`。
 
 ### 网关只转发正在跑的模型
 
@@ -671,25 +681,16 @@ mlx restart api
 mlx api info                                 # 「地址」行会变成 0.0.0.0，确认一下
 ```
 
-**令牌用环境变量给，不落盘**：
+**令牌是配置项 `api.token`**，安装时已生成（`settings.json`，权限 0600，`config ls` 里显示 `****`）：
 
 ```bash
-MLX_GATEWAY_TOKEN='<你自己生成的长随机串>' mlx up api
+mlx config get --key=api.token --reveal      # 看原值，填进客户端的 API Key
+mlx config set api.token --value=<新值>       # 轮换（32–128 位字母、数字、_ 或 -）
+mlx restart api                               # 改完要重启网关才生效
 ```
 
-客户端那边把 API Key 填成同一个串。
-
-**非本地绑定而没给令牌时，网关会起来，但每个请求都返回 503**
-（`/healthz` 除外，它只回状态、不泄漏装了哪些模型）。
-这是刻意的 —— 不给「开了外网又忘了鉴权」留口子。
-
-几点说明：
-
-- 令牌**有意不进配置文件**：本版还没有「导出时排除机密」的机制，
-  存进 `settings.json` 就是明文落盘。它只在启动网关那个进程的环境里存在。
-- 回环绑定时**不校验令牌**，填什么都行 —— 同机场景下模型端口本就在回环上
-  无鉴权监听，真正的边界是绑定地址。`mlx api info` 最后一行就是这么写的。
-- 改回只给本机：`mlx config set api.bind --value=127.0.0.1 && mlx restart api`。
+临时换一个令牌起网关也可以：`MLX_GATEWAY_TOKEN='<32 位以上的串>' mlx up api` —— 环境变量覆盖配置，只对这次启动有效。
+`mlx status` 会在令牌或后端密钥变更后提示需要重启哪些服务。
 
 ---
 
@@ -1009,7 +1010,7 @@ mlx config diff                            # 只看你改过的
 $ mlx config diff
   键           当前值      来自      出厂值
   ──────────   ──────────  ────────  ────────
-  max_tokens   2048        machine   4096
+  max_tokens   2048        machine   81920
   port         8200        machine   8100
 ```
 
@@ -1060,6 +1061,9 @@ revision 不能用 `config set` 改（scope=machine）—— 它是磁盘事实�
 
 `revision` / `size_mb` 这类是**工具从磁盘读出来的事实**，不是你的设置。
 要改它们只有一条路：改磁盘上的东西，然后 `mlx model repair`。
+
+**已退役的键**（例如 1.0.0 的 `backend`）不再生效，`mlx config ls` 与 `mlx up --dry-run` 会列出它们；
+跑一次 `mlx model repair` 清掉。
 
 ---
 
@@ -1135,6 +1139,11 @@ curl 通而 `mlx chat` 不通，说明注册表里登记的端口与实际监听
 
 有资源已创建但事务没走完。**它会指名收敛动作**，照做即可 ——
 这类失败不会让你去猜要清理什么。
+
+### 多模态模型 `up` 等了很久后报「就绪超时」
+
+mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟。超时按体积算（`20 + 3 × 体积 GB` 秒），
+报错里会说明「可能只是还没加载完」—— 先 `mlx status <id>` 看它是否已在跑，不要重复 `up`。
 
 ### 退出码
 
