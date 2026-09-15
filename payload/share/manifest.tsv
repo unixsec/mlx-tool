@@ -54,6 +54,7 @@ lib/mlx_server/cmd/render_svc.py	代码	删除
 share/cli.tsv	表	删除
 share/verbs.tsv	表	删除
 share/schema.tsv	表	删除
+share/drafters.tsv	表	删除
 share/types.tsv	表	删除
 share/messages.tsv	模板	删除
 share/manifest.tsv	模板	删除

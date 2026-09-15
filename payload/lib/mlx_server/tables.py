@@ -38,7 +38,7 @@ class TablesView:
     """只读访问器。构造一次，之后不再碰盘。"""
 
     __slots__ = ("_root", "_messages", "_manifest", "_verbs", "_cli",
-                 "_schema", "_types")
+                 "_schema", "_types", "_drafters")
 
     COLUMNS = {
         "messages": ("key", "text"),
@@ -56,6 +56,7 @@ class TablesView:
         "schema": ("key", "type", "domain", "default", "scope", "level",
                    "restart", "exportable", "secret", "group", "readers"),
         "types": ("type", "module", "server_arg"),
+        "drafters": ("model_type",),
     }
 
     def __init__(self, tables_root):
@@ -67,6 +68,7 @@ class TablesView:
         self._manifest = None
         self._schema = None
         self._types = None
+        self._drafters = None
 
     def _load(self, name):
         p = os.path.join(self._root, f"{name}.tsv")
@@ -139,6 +141,13 @@ class TablesView:
         if self._types is None:
             self._types = self._load("types")
         return self._types
+
+    def drafters(self):
+        # type: () -> list
+        """附属 drafter 的 model_type 集合（`drafters.tsv`，spec §2.3）。"""
+        if self._drafters is None:
+            self._drafters = self._load("drafters")
+        return self._drafters
 
 
 def open_tables(ctx):

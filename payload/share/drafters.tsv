@@ -1,0 +1,15 @@
+# 附属 drafter 的 model_type（spec §2.3）。**钉住 mlx_vlm 0.6.17 `DRAFTER_KIND_BY_MODEL_TYPE` 的键。**
+# 这类 checkpoint 只有预测头（没有 embed_tokens / lm_head），不能单独启动，
+# 也不能当 mlx_lm 的完整 drafter。上游增项时，判据里「model_type 以 _mtp 结尾」
+# 「含 speculators_model_type」「缺 architectures」三条仍兜底。
+# 列（顺序即 tables.COLUMNS）：model_type
+deepseek_v4_mtp
+dspark
+eagle3
+gemma4_assistant
+gemma4_unified_assistant
+glm4_moe_lite_mtp
+inkling_mtp
+qwen3_5_mtp
+laguna
+muse_glimmer_assistant

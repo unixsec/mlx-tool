@@ -4,10 +4,11 @@
 `du` 对它恒返 0（T-07）。
 """
 import contextlib
+import json
 import os
 
 from . import vault
-from .result import Done, Failed, Ok, Refused, Unknown
+from .result import Done, Failed, Ok, Refused, Unknown, is_unknown
 
 
 class DiskFacts:
@@ -60,6 +61,56 @@ def size(path):
         return Unknown("TOOL_UNAVAILABLE",
                        f"{len(failed)} 处读不了（首个：{failed[0]}）")
     return Ok(total)
+
+
+def _read_config(snapshot_path):
+    # type: (str) -> object
+    p = os.path.join(snapshot_path, "config.json")
+    try:
+        with open(p, encoding="utf-8") as fh:
+            obj = json.loads(fh.read())
+    except (OSError, ValueError) as exc:
+        return Unknown("PARSE_FAILED", f"{p}：{exc}")
+    if not isinstance(obj, dict):
+        return Unknown("PARSE_FAILED", f"{p} 顶层不是对象")
+    return Ok(obj)
+
+
+def inspect_config(snapshot_path, attachment_types):
+    # type: (str, object) -> object
+    """读 snapshot 的 `config.json`，产出后端判定要的**配置事实**（spec §2.3）。
+
+    `Ok(dict)`：
+      · `vision` —— `vision_config` 是**非空** dict 且 `language_model_only` 不为 True ⇒ True；
+        `language_model_only` 存在但不是布尔值 ⇒ None（判不出，**不猜**）；其余 False。
+        非空这一条来自真实文件：MTP drafter 的 config 里就是 `"vision_config": {}`。
+      · `standalone` —— 附属 drafter（`_mtp` 后缀 / `speculators_model_type` /
+        `drafters.tsv` 所列）⇒ False：它没有 lm_head，单独起必然失败。
+      · `attachment` —— 作为 drafter 时是否只是预测头：非 standalone，或缺 `architectures`。
+    config 读不到 ⇒ `Unknown(PARSE_FAILED)`。**不猜 text** —— 猜错的后端起得来、推理全错、rc 0。
+    """
+    got = _read_config(snapshot_path)
+    if is_unknown(got):
+        return got
+    cfg = got.value
+    vc = cfg.get("vision_config")
+    lmo = cfg.get("language_model_only")
+    if "language_model_only" in cfg and not isinstance(lmo, bool):
+        vision, src = None, f"language_model_only 不是布尔值（{lmo!r}）"
+    elif isinstance(vc, dict) and vc and lmo is not True:
+        vision, src = True, "config.json:vision_config"
+    elif lmo is True:
+        vision, src = False, "config.json:language_model_only"
+    else:
+        vision, src = False, "config.json 无非空 vision_config"
+    mtype = cfg.get("model_type") or cfg.get("speculators_model_type")
+    mtype = mtype if isinstance(mtype, str) else None
+    attached = ("speculators_model_type" in cfg
+                or (mtype is not None
+                    and (mtype.endswith("_mtp") or mtype in set(attachment_types or ()))))
+    return Ok({"vision": vision, "vision_src": src, "standalone": not attached,
+               "attachment": attached or not cfg.get("architectures"),
+               "model_type": mtype})
 
 
 def resolve(ctx, repo, revision=None):
