@@ -19,6 +19,11 @@ out = {
     "5xx": T.upstream_error(503, {"detail": "/Users/alex/x"}, "LOOPBACK"),
     "422": T.upstream_error(422, {"error": {"message": "bad", "type": "t"}}, "REMOTE"),
     "text_remote": T.upstream_error(400, "oops at /Users/alex/a/b.py", "REMOTE"),
+    "key_path": T.sanitize({"/Users/alex/lab/models/x/config.json": "not found"}),
+    "param_list": T.upstream_error(
+        400, {"error": {"type": "invalid_request_error",
+                        "param": ["/Users/alex/img1.png", "/Users/alex/img2.png"]}}, "REMOTE"),
+    "tilde_user": T.sanitize("open ~alex/secret.txt failed"),
     "leaky": leaky,
 }
 print(json.dumps(out))
@@ -45,3 +50,11 @@ def test_upstream_error_mapping(payload, sys_py):
     assert got["text_remote"][0] == 400
     assert got["text_remote"][1]["error"]["type"] == "upstream_error"
     assert "/Users" not in str(got["text_remote"])
+    assert got["key_path"] == {"<redacted>": "not found"}, \
+        f"错误体的 key 本身是路径也得净化：{got['key_path']}"
+    param_body = got["param_list"][1]
+    assert param_body["error"]["param"] == ["<redacted>", "<redacted>"], (
+        f"param 是容器（列表）时仍应递归净化元素，只有字符串标量才原样保留：{param_body}"
+    )
+    assert got["tilde_user"] == "open <redacted> failed", \
+        f"~user/ 形式的路径也要净化：{got['tilde_user']}"

@@ -83,18 +83,28 @@ def build_error(status, err_type, message=None, request_id=None):
 _REDACT = "<redacted>"
 _TRACEBACK = re.compile(r"Traceback \(most recent call last\):[\s\S]*")
 _FILE_REF = re.compile(r'File "[^"]*"')
-# 以 `/` 或 `~/` 开头、前面不是词字符的连续非空白 —— 不会误伤 `mlx-community/Qwen…` 这类仓库名
-_ABS_PATH = re.compile(r"(?<![\w.-])(?:~/|/)[^\s'\"]+")
+# 以 `/`、`~/` 或 `~user/` 开头、前面不是词字符的连续非空白 ——
+# 不会误伤 `mlx-community/Qwen…` 这类仓库名
+_ABS_PATH = re.compile(r"(?<![\w.-])(?:~[\w.-]*/|/)[^\s'\"]+")
 _KEEP_KEYS = frozenset({"type", "code", "param"})
 
 
 def sanitize(value):
     # type: (object) -> object
-    """去掉错误体里会暴露本机布局的片段。dict 的 `type` / `code` / `param` 原样保留 —— 客户端按它们分支。"""
+    """去掉错误体里会暴露本机布局的片段。
+
+    dict 的 `type` / `code` / `param` **只在值是字符串标量时**原样保留 —— 客户端按它们分支；
+    值若是容器（list / dict），照常递归净化（真实场景：多模态 400 的 `param` 是一串图片路径）。
+    键本身若是字符串也照常净化 —— 有些后端按文件名给错误体建 key。
+    """
     if isinstance(value, str):
         return _ABS_PATH.sub(_REDACT, _FILE_REF.sub(_REDACT, _TRACEBACK.sub(_REDACT, value)))
     if isinstance(value, dict):
-        return {k: (v if k in _KEEP_KEYS else sanitize(v)) for k, v in value.items()}
+        return {
+            (sanitize(k) if isinstance(k, str) else k):
+                (v if k in _KEEP_KEYS and isinstance(v, str) else sanitize(v))
+            for k, v in value.items()
+        }
     if isinstance(value, list):
         return [sanitize(v) for v in value]
     return value
