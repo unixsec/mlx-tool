@@ -286,7 +286,10 @@ def run(ctx, stack, inv, deps=None):
     #   · 目标是模型 id（`mlx config set demo --key=port --value=…`）⇒ 该模型 user 段
     # 此前无论哪种都写 `models.jsonl` 的 machine 段：前者在注册表里造出一个
     # 叫 `port` 的幽灵模型，后者绕过端口唯一性强制（那道检查只看 `tx.port`）。
-    val = schema.coerce(key, val, defs)    # 唯一归一点，见 schema.coerce 的理由
+    try:
+        val = schema.coerce(key, val, defs)    # 唯一归一点，见 schema.coerce 的理由
+    except schema.ConfigError as exc:
+        return Refused(6, "config.invalid", key=key, kind=str(exc))
     # **值域校验在任何 commit 之前**（spec §2.2 单点；`L0·result-02` 的行号判据）
     bad = schema.check_domain(key, val, defs) if defs else None
     if bad:

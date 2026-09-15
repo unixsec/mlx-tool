@@ -86,3 +86,18 @@ print(json.dumps(r))
     assert got["four"]["rc"] == 0
     assert got["stored"] == {"modality": "text", "num_draft_tokens": 5, "max_concurrency": 4}, \
         f"表里的 int 键没按整数落盘：{got['stored']}"
+
+
+def test_config_set_rejects_nonnumeric_string_for_int_key(payload, sys_py):
+    got = run_floor(payload, sys_py, PRE + """
+store.commit(ctx, store.MODELS, store.ModelsTx("qwen", {"repo": "o/q"}, port=8100))
+r = {}
+r["max_concurrency_abc"] = run("set", "qwen", key="max_concurrency", value="abc")
+r["port_xyz"] = run("set", key="port", value="xyz")
+r["max_tokens_bad"] = run("set", key="max_tokens", value="not_a_number")
+print(json.dumps(r))
+""")
+    for case in ("max_concurrency_abc", "port_xyz", "max_tokens_bad"):
+        result = got[case]
+        assert result["rc"] == 6, f"{case}: rc should be 6, got {result['rc']}"
+        assert result["key"] == "config.invalid", f"{case}: msg_key should be config.invalid, got {result['key']}"
