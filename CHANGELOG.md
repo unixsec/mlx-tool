@@ -32,6 +32,7 @@
 1. 重跑 `bash deployer/install.sh`（会删除退役的 `share/types.tsv`、装 mlx-vlm、生成密钥）
 2. 跑一次 `mlx model repair` 清除旧字段
 3. MTP drafter 不再可用（mlx-vlm #2033）；配过 `draft_model` 指向 MTP 模型的，`mlx config unset <id> --key=draft_model`
+4. 网关与模型进程不再继承 shell 里的 `MLX_BACKEND_API_KEY` / `MLX_GATEWAY_TOKEN`：后端密钥请用 `mlx config set backend.api_key --value=…`（或 `mlx bootstrap keys` 生成）；网关令牌仍可用 `MLX_GATEWAY_TOKEN=… mlx up api` 临时覆盖
 
 ---
 

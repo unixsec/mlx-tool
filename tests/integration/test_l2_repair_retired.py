@@ -171,4 +171,3 @@ def test_rebuild_machine_committed_empty_when_first_of_two_commits_fails(payload
     assert got["rc"] == 1, got
     assert got["msg_key"] == "repair.commit_failed", got
     assert got["committed"] == [], got
-    assert got["committed"] == [], got

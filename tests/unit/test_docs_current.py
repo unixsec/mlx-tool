@@ -20,6 +20,7 @@ def test_docs_no_longer_teach_retired_behaviour(repo):
     assert "`--type vision` 起不来时不说原因" not in issues
     assert "在 mlx_lm 上用不了" not in issues
     assert "#2033" in issues
+    assert "模板渲染沙箱的边界是 jinja2，不是进程隔离" in issues
 
     log = _read(repo, "CHANGELOG.md")
     head = log.split("## [1.0.0]")[0]
