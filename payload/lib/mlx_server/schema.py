@@ -1,4 +1,5 @@
 """P 层 · 配置解析与分层。**纯函数、零 I/O。**"""
+import ipaddress
 import re
 
 
@@ -15,10 +16,7 @@ class ConfigError(Exception):
 # 每个键的默认值与值域。写成表，不是散在代码里的 if —— 加一个键只改这里。
 DEFAULTS = {
     "port": 8100,
-    # **两个密钥键进了配置域**（spec §5）：此前 `api.token` 有意不进这里，理由是
-    # 「落进 settings.json 就是明文存盘，而本版没有 secret 列」。现在 `schema.tsv`
-    # 有 secret 列（打码、不导出），settings.json 以 0600 写出（atomic.replace mode）。
-    "api.bind": "127.0.0.1",
+    "api.bind": "0.0.0.0",
     # 判档的三个**比例常量**（百分数整数）。设计逐字：「没有独立的绝对阈值键」——
     # 绝对值来自探针，阈值只表达比例，换机器不用改配置。
     "fit.reserve_pct": 20,     # 预留给系统的份额
@@ -151,6 +149,23 @@ def check_domain(key, value, defs):
     if not isinstance(value, str):
         return f"需要字符串，实得 {value!r}"
     if value == "":
+        return None
+    if dom == "#ip":
+        # IP 字面量（v4 或 v6）。主机名不收：绑定地址写主机名会随解析结果漂移
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            return "不是 IP 地址字面量"
+        return None
+    if dom == "#cidrs":
+        for raw_part in value.split(","):
+            part = raw_part.strip()
+            if not part:
+                continue
+            try:
+                ipaddress.ip_network(part, strict=False)
+            except ValueError:
+                return f"不是网段：{part}"
         return None
     if dom.startswith("^"):
         return None if re.fullmatch(dom, value) else "格式不符"

@@ -472,7 +472,7 @@ def test_l3_up_reports_failure_when_port_is_taken(cli, tmp_path):
 
     holder = socket.socket()
     holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    holder.bind(("127.0.0.1", gw_port))
+    holder.bind(("0.0.0.0", gw_port))
     holder.listen(1)
     try:
         rc, out, err = cli("up", "api", human=True)

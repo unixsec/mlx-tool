@@ -61,7 +61,13 @@ def spec(service, cfg, route):
         # 网关跑在**下限解释器**上，与 T1 同一个 —— 它零依赖（标准库 HTTP 服务器），
         # 这样 venv 坏了网关照样起得来。`cwd_rel` 为空：它不需要别名目录。
         env = {"MLX_GATEWAY_PORT": str(v["port"]),
-               "MLX_GATEWAY_BIND": str(v.get("api.bind", "127.0.0.1"))}
+               "MLX_GATEWAY_BIND": str(v.get("api.bind") or "0.0.0.0"),
+               # 空值写空串而不是不设：网关进程据此知道「配置里明确为空」，
+               # 不会从继承的环境里拿到一个陈旧值
+               "MLX_GATEWAY_ALLOW_CIDRS": str(v.get("api.allow_cidrs") or ""),
+               "MLX_GATEWAY_TLS_CERT": str(v.get("api.tls_cert") or ""),
+               "MLX_GATEWAY_TLS_KEY": str(v.get("api.tls_key") or ""),
+               "MLX_GATEWAY_MAX_BODY_MB": str(v.get("api.max_body_mb") or 256)}
         secret = []
         # 密钥经环境变量交给网关进程（spec §4.8）：spawn 以 spec.env 覆盖继承的环境，
         # 所以这里设了就是它；值为空则不设——继承的同名变量由 `runtime.spawn`
