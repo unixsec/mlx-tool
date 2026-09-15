@@ -1,0 +1,47 @@
+"""settings.json 与运行记录必须 0600（spec §3.4、§5.2）。每一种写入路径都查，
+umask 固定为 022 —— 默认 umask 下 `open(tmp, "w")` 落成 0644。"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from floor import run_floor  # noqa: E402
+
+PRE = """
+import json, os, stat, tempfile
+os.umask(0o022)
+from mlx_server import store, supervisor
+from mlx_server.ctx import Ctx
+d = tempfile.mkdtemp()
+ctx = Ctx(d, d, d, os.path.join(d, "venv"), 8340, (8100, 8199), None)
+def mode(p):
+    return oct(stat.S_IMODE(os.stat(p).st_mode))
+"""
+
+
+def test_settings_new_file_is_0600(payload, sys_py):
+    got = run_floor(payload, sys_py, PRE + """
+store.commit(ctx, store.SETTINGS, store.SettingsTx({"fit.reserve_pct": 30}))
+print(json.dumps({"mode": mode(store.settings_path(ctx))}))
+""")
+    assert got["mode"] == "0o600", f"新建 settings.json 权限 {got['mode']}"
+
+
+def test_settings_overwrite_of_wide_file_is_0600(payload, sys_py):
+    got = run_floor(payload, sys_py, PRE + """
+p = store.settings_path(ctx)
+open(p, "w").write("{}")
+os.chmod(p, 0o644)
+store.commit(ctx, store.SETTINGS, store.SettingsTx({"fit.reserve_pct": 31}))
+print(json.dumps({"mode": mode(p)}))
+""")
+    assert got["mode"] == "0o600", f"覆盖 0644 的 settings.json 后权限 {got['mode']}"
+
+
+def test_run_record_is_0600(payload, sys_py):
+    got = run_floor(payload, sys_py, PRE + """
+class S:
+    service = "qwen"; model_arg = "qwen"; route = None
+supervisor.write_record(ctx, S(), 111, 111, 8100, "t", "n0")
+print(json.dumps({"mode": mode(os.path.join(d, "run", "qwen.json"))}))
+""")
+    assert got["mode"] == "0o600", f"运行记录权限 {got['mode']}"

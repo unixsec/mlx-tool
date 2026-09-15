@@ -194,7 +194,8 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce):
            "model_arg": spec.model_arg, "type": "model" if spec.model_arg else "api",
            "schema_ver": 1, "nonce": nonce}
     from . import atomic
-    with atomic.replace(_record_path(ctx, spec.service)) as fh:
+    # **0600**：运行记录含密钥指纹与后端信息（spec §3.4）
+    with atomic.replace(_record_path(ctx, spec.service), mode=0o600) as fh:
         fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True))
 
 

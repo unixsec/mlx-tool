@@ -151,6 +151,13 @@ def _path(ctx, target):
     return os.path.join(ctx.root_data, _TARGETS[target])
 
 
+def settings_path(ctx):
+    # type: (object) -> str
+    """settings.json 的位置。**只经这里取** —— 别处拼 `root_data + "settings.json"`
+    就是第二份路径知识。"""
+    return _path(ctx, SETTINGS)
+
+
 def load(ctx, target=MODELS):
     # type: (object, str) -> LoadResult
     """读 + 校验。**坏行跳过并报行号；整文件不可解析则抛。**"""
@@ -244,7 +251,8 @@ def _commit_settings(ctx, tx, stack):
         cur.update(tx.patch)
         for k in tx.unset:
             cur.pop(k, None)
-        with atomic.replace(p) as fh:
+        # **0600**：settings.json 存着 secret 键（spec §5.2）
+        with atomic.replace(p, mode=0o600) as fh:
             fh.write(json.dumps(cur, ensure_ascii=False, sort_keys=True, indent=2))
     return load_settings(ctx)
 

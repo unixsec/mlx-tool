@@ -26,20 +26,31 @@ class StaleLockUnknown(Exception):
 
 
 @contextlib.contextmanager
-def replace(target):
+def replace(target, mode=None):
     """原子替换：写临时文件 → `os.replace`。**唯一实现点**。
 
     用法：`with atomic.replace(p) as tmp: tmp.write(...)`
+
+    `mode` 给定时（如 `0o600`），临时文件**以该权限创建**，替换后再对目标
+    `chmod` 一次。只在替换后 chmod 会留下一个 0644 的窗口（密钥在窗口里可读）；
+    只在创建时设又挡不住「目标原本就更宽」—— 两处都要。
     """
     d = os.path.dirname(os.path.abspath(target))
     tmp = os.path.join(d, f"{TMP_PREFIX}{os.path.basename(target)}.{os.getpid()}")
-    # noqa 理由：本函数是 contextmanager，fh 的生命周期**跨 yield**，
-    # 用 with 会在 yield 前关闭它。关闭与清理由下面的 try/except 承担。
-    fh = open(tmp, "w")  # noqa: SIM115
+    if mode is None:
+        # noqa 理由：本函数是 contextmanager，fh 的生命周期**跨 yield**，
+        # 用 with 会在 yield 前关闭它。关闭与清理由下面的 try/except 承担。
+        fh = open(tmp, "w")  # noqa: SIM115
+    else:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)                       # 上次崩溃留下的同名临时文件
+        fh = os.fdopen(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode), "w")
     try:
         yield fh
         fh.close()
         os.replace(tmp, target)          # 同盘 rename，原子
+        if mode is not None:
+            os.chmod(target, mode)
     except BaseException:
         fh.close()
         if os.path.exists(tmp):
