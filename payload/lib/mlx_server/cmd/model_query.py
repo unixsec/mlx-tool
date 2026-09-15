@@ -35,14 +35,28 @@ def _modality_display(ctx, rec, attach):
 def run(ctx, stack, inv, deps=None):
     if inv.verb == "ls":
         res = store.load(ctx, store.MODELS)
-        attach = _attachment_types(ctx)
+        # `drafters.tsv` 坏掉不该让这条只读列表命令整体不可用（C6）——
+        # 降级为「模态列全占位 `?`」，其余信息（id/端口/状态）照常给。
+        # `model info` 不走这条降级路径，仍保持原行为（不在本项范围）。
+        from ..tables import TableError
+        try:
+            attach = _attachment_types(ctx)
+            drafters_ok = True
+        except (TableError, OSError):
+            attach = []
+            drafters_ok = False
+
+        def _modality(r):
+            return "?" if not drafters_ok else _modality_display(ctx, r, attach)
+
         return Done({"kind": "models",
                      "models": [dict({"id": r.id}, **dict(r.user, **r.machine),
                                      state=store.model_state(
                                          {"user": r.user, "machine": r.machine}),
-                                     modality_display=_modality_display(ctx, r, attach))
+                                     modality_display=_modality(r))
                                 for r in res.records],
-                     "bad_lines": [(b.lineno, b.reason_key) for b in res.bad_lines]})
+                     "bad_lines": [(b.lineno, b.reason_key) for b in res.bad_lines],
+                     "drafters_unreadable": not drafters_ok})
     if inv.verb == "info":
         r = store.load(ctx, store.MODELS).by_id(inv.target)
         if r is None:

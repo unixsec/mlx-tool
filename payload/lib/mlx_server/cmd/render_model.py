@@ -22,6 +22,8 @@ def _models(p):
     for m in ms:
         lines.append("  " + "  ".join(ui._pad(ui._flat(m.get(c)), w[c]) for c in cols))
     lines += ["", f"  共 {len(ms)} 个"]
+    if p.get("drafters_unreadable"):
+        lines += ["", "  drafters.tsv 读不到，「模态」列以 ? 占位（不影响其余信息）"]
     return "\n".join(lines)
 
 
