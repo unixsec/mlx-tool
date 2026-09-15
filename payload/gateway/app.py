@@ -17,7 +17,8 @@ T1_FACADE = ("store.load", "supervisor.running",
 class Gateway:
     """网关进程内状态。**日志两条流写本进程 fd 1/2**，文件由 supervisor 重定向。"""
 
-    __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key", "nets")
+    __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key", "nets",
+                 "_key_missing_logged", "_key_missing_had_key")
 
     def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None, backend_key=None,
                  nets=None):
@@ -29,6 +30,10 @@ class Gateway:
         self._token = token
         self._backend_key = backend_key
         self.nets = nets
+        # `backend_key_missing` 去重：按「模型 + 当前是否有密钥」——密钥状态翻转
+        # （比如运行中改配置后重装配）就重新起算，翻转前的沉默不会漏掉新一轮缺钥匙
+        self._key_missing_logged = set()
+        self._key_missing_had_key = bool(backend_key)
         missing = set(T1_FACADE) - set(facade)
         extra = set(facade) - set(T1_FACADE)
         if missing or extra:
@@ -59,10 +64,23 @@ class Gateway:
         snap = self.facade["supervisor.snapshot"](self.ctx, short_id) or {}
         if not snap.get("backend_auth"):
             return {}
-        if not self._backend_key:
-            log_event("error", "backend_key_missing", model=short_id)
+        have_key = bool(self._backend_key)
+        if have_key != self._key_missing_had_key:
+            self._key_missing_logged.clear()
+            self._key_missing_had_key = have_key
+        if not have_key:
+            if short_id not in self._key_missing_logged:
+                log_event("error", "backend_key_missing", model=short_id)
+                self._key_missing_logged.add(short_id)
             return {}
         return {"Authorization": "Bearer " + self._backend_key}
+
+    def upstream_reply(self, status, body, peer_class, short_id):
+        # type: (int, object, str, str) -> tuple
+        if status == 401:
+            # 网关带的后端密钥被拒 —— 多半是改了 backend.api_key 却没重启网关或模型
+            log_event("error", "backend_auth_failed", model=short_id)
+        return translate.upstream_error(status, body, peer_class)
 
     def healthz(self):
         # 免鉴权，所以**只回状态**：绑定地址等配置不在这里（spec §4.1）
@@ -154,10 +172,9 @@ class Gateway:
                 return translate.build_error(404, "not_found", "no running backend knows this id")
             if status == 504:
                 return translate.build_error(504, "upstream_timeout", "backends did not answer in time")
-            return translate.build_error(502 if status >= 500 else status, "upstream_error",
-                                         "backend returned an error")
+            return self.upstream_reply(status, rbody, _peer_class, sid)
 
-        port, model_arg, short_id, _peer_class, upstream = rest
+        port, model_arg, short_id, peer_class, upstream = rest
         hdrs = self.upstream_headers(short_id)
         # 只在需要时传 headers —— 不需要鉴权的转发，调用形态与此前逐字一致
         out = forward(port, upstream, translate.inbound(body, model_arg),
@@ -166,9 +183,7 @@ class Gateway:
             return translate.build_error(504, "upstream_timeout", "backend did not answer in time")
         status, rbody = out
         if status >= 400:
-            # **错误响应体不透传** —— 上游的内部信息不回给客户端（Task 6 按来源细化）
-            return translate.build_error(502 if status >= 500 else status, "upstream_error",
-                                         "backend returned an error")
+            return self.upstream_reply(status, rbody, peer_class, short_id)
         return (status, translate.outbound(rbody, short_id))
 
 

@@ -61,8 +61,9 @@ r["bad_id"] = g.handle("GET", "/v1/responses/..", headers=H, forward=fwd)[0]
 n = len(calls); st, _ = post("/v1/messages?beta=true", "vlm")
 r["body_route_query_dropped"] = [st, calls[-1][2] if len(calls) > n else None]
 
-# Important 3：handle() 把扇出的上游状态码翻成网关自己的错误类型，
-# 每条分支各走各的、错误体不透传（响应体里的标记串不得漏到客户端）。
+# Important 3：handle() 把扇出的上游状态码翻成网关自己的错误类型。
+# 5xx 一律映射成 502 且体不透传；非 404 的 4xx 原样透传状态码，体按来源处理
+# （这里的调用方是回环来源，Task 6 / D21 订正后应原文收到上游错误体）。
 canned[(8100, "GET", "/v1/responses/resp_500")] = (500, {"internal": "SECRET_500"})
 canned[(8102, "GET", "/v1/responses/resp_500")] = (500, {"internal": "SECRET_500"})
 st, body = g.handle("GET", "/v1/responses/resp_500", headers=H, forward=fwd)
@@ -71,7 +72,7 @@ r["fanout_500"] = [st, body["error"]["type"], "SECRET_500" in json.dumps(body)]
 canned[(8100, "GET", "/v1/responses/resp_400")] = (400, {"internal": "SECRET_400"})
 canned[(8102, "GET", "/v1/responses/resp_400")] = (404, {})
 st, body = g.handle("GET", "/v1/responses/resp_400", headers=H, forward=fwd)
-r["fanout_400"] = [st, body["error"]["type"], "SECRET_400" in json.dumps(body)]
+r["fanout_400"] = [st, body]
 
 canned[(8100, "GET", "/v1/responses/resp_404")] = (404, {})
 canned[(8102, "GET", "/v1/responses/resp_404")] = (404, {})
@@ -110,8 +111,8 @@ def test_gateway_endpoint_routing(payload, sys_py):
         "按 body 路由的端点转发时应丢掉查询串（mlx_lm 按路径精确匹配）"
     assert got["fanout_500"] == [502, "upstream_error", False], \
         "扇出全 5xx 应映射成 502 upstream_error，且不透传上游错误体"
-    assert got["fanout_400"] == [400, "upstream_error", False], \
-        "非 404 的 4xx 原样透传状态码，但错误体不得透传"
+    assert got["fanout_400"] == [400, {"internal": "SECRET_400"}], \
+        "非 404 的 4xx 原样透传状态码；回环来源应原文收到上游错误体（Task 6 / D21 订正）"
     assert got["fanout_404"] == [404, "not_found"]
     assert got["fanout_timeout"] == [504, "upstream_timeout"]
 

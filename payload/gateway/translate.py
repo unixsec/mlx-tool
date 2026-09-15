@@ -2,10 +2,12 @@
 
 入站：请求体的 model 字段 短 id → 后端参数
 回程：改回短 id
-忠实性承诺（`R-API-23` 改写后）：状态码与 content-type 忠实回传；
-成功响应体经**协议感知改写**；**错误响应体不透传**（防上游内部信息泄漏）。
+忠实性承诺（D21 订正）：成功响应体经**协议感知改写**；后端 4xx 的状态码透传，
+体对本机来源原文、对远端来源净化（去绝对路径与异常片段）；后端 5xx 与鉴权失败
+映射为 502，体不透传。
 """
 import json
+import re
 
 
 def list_models(route_view):
@@ -76,3 +78,40 @@ def build_error(status, err_type, message=None, request_id=None):
     if request_id:
         body["error"]["request_id"] = request_id
     return (status, body)
+
+
+_REDACT = "<redacted>"
+_TRACEBACK = re.compile(r"Traceback \(most recent call last\):[\s\S]*")
+_FILE_REF = re.compile(r'File "[^"]*"')
+# 以 `/` 或 `~/` 开头、前面不是词字符的连续非空白 —— 不会误伤 `mlx-community/Qwen…` 这类仓库名
+_ABS_PATH = re.compile(r"(?<![\w.-])(?:~/|/)[^\s'\"]+")
+_KEEP_KEYS = frozenset({"type", "code", "param"})
+
+
+def sanitize(value):
+    # type: (object) -> object
+    """去掉错误体里会暴露本机布局的片段。dict 的 `type` / `code` / `param` 原样保留 —— 客户端按它们分支。"""
+    if isinstance(value, str):
+        return _ABS_PATH.sub(_REDACT, _FILE_REF.sub(_REDACT, _TRACEBACK.sub(_REDACT, value)))
+    if isinstance(value, dict):
+        return {k: (v if k in _KEEP_KEYS else sanitize(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize(v) for v in value]
+    return value
+
+
+def upstream_error(status, body, peer_class):
+    # type: (int, object, str) -> tuple
+    """后端错误 → 回给客户端的 `(status, body)`（spec §4.7、D21）。
+
+    4xx 透传状态码：客户端要靠 400 / 422 的 `type` 与 `param` 知道自己哪个参数错了，
+    一律改成 502 等于让它无从修正。远端来源的体要净化：mlx_vlm 多处 `detail=str(e)`，
+    会把本机权重路径与异常栈原样写进响应。
+    """
+    if status == 401:
+        return build_error(502, "upstream_auth_failed", "backend rejected the gateway credentials")
+    if status >= 500:
+        return build_error(502, "upstream_error", "backend returned an error")
+    if not isinstance(body, dict):
+        body = {"error": {"message": str(body), "type": "upstream_error"}}
+    return (status, body if peer_class == "LOOPBACK" else sanitize(body))

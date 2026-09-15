@@ -41,6 +41,7 @@ def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=
     """流式转发。**逐块喂给 `on_chunk`，由调用方分帧改写** ——
 
     本函数不碰字节内容（INV-12：改写只发生在 Frame 上，不对 chunk 做替换）。
+    返回 `True` 正常结束 · `False` 传输失败 · `(status, body)` 上游在任何字节之前回了 HTTP 错误。
     """
     req = urllib.request.Request(
         f"http://{host}:{port}{path}",
@@ -55,6 +56,13 @@ def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=
                 if not chunk:
                     return True
                 on_chunk(chunk)
+    except urllib.error.HTTPError as e:
+        # **必须先于 URLError 捕获**（它是 URLError 的子类）。此前被当成传输失败，
+        # 后端对流式请求回的 400 到了客户端变成 504 upstream_timeout（spec §0.7-8）
+        try:
+            return (e.code, json.loads(e.read() or b"{}"))
+        except ValueError:
+            return (e.code, {})
     except (urllib.error.URLError, TimeoutError, OSError):
         return False
 
@@ -159,7 +167,7 @@ def make_handler(gw):
                 st, out = gw.handle("POST", path, dict(self.headers), body, forward=forward,
                                     peer=self.client_address[0])
                 return self._reply(st, out)
-            port, model_arg, short_id, _peer_class, upstream = rest
+            port, model_arg, short_id, peer_class, upstream = rest
 
             dec = SseDecoder()
             state = {"started": False}
@@ -182,6 +190,8 @@ def make_handler(gw):
             hdrs = gw.upstream_headers(short_id)
             ok = forward_stream(port, upstream, translate.inbound(body, model_arg), on_chunk,
                                 **({"headers": hdrs} if hdrs else {}))
+            if isinstance(ok, tuple):
+                return self._reply(*gw.upstream_reply(ok[0], ok[1], peer_class, short_id))
             if not state["started"]:
                 # 一个字节都没来 ⇒ 还能正常回一个错误响应
                 return self._reply(*translate.build_error(

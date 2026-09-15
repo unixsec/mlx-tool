@@ -196,3 +196,36 @@ def test_chat_bench_auth_and_rotation_hint(payload, sys_py):
     assert t2["restart"] == ["vis", "api"]
     assert "mlx restart vis api" in t2["text"] and "无法比较" in t2["text"]
     assert KEY not in t2["text"] and TOK not in t2["text"]
+
+
+KEY_MISSING_PROG = r'''
+import io, json, sys
+from gateway.app import Gateway
+from mlx_server.result import Ok
+class R:
+    def __init__(s, i, p): s.id, s.machine, s.user = i, {"port": p}, {}
+class Res:
+    records = [R("vlm", 8100), R("vlm2", 8102)]
+snaps = {"vlm": {"model_arg": "vlm", "backend_auth": True},
+         "vlm2": {"model_arg": "vlm2", "backend_auth": True}}
+facade = {"store.load": lambda c: Res(), "supervisor.running": lambda c, s: Ok(True),
+          "supervisor.port_owner": lambda c, s: Ok(True),
+          "supervisor.snapshot": lambda c, s: snaps.get(s),
+          "supervisor.merge_record": lambda c, s, f, pid=None: True}
+g = Gateway(None, facade, token="@TOK@"); g.refresh_routes()      # 无 backend_key
+err = io.StringIO(); real_err, sys.stderr = sys.stderr, err
+g.upstream_headers("vlm")
+g.upstream_headers("vlm")
+g.upstream_headers("vlm2")
+sys.stderr = real_err
+lines = [json.loads(ln) for ln in err.getvalue().splitlines()
+         if "backend_key_missing" in ln]
+print(json.dumps({"count": len(lines), "models": sorted(ln["model"] for ln in lines)}))
+'''
+
+
+def test_backend_key_missing_logged_once_per_model(payload, sys_py):
+    """`Gateway.upstream_headers` 缺后端密钥时**每模型只记一条**，不是每请求一条。"""
+    got = run_floor(payload, sys_py, KEY_MISSING_PROG, with_gateway=True, TOK=TOK)
+    assert got["count"] == 2, f"应恰好两条（vlm 一条、vlm2 各一条），实得 {got['count']}"
+    assert got["models"] == ["vlm", "vlm2"]
