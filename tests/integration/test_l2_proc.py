@@ -65,7 +65,20 @@ def test_l2_stub_rejects_unplanned_calls(tmp_path: Path):
 
 
 def test_l2_dry_run_zero_external_commands(payload: Path, sys_py: str, tmp_path: Path):
-    """`DE-T-018` 的 L2 版：dry-run 全程外部命令计数 == 0（桩记账为证）。"""
+    """`DE-T-018` 的 L2 版：**文本模型**下 dry-run 全程外部命令计数 == 0（桩记账为证）。
+
+    这里的模型是文本模型（`qwen`，`config.json` 无 `vision_config`）——
+    `DE-T-018` 权威判据逐字是「**stage_split 之后**外部命令计数 == 0」
+    （`tests/unit/test_stage_split.py:3,67`），不是「校验段全程零外部命令」。
+    校验段本身允许只读取证：Task 9 接入的 `svc._v_backend` 对**多模态**模型会调
+    `templates.inspect_template`，那是一次真实的（沙箱）子进程渲染，发生在
+    `stage_split`/dry-run 早退**之前**，不计入本条判据的求值面。选文本模型
+    正是为了绕开这条取证路径，本用例的「零外部命令」结论**不能**推广到
+    多模态模型的 dry-run。多模态场景的显式覆盖见
+    `tests/integration/test_l2_backend_route.py::test_vision_model_goes_to_mlx_vlm_with_key_masked`
+    ——那里对 `spawn`/`wait_ready`（执行段的外部效应 deps）与模板渲染临时文件
+    分别断言零调用 / 零残留。
+    """
     from tv.sandbox import Sandbox
     sb = Sandbox(tmp_path).write_constants().with_model("qwen")
     stub = Stub()

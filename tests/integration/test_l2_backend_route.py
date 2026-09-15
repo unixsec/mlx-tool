@@ -41,11 +41,32 @@ print(json.dumps(up("t")))
 
 
 def test_vision_model_goes_to_mlx_vlm_with_key_masked(payload, sys_py):
+    """多模态 dry-run 除产出正确判定外，还必须验证 `DE-T-018` 的求值面没被越界扩大：
+
+    校验段的模板取证（`templates.inspect_template`）在 stage_split **之前**跑，
+    是 spec §2.3/§9.2 要求 dry-run 报准 thinking/effort_domain 的代价，允许；
+    但执行段的外部效应 deps（`spawn`/`wait_ready`）一次都不该被调用，
+    且渲染用的临时文件（`tempfile.mkstemp(prefix="mlxtpl.")`）必须已清理干净，
+    不留在 tmp 目录里 —— 否则「dry-run 零外部命令」这条不变式就被这条新路径
+    悄悄削弱了却没有测试守着。
+    """
     got = _run(payload, sys_py, """
+import glob
 seed("v", "org/v", 8102, config=VIS_CFG, template=VIS_TPL, machine={"size_mb": 28164.0})
 put_caps(["mlx", "mlx_lm", "mlx_vlm"])
 put_settings({"backend.api_key": "@KEY@"})
-print(json.dumps(up("v")))
+exec_calls = []
+deps.update({
+    "spawn": lambda spec, cwd: exec_calls.append("spawn") or None,
+    "wait_ready": lambda spec, port, timeout_sec: exec_calls.append("wait_ready") or None,
+})
+_tmpdir = tempfile.gettempdir()
+before_tmp = sorted(glob.glob(os.path.join(_tmpdir, "mlxtpl.*")))
+r = up("v")
+after_tmp = sorted(glob.glob(os.path.join(_tmpdir, "mlxtpl.*")))
+r["exec_calls"] = exec_calls
+r["tmp_leaked"] = sorted(set(after_tmp) - set(before_tmp))
+print(json.dumps(r))
 """)
     assert got["rc"] == 0, got
     assert got["route"]["rule"] == "R3" and got["argv"][2] == "mlx_vlm.server"
@@ -55,6 +76,9 @@ print(json.dumps(up("v")))
     assert KEY not in str(got), "dry-run 输出里出现密钥原值"
     assert got["route"]["effort_domain"] == ["low", "medium", "xhigh"]
     assert got["timeout"] == 20 + 3 * 28, "28164 MB ⇒ ceil(27.5) = 28 GB"
+    # DE-T-018 覆盖缺口修复（review round 1）：见本函数 docstring。
+    assert got["exec_calls"] == [], f"dry-run 调用了执行段的外部效应 deps：{got['exec_calls']}"
+    assert got["tmp_leaked"] == [], f"dry-run 留下了模板渲染临时文件：{got['tmp_leaked']}"
 
 
 def test_refusals_and_precedence(payload, sys_py):
