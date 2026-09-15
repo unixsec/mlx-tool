@@ -77,6 +77,26 @@ def exportable(key, defs):
     return bool(d) and d.get("exportable") == "yes" and d.get("secret") != "yes"
 
 
+MASK = "****"
+
+
+def is_secret(key, defs):
+    # type: (str, dict) -> bool
+    """这个键是不是机密（`schema.tsv#secret`）。"""
+    d = defs.get(key)
+    return bool(d) and d.get("secret") == "yes"
+
+
+def masked(values, defs):
+    # type: (dict, dict) -> dict
+    """secret 键的**非空**值替换为 `****`。
+
+    空值原样返回：「未设置」本身不是秘密，而把它也打成 `****` 会让用户以为已经设过。
+    """
+    return {k: (MASK if is_secret(k, defs) and v not in (None, "") else v)
+            for k, v in values.items()}
+
+
 def coerce(key, raw, defs=None):
     # type: (str, object, dict) -> object
     """把 CLI 来的字符串按键的类型归一。**唯一实现点**。

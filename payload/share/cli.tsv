@@ -32,3 +32,4 @@
 --ignore-fitness	up,restart	no	-	-	false	fit.override	flag.ignore_fitness
 --yes	model rm	no	-	-	false	confirm.skip	flag.yes
 --from	config import	yes	<路径>	-	-	config.import_source	flag.from
+--reveal	config get	no	-	-	false	config.reveal_secret	flag.reveal

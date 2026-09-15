@@ -97,7 +97,7 @@ def run(ctx, stack, inv, deps=None):
         layers = _layers(ctx, inv.target if inv.target not in _dom else None, deps)
     if inv.verb == "ls":
         cfg = schema.effective(inv.target or "api", layers, defaults=_factory(ctx, deps))
-        return Done({"kind": "config_ls", "values": cfg.values,
+        return Done({"kind": "config_ls", "values": schema.masked(cfg.values, _defs(ctx, deps)),
                      "sources": cfg.sources})
     if inv.verb == "get":
         key = (inv.args or {}).get("key")
@@ -112,8 +112,12 @@ def run(ctx, stack, inv, deps=None):
             return Refused(6, "config.not_a_config_key", key=key,
                            scope=(defs.get(key) or {}).get("scope", "?"))
         cfg = schema.effective(inv.target or "api", layers, defaults=_factory(ctx, deps))
+        value = cfg.values[key]
+        # `--reveal` 是查看密钥原值的**唯一**入口（spec §5.2）
+        if not (inv.args or {}).get("reveal"):
+            value = schema.masked({key: value}, defs)[key]
         return Done({"kind": "config_get", "key": key,
-                     "value": cfg.values[key], "source": cfg.sources[key]})
+                     "value": value, "source": cfg.sources[key]})
     if inv.verb == "validate":
         # 附录 A 2827：主产物「每检查项一行 name<TAB>verdict<TAB>detail」，
         # 退出码 `0,2,6,64,65`（与 `check` 共用 64/65 那一对聚合码）。
@@ -136,6 +140,7 @@ def run(ctx, stack, inv, deps=None):
                 bad.append(key)
                 continue
             val, src = cfg.values.get(key), cfg.sources.get(key, "?")
+            val = schema.masked({key: val}, _defs(ctx, deps))[key]
             rows.append((key, "ok", f"{val}（来自 {src}）"))
         payload = {"kind": "checks", "rows": rows, "failed": bad,
                    "undeterminable": []}
@@ -156,7 +161,7 @@ def run(ctx, stack, inv, deps=None):
             # 兜底，从它取而不是再碰一次 `schema.DEFAULTS`（那读起来像
             # 「拿硬编码当配置域」，守卫也分不出来）。
             factory = (defs.get(key) or {}).get("default", _fac.get(key))
-            rows.append({"key": key, "value": cfg.values[key],
+            rows.append({"key": key, "value": schema.masked({key: cfg.values[key]}, defs)[key],
                          "source": src, "factory": factory})
         return Done({"kind": "config_diff", "rows": rows,
                      "target": inv.target or "（全局）"})
@@ -251,7 +256,7 @@ def run(ctx, stack, inv, deps=None):
             inv.target, _layers(ctx, None if scope == "global" else inv.target, deps),
             defaults=_factory(ctx, deps))
         return Done({"kind": "config_unset", "unset": key, "scope": scope,
-                     "was_set": True, "now": eff.values.get(key),
+                     "was_set": True, "now": schema.masked({key: eff.values.get(key)}, defs)[key],
                      "source": eff.sources.get(key)})
 
     if inv.verb == "export":
@@ -321,5 +326,5 @@ def run(ctx, stack, inv, deps=None):
         scope = inv.target
     # 效果读路径（INV-25）：用**登记的那个读函数**回读，报的是真生效值
     eff = schema.effective(inv.target, _layers(ctx, None if scope == "global" else inv.target, deps), defaults=_factory(ctx, deps))
-    return Done({"kind": "config_set", "set": key, "value": eff.values[key],
+    return Done({"kind": "config_set", "set": key, "value": schema.masked({key: eff.values[key]}, defs)[key],
                  "scope": scope, "source": eff.sources[key]})

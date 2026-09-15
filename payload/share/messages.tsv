@@ -98,6 +98,7 @@ flag.repo	HuggingFace 仓库名，形如 mlx-community/Qwen3.8-27B-8bit
 flag.type	后端类型，值域见 types 表
 flag.port	监听端口，须落在配置的端口区间内
 flag.weights	连同权重文件一起回收（默认只删登记）
+flag.reveal	显示 secret 键（如 api.token）的原值；不加时一律打码为 ****
 svc.some_targets_failed	有目标未能完成（逐个结论见上）
 repair.facts_undeterminable	读不到磁盘事实，拒绝重建 —— 不用部分事实覆盖记录
 repair.commit_failed	重建 {id} 时写入失败，原文件逐字节未变（{detail}）
