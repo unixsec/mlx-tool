@@ -59,3 +59,58 @@ def test_repair_clears_old_fields_and_retired_keys_only(payload, sys_py):
         assert head in got["text"], f"repair 输出缺少「{head}」一节：\n{got['text']}"
     assert got["again"]["cleared_fields"] == [] and got["again"]["retired_keys"] == [], \
         "第二次 repair 应无事可做（幂等）"
+
+
+# Fix round 1（controller ruling）：`Failed.committed` 只能列**失败点之前已经
+# 落地**的资源，绝不能列刚失败的那一个——`atomic.replace` 全有全无，抛异常时
+# 临时文件已被清掉，那次写什么都没落地。用一个假 `store.commit` 在第 N 次调用
+# 时抛异常，验证 `committed` 既不含失败的那个资源、又含它之前真落地的资源。
+#
+# 本测试世界里一次 repair() 的 `store.commit` 调用顺序（`models.jsonl` 按 id
+# 排过序，"new" < "old"）：
+#   #1 A 动作重建 "new"（size_mb 空态哨兵触发）
+#   #2 B 动作清理 "old"（旧字段 + 退役键）
+#   #3 C 动作清理 settings.json（退役键 backend）
+PROG_FAIL = WORLD + """
+from mlx_server import store
+from mlx_server.cmd.model_reclaim import run
+from mlx_server.cmd.svc import Invocation
+seed("old", "org/old", 8101, config={},
+     user={"type": "text", "backend": "mlx_lm", "max_tokens": 2048},
+     machine={"type_evidence": "CLI_EXPLICIT", "layout": "hub"})
+seed("new", "org/new", 8102, config={}, user={"modality": "text"},
+     machine={"size_mb": 0})
+put_settings({"backend": "mlx_lm", "fit.reserve_pct": 30})
+
+_orig_commit = store.commit
+_calls = {"n": 0}
+def _fake_commit(ctx, target, tx, stack=None):
+    _calls["n"] += 1
+    if _calls["n"] == @FAIL_AT@:
+        raise RuntimeError("boom-injected")
+    return _orig_commit(ctx, target, tx, stack)
+store.commit = _fake_commit
+
+out = run(ctx, None, Invocation("repair", None), {})
+print(json.dumps({"rc": out.rc, "msg_key": getattr(out, "msg_key", None),
+                  "committed": getattr(out, "committed", None)}))
+"""
+
+
+def test_repair_failed_committed_excludes_the_failing_write(payload, sys_py):
+    # 第 2 次 commit（B 动作清理 "old"）失败：#1（A 重建 "new"）之前已经落地，
+    # 必须出现在 committed 里；刚失败的 "old" 绝不能出现。
+    got = run_floor(payload, sys_py, PROG_FAIL, FAIL_AT=2)
+    assert got["rc"] == 1, got
+    assert got["msg_key"] == "repair.commit_failed", got
+    assert got["committed"] == ["models.jsonl:new"], got
+    assert "models.jsonl:old" not in got["committed"], \
+        "committed 里出现了刚失败、其实没落地的资源"
+
+
+def test_repair_failed_committed_empty_when_first_write_fails(payload, sys_py):
+    # 第 1 次 commit（A 动作重建 "new" 本身）就失败：此前什么都没落地。
+    got = run_floor(payload, sys_py, PROG_FAIL, FAIL_AT=1)
+    assert got["rc"] == 1, got
+    assert got["msg_key"] == "repair.commit_failed", got
+    assert got["committed"] == [], got

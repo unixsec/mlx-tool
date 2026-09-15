@@ -162,6 +162,12 @@ def run(ctx, stack, inv, deps=None):
         from ..tables import open_tables
         defs = schema.keydefs(open_tables(ctx))
         cleared, retired = [], []
+        # `Failed.committed` 是调用方唯一能看的收敛线索（`result.py:89`）——
+        # 必须只列**失败点之前已经落地**的资源，绝不能列刚失败的那一个：
+        # `atomic.replace` 全有全无，抛异常时临时文件已被清掉，`os.replace`
+        # 根本没跑，那次写**什么都没落地**。A 动作此刻已经 rc==0（上面判过），
+        # 它改过的记录也算已落地，一并计入。
+        landed = {f"models.jsonl:{c['id']}" for c in (out.payload.get("changes") or [])}
         for r in store.load(ctx, store.MODELS).records:
             old_u = [k for k in ("type",) if k in r.user]
             old_m = [k for k in ("type_evidence",) if k in r.machine]
@@ -173,17 +179,18 @@ def run(ctx, stack, inv, deps=None):
                     r.id, {}, unset_user=tuple(old_u + ret_u),
                     unset_machine=tuple(old_m)), stack)
             except Exception as exc:              # noqa: BLE001
-                return Failed(1, "repair.commit_failed", [f"models.jsonl:{r.id}"],
+                return Failed(1, "repair.commit_failed", sorted(landed),
                               id=r.id, detail=str(exc))
             cleared += [{"id": r.id, "segment": "user", "field": k} for k in old_u]
             cleared += [{"id": r.id, "segment": "machine", "field": k} for k in old_m]
             retired += [{"scope": r.id, "key": k} for k in ret_u]
+            landed.add(f"models.jsonl:{r.id}")
         stale = sorted(k for k in store.load_settings(ctx) if k not in defs)
         if stale:
             try:
                 store.commit(ctx, store.SETTINGS, store.SettingsTx(unset=stale), stack)
             except Exception as exc:              # noqa: BLE001
-                return Failed(1, "repair.commit_failed", ["settings.json"],
+                return Failed(1, "repair.commit_failed", sorted(landed),
                               id="settings.json", detail=str(exc))
             retired += [{"scope": "global", "key": k} for k in stale]
 
