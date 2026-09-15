@@ -109,6 +109,12 @@ def make_handler(gw):
             self._reply(st, body)
 
         def do_OPTIONS(self):    # noqa: N802
+            # OPTIONS 不读请求体。带体（Content-Length 非 0 —— 含无法解析的值 —— 或出现
+            # Transfer-Encoding）时回完就关连接：否则 keep-alive 下体里的字节会被当成
+            # 同一连接上的下一条请求解析，请求分帧就被打乱了
+            clen = (self.headers.get("Content-Length") or "").strip()
+            if self.headers.get("Transfer-Encoding") is not None or clen.lstrip("0"):
+                self.close_connection = True
             st, body = gw.handle("OPTIONS", self.path.split("?")[0], dict(self.headers),
                                  peer=self.client_address[0])
             self._reply(st, body, preflight=(st == 204))
