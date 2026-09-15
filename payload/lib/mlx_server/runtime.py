@@ -41,6 +41,21 @@ from .weights import _dir_bytes
 # （网关令牌经 ctx 折入 cfg 后由 `backendarg` 的 api 分支放进 `spec.env`）。
 _STRIP_INHERITED_ENV = ("MLX_GATEWAY_TOKEN", "MLX_BACKEND_API_KEY")
 
+
+def _stripped_env():
+    # type: () -> dict
+    """父进程环境的拷贝，去掉 `_STRIP_INHERITED_ENV` 这两把密钥。
+
+    `spawn`（起后端/网关）与 `fetch`（起第三方 `hf` CLI）共用 —— 两者都以
+    接近完整的父进程环境起子进程，子进程若继承了 shell 导出的这两个变量，
+    就会在密钥「未声明」的情况下仍然工作（评审 I-4；P2-pre B1/C10）。
+    """
+    env = dict(os.environ)
+    for _name in _STRIP_INHERITED_ENV:
+        env.pop(_name, None)
+    return env
+
+
 def spawn(spec, cwd, log_path=None, venv_python=None, code_root=None):
     # type: (object, str, str, str) -> dict
     """起后端进程。**新会话新进程组**，日志重定向由本函数做（`BCR-R-24`）。
@@ -52,9 +67,7 @@ def spawn(spec, cwd, log_path=None, venv_python=None, code_root=None):
     if venv_python and argv and argv[0] in VENV_PACKAGES:
         argv[0] = venv_python                      # `mlx_lm` 这类名字换成 venv 解释器
 
-    env = dict(os.environ)
-    for _name in _STRIP_INHERITED_ENV:
-        env.pop(_name, None)
+    env = _stripped_env()
     env.update(spec.env or {})
     if code_root:
         # 网关以 `-m gateway` 起，包在代码根下；T1 在 code_root/lib
@@ -138,7 +151,7 @@ def fetch(repo, revision, dest_dir, hf_bin=None, on_line=None, on_tick=None):
     try:
         proc_h = subprocess.Popen(                       # noqa: S603
             argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            text=True, bufsize=1)
+            text=True, bufsize=1, env=_stripped_env())
     except (OSError, subprocess.SubprocessError) as e:
         return {"ok": False, "reason": f"tool_unavailable: {e}"}
 
