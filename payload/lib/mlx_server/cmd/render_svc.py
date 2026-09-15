@@ -47,6 +47,12 @@ def _tool_status(p):
                   f"  {ui._RUN.get(run, '·')} api        " +
                   (f"在跑  :{gw.get('port')}  pid {gw.get('pid')}" if run
                    else "未运行   `mlx up api` 起它")]
+        if gw.get("token_state") == "env_unknown":
+            lines.append("     └ 令牌由环境变量设置，当前 shell 未设 MLX_GATEWAY_TOKEN，无法比较是否已变更")
+
+    rs = p.get("restart_needed") or []
+    if rs:
+        lines += ["", "  ⚠ 密钥已变更，需重启：`mlx restart " + " ".join(rs) + "`"]
     return "\n".join(lines)
 
 

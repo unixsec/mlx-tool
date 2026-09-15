@@ -60,13 +60,21 @@ def spec(service, cfg, route):
     if service == "api":                      # ← 唯一的非表驱动分支（G-SSOT-14）
         # 网关跑在**下限解释器**上，与 T1 同一个 —— 它零依赖（标准库 HTTP 服务器），
         # 这样 venv 坏了网关照样起得来。`cwd_rel` 为空：它不需要别名目录。
+        env = {"MLX_GATEWAY_PORT": str(v["port"]),
+               "MLX_GATEWAY_BIND": str(v.get("api.bind", "127.0.0.1"))}
+        secret = []
+        # 密钥经环境变量交给网关进程（spec §4.8）：spawn 以 spec.env 覆盖继承的环境，
+        # 所以这里设了就是它；值为空则不设（不以空串抹掉 shell 里的同名变量）
+        for name, key in (("MLX_GATEWAY_TOKEN", "api.token"),
+                          ("MLX_BACKEND_API_KEY", "backend.api_key")):
+            if v.get(key):
+                env[name] = str(v[key])
+                secret.append(name)
         return LaunchSpec(
             service=service,
             argv=("/usr/bin/python3", "-m", "gateway"),
-            env={"MLX_GATEWAY_PORT": str(v["port"]),
-                 "MLX_GATEWAY_BIND": str(v.get("api.bind", "127.0.0.1"))},
-            cwd_rel="", model_arg=None, self_id_expected=None,
-            sources=dict(cfg.sources),
+            env=env, cwd_rel="", model_arg=None, self_id_expected=None,
+            sources=dict(cfg.sources), secret_env=secret,
         )
 
     row = getattr(route, "row", None)

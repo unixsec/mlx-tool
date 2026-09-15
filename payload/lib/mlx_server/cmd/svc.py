@@ -196,6 +196,10 @@ def _v_config(state, inv, deps):
     layers = {}
     if inv.target == "api":
         layers["cli"] = {"port": ctx.gateway_port}
+        tok = getattr(ctx, "gateway_token_env", "")
+        if tok:
+            # 放 cli 层：与命令行参数同性质 —— 本次调用的显式意图，不落盘
+            layers["cli"]["api.token"] = tok
     else:
         rec = state["record"]
         port = store.model_port(rec)
@@ -357,6 +361,16 @@ def _tool_status(ctx):
     def _alive(sid):
         st = supervisor.running(ctx, sid)
         return None if is_unknown(st) else bool(st.value)
+
+    # ── 密钥轮换检测（spec §5.2）：运行记录只存指纹，与**同一来源**的当前值比 ──
+    from .. import route as _route
+    from .. import store as _store
+    try:
+        _cur = _store.load_settings(ctx)
+    except Exception:                             # noqa: BLE001
+        _cur = None                               # 读不了设置 ⇒ 不比较，不误报「已变更」
+    cur_key_fp = _route.key_fingerprint((_cur or {}).get("backend.api_key"))
+
     models = []
     try:
         from .. import store
@@ -381,6 +395,9 @@ def _tool_status(ctx):
                    "revision": machine.get("revision"),
                    "size_mb": machine.get("size_mb"),
                    "pid": snap.get("pid")}
+            row["key_changed"] = (_cur is not None and row["running"] is True
+                                  and bool(snap.get("backend_auth"))
+                                  and snap.get("key_fp") != cur_key_fp)
             if row["running"] is True and row["pid"]:
                 # `health.model_memory`（02:1833「运行中模型的实际占用」）
                 from .. import probe
@@ -398,6 +415,22 @@ def _tool_status(ctx):
     gw_snap = supervisor.snapshot(ctx, "api") or {}
     gateway = {"running": _alive("api"),
                "port": gw_snap.get("port"), "pid": gw_snap.get("pid")}
+
+    token_state, backend_key_changed = None, False
+    if gw_snap and _cur is not None:
+        if gw_snap.get("token_source") == "env":
+            env_tok = getattr(ctx, "gateway_token_env", "")
+            token_state = ("env_unknown" if not env_tok else
+                           "ok" if _route.key_fingerprint(env_tok) == gw_snap.get("token_fp")
+                           else "changed")
+        else:
+            token_state = ("ok" if _route.key_fingerprint(_cur.get("api.token"))
+                           == gw_snap.get("token_fp") else "changed")
+        backend_key_changed = gw_snap.get("backend_key_fp") != cur_key_fp
+    gateway.update(token_state=token_state, backend_key_changed=backend_key_changed)
+    restart_needed = [m["id"] for m in (models or []) if m.get("key_changed")]
+    if gateway["running"] and (token_state == "changed" or backend_key_changed):
+        restart_needed.append("api")
 
     from .meta import VERSION  # **同一个常量**，不在这里写第二遍版本串
 
@@ -417,6 +450,7 @@ def _tool_status(ctx):
         "bin_dir": bin_dir,
         "manifest": manifest,
         "services_running": supervisor.services_with_record(ctx),
+        "restart_needed": restart_needed,
     })
 
 

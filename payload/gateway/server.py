@@ -18,12 +18,12 @@ from .app import log_event
 _MAX_BODY = 8 * 1024 * 1024          # 8 MB：拒绝超大体，防内存打爆
 
 
-def forward(port, path, payload, host="127.0.0.1", timeout_sec=600):
+def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None):
     """把改写后的请求转给本机后端。返回 `(status, body)`；传输失败返回 `None`。"""
     req = urllib.request.Request(
         f"http://{host}:{port}{path}",
         data=json.dumps(payload).encode(), method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=dict({"Content-Type": "application/json"}, **(headers or {})),
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as r:  # noqa: S310
@@ -37,7 +37,8 @@ def forward(port, path, payload, host="127.0.0.1", timeout_sec=600):
         return None
 
 
-def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=600):
+def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=600,
+                    headers=None):
     """流式转发。**逐块喂给 `on_chunk`，由调用方分帧改写** ——
 
     本函数不碰字节内容（INV-12：改写只发生在 Frame 上，不对 chunk 做替换）。
@@ -45,7 +46,8 @@ def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=
     req = urllib.request.Request(
         f"http://{host}:{port}{path}",
         data=json.dumps(dict(payload, stream=True)).encode(), method="POST",
-        headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+        headers=dict({"Content-Type": "application/json", "Accept": "text/event-stream"},
+                     **(headers or {})),
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as r:  # noqa: S310
@@ -142,8 +144,9 @@ def make_handler(gw):
                     self.wfile.write(translate.rewrite_frame(frame, short_id))
                     self.wfile.flush()
 
-            ok = forward_stream(port, path,
-                                translate.inbound(body, model_arg), on_chunk)
+            hdrs = gw.upstream_headers(short_id)
+            ok = forward_stream(port, path, translate.inbound(body, model_arg), on_chunk,
+                                **({"headers": hdrs} if hdrs else {}))
             if not state["started"]:
                 # 一个字节都没来 ⇒ 还能正常回一个错误响应
                 return self._reply(*translate.build_error(

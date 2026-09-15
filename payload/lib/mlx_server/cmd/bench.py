@@ -47,9 +47,16 @@ def run(ctx, stack, inv, deps=None):
     if port is None:
         return Refused(6, "bench.not_running", service=inv.target)
 
+    # 带鉴权的后端（mlx_vlm）要附密钥。是否需要看**运行记录快照**，不现场判定（INV-27）
+    auth = {}
+    if (supervisor.snapshot(ctx, inv.target) or {}).get("backend_auth"):
+        key = store.load_settings(ctx).get("backend.api_key")
+        if key:
+            auth["api_key"] = key
+
     # INV-27：运行侧读**快照**里的 model_arg，不用 CLI 给的 id
     out = bench(int(port), prompt,
-                model=supervisor.effective_model_arg(ctx, inv.target))
+                model=supervisor.effective_model_arg(ctx, inv.target), **auth)
     if out is None:
         return Refused(3, "bench.backend_unreachable", service=inv.target,
                        port=port,

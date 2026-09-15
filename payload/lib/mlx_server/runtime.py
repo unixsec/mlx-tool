@@ -200,18 +200,21 @@ def fingerprint(venv_python=None):
 
 # ── transport（chat / bench 用）────────────────────────────────────
 
-def send_chat(port, messages, model=None, timeout_sec=300, host="127.0.0.1"):
-    # type: (int, list, str, int, str) -> object
+def send_chat(port, messages, model=None, timeout_sec=300, host="127.0.0.1", api_key=None):
+    # type: (int, list, str, int, str, object) -> object
     """向本机后端发一次 chat 请求。失败返回 `None`（调用方构造 `Refused(3)`）。"""
     # **`model` 必须是后端认得的那个名字**（INV-01 态 A：短 id）。
     # 此前默认 `"local"`：mlx_lm 把它当成 HuggingFace 仓库名去网上查，
     # 401 之后返回错误体 ⇒ `body["choices"]` KeyError ⇒ 恒 None ⇒
     # `chat` / `bench` 在服务明明在跑时报「连不上后端」。
     payload = {"model": model or "local", "messages": messages, "stream": False}
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key       # mlx_vlm 后端要求（spec §5.2）
     req = urllib.request.Request(
         f"http://{host}:{port}/v1/chat/completions",
         data=json.dumps(payload).encode(), method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # noqa: S310
@@ -245,12 +248,12 @@ def _strip_chat_markers(text):
     return out
 
 
-def bench_once(port, prompt, host="127.0.0.1", model=None):
-    # type: (int, str, str, str) -> dict
+def bench_once(port, prompt, host="127.0.0.1", model=None, api_key=None):
+    # type: (int, str, str, str, object) -> dict
     """一次基准：首 token 延迟 + 总时长。`model` 透传给后端（见 `send_chat`）。"""
     t0 = time.time()
     reply = send_chat(port, [{"role": "user", "content": prompt}],
-                      model=model, host=host)
+                      model=model, host=host, api_key=api_key)
     if reply is None:
         return None
     dt = time.time() - t0

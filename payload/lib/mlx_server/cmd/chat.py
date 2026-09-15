@@ -61,6 +61,13 @@ def run(ctx, stack, inv, deps=None):
     if port is None:
         return Refused(6, "chat.not_running", service=inv.target)
 
+    # 带鉴权的后端（mlx_vlm）要附密钥。是否需要看**运行记录快照**，不现场判定（INV-27）
+    auth = {}
+    if (supervisor.snapshot(ctx, inv.target) or {}).get("backend_auth"):
+        key = store.load_settings(ctx).get("backend.api_key")
+        if key:
+            auth["api_key"] = key
+
     def _one(text):
         """发一轮。返回回复正文；失败返回 None。**取消闭包压清理栈**（INV-06 的
         意图栈还没有所有者，见 KNOWN-ISSUES 第 7 条；这里先用清理栈占位）。"""
@@ -68,7 +75,7 @@ def run(ctx, stack, inv, deps=None):
         h = stack.push(lambda: cancelled.__setitem__("v", True)) if stack else None
         try:
             return send(port, turns + [{"role": "user", "content": text}],
-                        model=supervisor.effective_model_arg(ctx, inv.target))
+                        model=supervisor.effective_model_arg(ctx, inv.target), **auth)
         finally:
             if h is not None and stack:
                 stack.drop(h)      # 正常结束 ⇒ 撤销登记，不执行取消

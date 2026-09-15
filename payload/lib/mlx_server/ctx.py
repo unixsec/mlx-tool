@@ -49,10 +49,11 @@ class Ctx:
     # 那是 Python 语言层不可堵的，靠 L0 守卫「产品里 object.__setattr__ 的
     # 出现点集合 == {Ctx.__init__}」兜住（见 test_ctx.py）。
     __slots__ = ("root_code", "root_data", "root_weights", "venv", "gateway_port",
-                 "port_range", "self_started_at", "bins", "share_root")
+                 "port_range", "self_started_at", "bins", "share_root", "gateway_token_env")
 
     def __init__(self, root_code, root_data, root_weights, venv,
-                 gateway_port, port_range, self_started_at, bins=None, share_root=""):
+                 gateway_port, port_range, self_started_at, bins=None, share_root="",
+                 gateway_token_env=""):
         # type: (str, str, str, int, Tuple[int, int], object) -> None
         object.__setattr__(self, "root_code", root_code)
         object.__setattr__(self, "root_data", root_data)
@@ -72,6 +73,9 @@ class Ctx:
         # 用户自己设一个别的值，表从 A 读、caps.json 写到 B。
         object.__setattr__(self, "share_root",
                            share_root or os.path.join(root_code, "share"))
+        # shell 里显式给的网关令牌（spec §3.4 `token_source=env`）。**只在这里读环境**（G-RES-11），
+        # 校验段「生效配置」把它放进 cli 层覆盖 `api.token`。
+        object.__setattr__(self, "gateway_token_env", gateway_token_env or "")
         object.__setattr__(self, "self_started_at", self_started_at)
 
     def __setattr__(self, name, value):
@@ -127,7 +131,8 @@ def load(constants, environ, self_started_at):
         if override:
             bins[name] = override
     return Ctx(code, data, weights, venv, port, (int(lo), int(hi)),
-               self_started_at, bins, environ.get("MLX_SHARE_ROOT", ""))
+               self_started_at, bins, environ.get("MLX_SHARE_ROOT", ""),
+               environ.get("MLX_GATEWAY_TOKEN", ""))
 
 
 def build(share_root, environ=None, pid=None):

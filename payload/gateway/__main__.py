@@ -29,7 +29,8 @@ def main(argv):
     }
     bind = os.environ.get("MLX_GATEWAY_BIND", "127.0.0.1")
     token = os.environ.get("MLX_GATEWAY_TOKEN") or None
-    gw = Gateway(c, facade, bind_addr=bind, token=token)
+    backend_key = os.environ.get("MLX_BACKEND_API_KEY") or None
+    gw = Gateway(c, facade, bind_addr=bind, token=token, backend_key=backend_key)
     serve(gw, host=bind, port=c.gateway_port)
     return 0
 

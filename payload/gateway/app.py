@@ -16,15 +16,16 @@ T1_FACADE = ("store.load", "supervisor.running",
 class Gateway:
     """网关进程内状态。**日志两条流写本进程 fd 1/2**，文件由 supervisor 重定向。"""
 
-    __slots__ = ("ctx", "facade", "view", "bind_addr", "_token")
+    __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key")
 
-    def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None):
+    def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None, backend_key=None):
         self.ctx = ctx
         self.facade = facade            # {name: callable}，键集 == T1_FACADE
         self.view = routes.RouteView()
         self.bind_addr = bind_addr
         # 令牌在**装配段**注入，请求处理路径改不了它（信任边界）
         self._token = token
+        self._backend_key = backend_key
         missing = set(T1_FACADE) - set(facade)
         extra = set(facade) - set(T1_FACADE)
         if missing or extra:
@@ -45,6 +46,20 @@ class Gateway:
             lambda sid: self.facade["supervisor.running"](self.ctx, sid),
             owner_of=lambda sid: self.facade["supervisor.port_owner"](self.ctx, sid))
         return self.view
+
+    def upstream_headers(self, short_id):
+        """转发给后端时附加的请求头（spec §4.8）。
+
+        **只给运行记录标了 `backend_auth` 的后端附密钥**：是否需要鉴权是启动那一刻判定的
+        （运行记录快照，INV-27），这里不重新判定；mlx_lm 没有鉴权机制，不把密钥发给它。
+        """
+        snap = self.facade["supervisor.snapshot"](self.ctx, short_id) or {}
+        if not snap.get("backend_auth"):
+            return {}
+        if not self._backend_key:
+            log_event("error", "backend_key_missing", model=short_id)
+            return {}
+        return {"Authorization": "Bearer " + self._backend_key}
 
     def healthz(self):
         return (200, {"routes_state": self.view.state,
@@ -94,7 +109,10 @@ class Gateway:
 
         if forward is None:
             return translate.build_error(503, "gateway.no_upstream")
-        out = forward(port, path, translate.inbound(body, model_arg))
+        hdrs = self.upstream_headers(short_id)
+        # 只在需要时传 headers —— 不需要鉴权的转发，调用形态与此前逐字一致
+        out = forward(port, path, translate.inbound(body, model_arg),
+                      **({"headers": hdrs} if hdrs else {}))
         if out is None:
             return translate.build_error(504, "gateway.upstream_timeout")
         status, rbody = out
