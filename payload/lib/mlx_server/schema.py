@@ -1,4 +1,5 @@
 """P 层 · 配置解析与分层。**纯函数、零 I/O。**"""
+import re
 
 
 class ConfigError(Exception):
@@ -14,12 +15,9 @@ class ConfigError(Exception):
 # 每个键的默认值与值域。写成表，不是散在代码里的 if —— 加一个键只改这里。
 DEFAULTS = {
     "port": 8100,
-    # **网关绑定地址**。设计把 `api.bind` 登记为 `gw.guard` 经 `schema.effective`
-    # 读的键（暴露等级由它唯一决定，`R-API-25`），而它此前根本不在配置域里 ——
-    # 用户手册教的 `mlx config set api.bind=0.0.0.0` 返回「未知配置键」。
-    # **`api.token` 有意不进这里**：它是凭据，落进 settings.json 就是明文存盘，
-    # 而本版没有 secret 列来标注「导出时排除」。它保持为环境变量
-    # `MLX_GATEWAY_TOKEN`（进程生命周期内有效，不落盘），手册照此说明。
+    # **两个密钥键进了配置域**（spec §5）：此前 `api.token` 有意不进这里，理由是
+    # 「落进 settings.json 就是明文存盘，而本版没有 secret 列」。现在 `schema.tsv`
+    # 有 secret 列（打码、不导出），settings.json 以 0600 写出（atomic.replace mode）。
     "api.bind": "127.0.0.1",
     # 判档的三个**比例常量**（百分数整数）。设计逐字：「没有独立的绝对阈值键」——
     # 绝对值来自探针，阈值只表达比例，换机器不用改配置。
@@ -27,7 +25,11 @@ DEFAULTS = {
     "fit.tight_pct": 75,       # 超过预算的这个比例 ⇒ TIGHT（能起，但挤）
     "fit.over_pct": 95,        # 超过这个比例 ⇒ OVER（拒绝启动）
     "backend": "mlx_lm",
-    "max_tokens": 4096,
+    "max_tokens": 81920,
+    "modality": "auto",
+    "max_concurrency": 8,
+    "backend.api_key": "",
+    "api.token": "",
 }
 
 
@@ -75,27 +77,66 @@ def exportable(key, defs):
     return bool(d) and d.get("exportable") == "yes" and d.get("secret") != "yes"
 
 
-def coerce(key, raw):
-    # type: (str, object) -> object
-    """把 CLI 来的字符串按键的**出厂类型**归一。**唯一实现点**。
+def coerce(key, raw, defs=None):
+    # type: (str, object, dict) -> object
+    """把 CLI 来的字符串按键的类型归一。**唯一实现点**。
+
+    类型优先取 `schema.tsv` 的 `type` 列（`defs` 由调用方注入），表里没有再回落
+    `DEFAULTS`。此前只看 `DEFAULTS`，于是表里有而 DEFAULTS 没有的 int 键
+    （`num_draft_tokens`）以字符串落盘 —— 值域校验一接上就会把它判成非法。
 
     不归一的后果不是「显示成字符串」这么轻：`ports.conflict_check` 比的是
     `machine["port"] == ctx.gateway_port`，一边是 `"8390"` 一边是 `8390`，
-    **恒为假** —— 网关端口互斥这道检查因此从不报警，`mlx check` 的 ports 项
-    也一直是绿的。类型错误在这个项目里是以「检查恒不命中」的形态出现的。
+    **恒为假** —— 类型错误在这个项目里是以「检查恒不命中」的形态出现的。
     """
-    if key not in DEFAULTS or raw is None or not isinstance(raw, str):
+    if raw is None or not isinstance(raw, str):
         return raw
-    want = type(DEFAULTS[key])
-    # 本版配置域里没有 bool 键。设计要求 schema 提供「唯一的 parse_bool」
-    # （`04-interfaces.md` schema 行），但零消费者的实现正是这轮审查批的东西 ——
-    # 等真有 bool 键时连同它的读取点一起加。
-    if want is int:
+    d = (defs or {}).get(key)
+    if d is not None:
+        want_int = d.get("type") == "int"
+    elif key in DEFAULTS:
+        want_int = isinstance(DEFAULTS[key], int) and not isinstance(DEFAULTS[key], bool)
+    else:
+        return raw
+    if want_int:
         try:
             return int(raw)
         except ValueError:
             raise ConfigError(f"{key} 需要整数，实得 {raw!r}", kind="domain", key=key) from None
     return raw
+
+
+def check_domain(key, value, defs):
+    # type: (str, object, dict) -> object
+    """值域校验的**唯一实现点**（spec §2.2）。合法返回 None，非法返回原因文本。
+
+    `config set`、`config import`、`model register --type`、校验段「生效配置」四处共用。
+    值域列的形态：`lo-hi` / `lo-`（整数区间）· `a|b|c`（枚举）· `^…`（正则全匹配）·
+    `-` / `<占位>` / 空（不约束）。str 键的空串恒合法 —— 它表示「未设置」。
+    """
+    d = defs.get(key)
+    if not d:
+        return "未知配置键"
+    dom = (d.get("domain") or "").strip()
+    if dom in ("", "-") or dom.startswith("<"):
+        return None
+    if d.get("type") == "int":
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"需要整数，实得 {value!r}"
+        lo, _, hi = dom.partition("-")
+        if lo and value < int(lo):
+            return f"不得小于 {lo}"
+        if hi and value > int(hi):
+            return f"不得大于 {hi}"
+        return None
+    if not isinstance(value, str):
+        return f"需要字符串，实得 {value!r}"
+    if value == "":
+        return None
+    if dom.startswith("^"):
+        return None if re.fullmatch(dom, value) else "格式不符"
+    allowed = dom.split("|")
+    return None if value in allowed else "取值须为 " + "|".join(allowed) + " 之一"
 
 
 class ServiceConfig:

@@ -5,7 +5,7 @@
 #
 # scope       user|machine —— **`config set` 的可写域 == scope==user**（P-SCH-15 是双向差集）
 # level       global|model|both —— 这个键能设在全局层、per-model 层、还是都行
-# restart     none|model|gateway —— 改了它要重启什么才生效（`config set` 据此给三态文案）
+# restart     none|model|gateway|model+gateway —— 改了它要重启什么才生效（`config set` 据此给三态文案）
 # exportable  yes|no —— `config export` 的白名单（**肯定白名单**：no 的不导出）
 # secret      yes|no —— 机密，导出时**一律排除**，`config ls` 显示为 ****
 # group       分组，help 与 `config ls` 按它排版
@@ -19,7 +19,13 @@
 # 列（顺序即 tables.COLUMNS）：key type domain default scope level restart exportable secret group readers
 port	int	1-65535	8100	user	both	model	yes	no	service	backendarg,ports,cmd.svc
 backend	str	mlx_lm	mlx_lm	user	both	model	yes	no	service	backendarg
-max_tokens	int	1-1048576	4096	user	both	model	yes	no	service	backendarg
+max_tokens	int	1-1048576	81920	user	both	model	yes	no	service	backendarg
+# ── 模态覆盖与并发（spec D2 / D18）────────────────────────────
+modality	str	auto|text|vision	auto	user	model	model	yes	no	service	cmd.svc,route,cmd.model.query
+max_concurrency	int	1-256	8	user	both	model	yes	no	service	backendarg
+# ── 密钥（spec §5）：secret ⇒ 打码、不导出；值由 `mlx bootstrap keys` 生成或手动 `config set` ──
+backend.api_key	str	^[A-Za-z0-9_-]{32,128}$		user	global	model+gateway	no	yes	security	backendarg,cmd.svc,cmd.chat,cmd.bench
+api.token	str	^[A-Za-z0-9_-]{32,128}$		user	global	gateway	no	yes	api	backendarg,gw.guard,cmd.api
 # ── 投机解码（speculative decoding）────────────────────────────
 # `draft_model` 的值是**另一条记录的短名**，不是路径 —— 路径不进 argv（INV-01 态 A）。
 # 启动时 `supervisor.materialize` 在同一个别名目录里为它建第二条链接，

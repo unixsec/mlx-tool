@@ -177,14 +177,23 @@ def run(ctx, stack, inv, deps=None):
             elif defs and not schema.writable(key, defs):
                 rejected.append({"key": key, "why": "不可写（scope != user）"})
             else:
-                plan.append(key)
+                try:
+                    v = schema.coerce(key, incoming[key], defs)
+                except schema.ConfigError as exc:
+                    rejected.append({"key": key, "why": str(exc)})
+                    continue
+                bad = schema.check_domain(key, v, defs) if defs else None
+                if bad:
+                    rejected.append({"key": key, "why": f"值非法（{bad}）"})
+                else:
+                    plan.append(key)
         if inv.dry_run:
             return Done({"kind": "config_import", "planned": plan,
                          "rejected": rejected, "applied": [], "dry_run": True})
         applied, failed = [], []
         for key in plan:
             try:
-                val = schema.coerce(key, incoming[key])
+                val = schema.coerce(key, incoming[key], defs)
                 store.commit(ctx, store.SETTINGS,
                              store.SettingsTx({key: val}), stack)
                 applied.append(key)
@@ -277,7 +286,11 @@ def run(ctx, stack, inv, deps=None):
     #   · 目标是模型 id（`mlx config set demo --key=port --value=…`）⇒ 该模型 user 段
     # 此前无论哪种都写 `models.jsonl` 的 machine 段：前者在注册表里造出一个
     # 叫 `port` 的幽灵模型，后者绕过端口唯一性强制（那道检查只看 `tx.port`）。
-    val = schema.coerce(key, val)          # 唯一归一点，见 schema.coerce 的理由
+    val = schema.coerce(key, val, defs)    # 唯一归一点，见 schema.coerce 的理由
+    # **值域校验在任何 commit 之前**（spec §2.2 单点；`L0·result-02` 的行号判据）
+    bad = schema.check_domain(key, val, defs) if defs else None
+    if bad:
+        return Refused(6, "config.invalid", key=key, kind=bad)
     # **目标存在性前置到任何 commit 之前**。放在 else 分支里虽然语义上也是
     # 「零落地」，但 `L0·result-02` 的判据是 AST 行号（构造点 > 资源创建点即红），
     # 守卫宁可误红也不能漏 —— 前置之后判据过、语义也对。
