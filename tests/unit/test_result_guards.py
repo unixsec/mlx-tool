@@ -4,9 +4,13 @@
 本片第一次给它们一个真正的求值对象。
 """
 import ast
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cardinality import Cardinality  # noqa: E402
 
 REFUSED_OK = {2, 3, 5, 6, 7, 8, 9}
 FAILED_OK = {1, 3, 4, 10}
@@ -221,6 +225,22 @@ def test_result02_violations_semantics(name, src, expect):
     assert bool(got) is expect, f"{name}：期望{'报' if expect else '不报'}，实得 {got}"
 
 
+def _refused_call_sites(tree):
+    """本文件里所有 `Refused(...)` 调用点的行号 —— `L0·result-02` 的被评估对象集合。
+
+    与 `_violations` 分开算：`_violations` 只返回**违规**的那些，
+    「零个违规」与「零个被检查的 `Refused` 调用」在它的返回值上不可区分，
+    而两者含义相反 —— 前者是「全部合规」，后者是这条断言根本没求值到任何东西。
+    """
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "Refused":
+            out.append(node.lineno)
+    return out
+
+
 def test_result02_refused_precondition_is_zero_resource(payload: Path):
     """`L0·result-02`〔按裁决改写〕：`Refused` 的唯一前提是**零资源已创建**。
 
@@ -230,11 +250,22 @@ def test_result02_refused_precondition_is_zero_resource(payload: Path):
     `Refused` 的真前提（零资源）就再也没有守卫。
 
     可求值的形态：构造 `Refused` 的函数体内，不得在该构造点**之前**出现资源创建调用。
+
+    **非空下限**（参照 `G-CLI-01` 的写法）：`bad` 没有下限 —— 若 `_product_trees`
+    一个文件都没产出、或产出的文件里一个 `Refused` 调用都没有，`assert not bad`
+    照样通过，但那是空真，什么也没证明。`Cardinality.require_nonempty` 断言
+    被评估的 `Refused` 调用集合非空，把这个空真风险变得可见。
     """
     bad = []
+    evaluated = []
     for f, tree in _product_trees(payload):
+        evaluated += [f"{f.name}:{ln}" for ln in _refused_call_sites(tree)]
         for line, nm, cline in _violations(tree):
             bad.append(f"{f.name}:{line} 在 {nm}@{cline} 之后构造 Refused")
+    Cardinality.require_nonempty(
+        "L0·result-02·被评估的 Refused 调用", evaluated,
+        "_product_trees 没产出文件，或产出的文件里一个 Refused 调用都没有 ⇒ 该断言空真通过",
+    )
     assert not bad, f"违反 BCR-R-01（Refused 的前提是零资源已创建）：{bad}"
 
 
