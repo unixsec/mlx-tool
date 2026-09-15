@@ -41,16 +41,6 @@ MODULES = {
 }
 
 
-def _factory_defaults(ctx):
-    """出厂默认值，来自 `schema.tsv`（表读不到时回落硬编码兜底）。"""
-    from . import schema
-    from .tables import open_tables
-    try:
-        return schema.defaults_from(open_tables(ctx))
-    except Exception:                              # noqa: BLE001
-        return dict(schema.DEFAULTS)
-
-
 def _load_renderers():
     """import 各 `cmd/render_*.py`，它们在模块级调 `ui.register()` 自我登记。
 
