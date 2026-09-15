@@ -68,3 +68,29 @@ sessions.save(ctx, sid, [{"role": "user", "content": "hi"}])
 print(json.dumps({"mode": mode(p)}))
 """)
     assert got["mode"] == "0o600", f"覆盖 0644 的会话文件后权限 {got['mode']}"
+
+
+def test_history_path_new_file_is_0600(payload, sys_py):
+    """`history_path` 首次创建 `.history` 须一次到位 0600。"""
+    got = run_floor(payload, sys_py, PRE + """
+from mlx_server import sessions
+p = sessions.history_path(ctx)
+print(json.dumps({"mode": mode(p)}))
+""")
+    assert got["mode"] == "0o600", f"新建 .history 权限 {got['mode']}"
+
+
+def test_history_path_creates_without_separate_chmod(payload, sys_py):
+    """`history_path` 须用一次系统调用把新文件创建为 0600（如
+    `os.open(..., 0o600)`），不得先以默认 umask 创建再单独 `os.chmod` ——
+    否则创建与 chmod 之间会留一个宽权限窗口。用会抛异常的假 `os.chmod`
+    顶替真的，若实现仍调用它就会在此炸掉。"""
+    got = run_floor(payload, sys_py, PRE + """
+from mlx_server import sessions
+def _boom(*a, **k):
+    raise AssertionError("history_path 不应再调用 os.chmod")
+os.chmod = _boom
+p = sessions.history_path(ctx)
+print(json.dumps({"mode": mode(p)}))
+""")
+    assert got["mode"] == "0o600", f"新建 .history 权限 {got['mode']}"

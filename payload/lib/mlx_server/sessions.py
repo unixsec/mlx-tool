@@ -48,6 +48,6 @@ def history_path(ctx):
     """REPL 历史文件。权限 600。"""
     p = os.path.join(_dir(ctx), ".history")
     if not os.path.exists(p):
-        open(p, "a").close()
-        os.chmod(p, 0o600)
+        fd = os.open(p, os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
     return p
