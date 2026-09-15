@@ -68,3 +68,47 @@ print(json.dumps(out))
     assert got["power"] == {"unknown": "PARSE_FAILED"}, "没拦截超大指数"
     assert got["loop"] == {"unknown": "TIMEOUT"}, "死循环没有被墙钟截断"
     assert time.time() - t0 < 30, "单个恶意模板的判定应在 5 s 墙钟附近结束"
+
+
+def test_renderer_isolates_environment_from_parent_secrets(payload, sys_py):
+    got = _run(payload, sys_py, """
+import os, tempfile
+os.environ["MLX_GATEWAY_TOKEN"] = "SENTINEL_SECRET_42"
+wrapper_dir = tempfile.mkdtemp()
+env_dump = os.path.join(wrapper_dir, "env_dump.txt")
+wrapper = os.path.join(wrapper_dir, "wrapper.sh")
+with open(wrapper, "w") as fh:
+    fh.write('#!/bin/sh\\n')
+    fh.write('/usr/bin/env > "{}"\\n'.format(env_dump))
+    fh.write('exec "{}" "$@"\\n'.format(os.path.join(VENV, "bin", "python3")))
+os.chmod(wrapper, 0o755)
+snap = seed("env_iso", "org/env_iso", 8100, config={}, template=fixture("qwen38/chat_template.jinja"))
+r = templates.inspect_template(snap, wrapper)
+result_valid = (not r.is_unknown() and
+                r.value.get("thinking_default") is True and
+                "xhigh" in r.value.get("effort_domain", []))
+dump_exists = os.path.exists(env_dump)
+has_sentinel = False
+if dump_exists:
+    with open(env_dump, "r") as fh:
+        has_sentinel = "SENTINEL_SECRET_42" in fh.read()
+print(json.dumps({
+    "dump_exists": dump_exists,
+    "has_sentinel": has_sentinel,
+    "result_valid": result_valid,
+}))
+""")
+    assert got["dump_exists"], "Environment dump file should exist"
+    assert not got["has_sentinel"], "Renderer subprocess should not inherit parent environment"
+    assert got["result_valid"], "Probe result should still be valid after env isolation"
+
+
+def test_tempfile_errors_map_to_unknown(payload, sys_py):
+    got = _run(payload, sys_py, """
+import tempfile
+tempfile.tempdir = "/nonexistent-mlx-test-dir"
+snap = seed("tmpfail", "org/tmpfail", 8100, config={}, template=fixture("qwen38/chat_template.jinja"))
+r = templates.inspect_template(snap, os.path.join(VENV, "bin", "python3"))
+print(json.dumps({"unknown": r.kind} if r.is_unknown() else {"error": "should be unknown"}))
+""")
+    assert got.get("unknown") == "TOOL_UNAVAILABLE", f"Expected TOOL_UNAVAILABLE, got {got}"

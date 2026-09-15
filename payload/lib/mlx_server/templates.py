@@ -8,6 +8,7 @@
     macOS 上 RLIMIT_AS 与 RLIMIT_DATA 在 3.9.6 与 3.14 上都设置失败，只能在父进程轮询 `ps`
 判不出一律 `Unknown`，调用方按 spec 处置（thinking 不加 flag、effort 视为空集）。
 """
+import contextlib
 import json
 import os
 import subprocess
@@ -21,6 +22,7 @@ MAX_OUT_BYTES = 1 << 20
 MAX_RSS_KB = 1 << 20                # ps 的 rss 单位是 KB ⇒ 1 GB
 POLL_SEC = 0.05
 EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+_CHILD_ENV = {"PATH": "/usr/bin:/bin"}  # Untrusted template code must not see parent secrets
 
 _RENDERER = r'''
 import json, sys
@@ -114,13 +116,19 @@ def inspect_template(snapshot_path, python, ps_path="/bin/ps"):
     src = _template_source(snapshot_path)
     if src.is_unknown():
         return src
-    fd, path = tempfile.mkstemp(prefix="mlxtpl.", suffix=".jinja")
+    try:
+        fd, path = tempfile.mkstemp(prefix="mlxtpl.", suffix=".jinja")
+    except OSError as exc:
+        return Unknown("TOOL_UNAVAILABLE", str(exc)[:120])
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(src.value)
         return _run_renderer(python, path, ps_path)
+    except OSError as exc:
+        return Unknown("TOOL_UNAVAILABLE", str(exc)[:120])
     finally:
-        os.unlink(path)
+        with contextlib.suppress(OSError):
+            os.unlink(path)
 
 
 def _run_renderer(python, template_path, ps_path):
@@ -128,7 +136,8 @@ def _run_renderer(python, template_path, ps_path):
     try:
         p = subprocess.Popen(                                      # noqa: S603
             [python, "-I", "-c", _RENDERER, template_path, json.dumps(list(EFFORT_ORDER))],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            env=dict(_CHILD_ENV))
     except OSError as exc:
         return Unknown("TOOL_UNAVAILABLE", str(exc)[:120])
     deadline = time.time() + WALL_SEC
