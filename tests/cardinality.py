@@ -18,16 +18,25 @@ class Cardinality:
     def check(cls, name, left, right=None, rel="subset"):
         # type: (str, object, object, str) -> None
         """记录并断言。left 为空时不静默通过 —— 调用方必须显式声明它可以为空。"""
+        def to_hashable(item):
+            if isinstance(item, list):
+                return tuple(to_hashable(x) for x in item)
+            return item
+
         ln = len(left)
         rn = len(right) if right is not None else None
         cls.records.append((name, ln, rn, rel))
         if rel == "empty":
             assert ln == 0, f"{name}: 期望空集，实得 {ln} 项：{list(left)[:5]}"
         elif rel == "subset":
-            assert set(left) <= set(right), f"{name}: {set(left) - set(right)} 不在右集合内"
+            left_set = set(to_hashable(x) for x in left)
+            right_set = set(to_hashable(x) for x in right)
+            assert left_set <= right_set, f"{name}: {left_set - right_set} 不在右集合内"
         elif rel == "equal":
-            assert set(left) == set(right), (
-                f"{name}: 左多 {set(left)-set(right)}；右多 {set(right)-set(left)}"
+            left_set = set(to_hashable(x) for x in left)
+            right_set = set(to_hashable(x) for x in right)
+            assert left_set == right_set, (
+                f"{name}: 左多 {left_set - right_set}；右多 {right_set - left_set}"
             )
 
     @classmethod

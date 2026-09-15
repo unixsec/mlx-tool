@@ -33,6 +33,7 @@ gateway/routes.py	代码	删除
 gateway/guard.py	代码	删除
 gateway/translate.py	代码	删除
 gateway/app.py	代码	删除
+gateway/peers.py	代码	删除
 gateway/server.py	代码	删除
 gateway/__main__.py	代码	删除
 lib/mlx_server/cmd/__init__.py	代码	删除
