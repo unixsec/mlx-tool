@@ -49,6 +49,7 @@ cases = {
   "P2": go(VIS, c=cfg(**{"backend.api_key": ""})),
   "P3": go(VIS, size=None),
   "order_S1_U1": go(dict(MTP, vision=None)),
+  "order_U2_R0": go(VIS, draft=("d", dict(TXT, attachment=True, vision=None))),
   "order_R0_R1": go(VIS, draft=("d", MTP)),
   "order_P1_P2": go(VIS, pk=["mlx_lm"], c=cfg(**{"backend.api_key": ""})),
   "order_P2_P3": go(VIS, c=cfg(**{"backend.api_key": ""}), size=None),
@@ -80,6 +81,7 @@ def test_route_rules_frozen(payload, sys_py):
     assert got["P2"] == {"key": "svc.backend_key_missing", "rc": 6}
     assert got["P3"] == {"key": "svc.size_undeterminable", "rc": 9}
     assert got["order_S1_U1"]["key"] == "svc.not_standalone_model"
+    assert got["order_U2_R0"]["key"] == "svc.draft_inspect_undeterminable"
     assert got["order_R0_R1"]["key"] == "svc.draft_unsupported"
     assert got["order_P1_P2"]["key"] == "svc.backend_missing"
     assert got["order_P2_P3"]["key"] == "svc.backend_key_missing"
