@@ -18,6 +18,7 @@ lib/mlx_server/store.py	代码	删除
 lib/mlx_server/fitness.py	代码	删除
 lib/mlx_server/ports.py	代码	删除
 lib/mlx_server/weights.py	代码	删除
+lib/mlx_server/templates.py	代码	删除
 lib/mlx_server/vault.py	代码	删除
 lib/mlx_server/sessions.py	代码	删除
 lib/mlx_server/supervisor.py	代码	删除

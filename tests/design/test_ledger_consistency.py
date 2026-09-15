@@ -618,7 +618,7 @@ _LAYER = {
     "schema": 3, "backendarg": 3, "fitness": 3,
     # C 层 · 资源所有者
     "store": 4, "ports": 4, "weights": 4, "vault": 4, "supervisor": 4,
-    "sessions": 4, "caps": 4, "checks": 4,
+    "sessions": 4, "caps": 4, "checks": 4, "templates": 4,
     # D 层 · 编排（cmd/*），零自有资源
     # E 层 · 解析
     "cli": 6,
