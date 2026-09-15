@@ -16,10 +16,9 @@ def new(ctx, service):
     sid = f"{service}-{int(time.time() * 1000)}"
     p = os.path.join(_dir(ctx), f"{sid}.json")
     from . import atomic
-    with atomic.replace(p) as fh:
+    with atomic.replace(p, mode=0o600) as fh:
         fh.write(json.dumps({"sid": sid, "service": service, "turns": []},
                             ensure_ascii=False))
-    os.chmod(p, 0o600)
     return sid
 
 
@@ -40,9 +39,8 @@ def save(ctx, sid, turns):
     obj = load(ctx, sid) or {"sid": sid, "service": None}
     obj["turns"] = list(turns)
     from . import atomic
-    with atomic.replace(p) as fh:
+    with atomic.replace(p, mode=0o600) as fh:
         fh.write(json.dumps(obj, ensure_ascii=False))
-    os.chmod(p, 0o600)
 
 
 def history_path(ctx):

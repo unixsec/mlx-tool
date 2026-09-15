@@ -45,3 +45,26 @@ supervisor.write_record(ctx, S(), 111, 111, 8100, "t", "n0")
 print(json.dumps({"mode": mode(os.path.join(d, "run", "qwen.json"))}))
 """)
     assert got["mode"] == "0o600", f"运行记录权限 {got['mode']}"
+
+
+def test_session_new_file_is_0600(payload, sys_py):
+    got = run_floor(payload, sys_py, PRE + """
+from mlx_server import sessions
+sid = sessions.new(ctx, "api")
+print(json.dumps({"mode": mode(os.path.join(d, "sessions", sid + ".json"))}))
+""")
+    assert got["mode"] == "0o600", f"新建会话文件权限 {got['mode']}"
+
+
+def test_session_save_overwrite_of_wide_file_is_0600(payload, sys_py):
+    """`atomic.replace(p, mode=0o600)` 一次到位 —— 覆盖一个已存在的 0644 文件
+    之后仍须是 0600，替换与 chmod 之间不得留一个宽权限窗口。"""
+    got = run_floor(payload, sys_py, PRE + """
+from mlx_server import sessions
+sid = sessions.new(ctx, "api")
+p = os.path.join(d, "sessions", sid + ".json")
+os.chmod(p, 0o644)
+sessions.save(ctx, sid, [{"role": "user", "content": "hi"}])
+print(json.dumps({"mode": mode(p)}))
+""")
+    assert got["mode"] == "0o600", f"覆盖 0644 的会话文件后权限 {got['mode']}"
