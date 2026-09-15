@@ -182,7 +182,7 @@ if [ -x "$VENV/bin/python3" ] && [ "${MLX_SKIP_DEPS:-}" != "1" ]; then
   # **依赖装配失败不得使安装失败**（R-DEPLOY-40）：工具骨架、注册表、网关
   # 都不依赖它们，把整次安装拖垮会让用户连诊断命令都没有。
   MISSING=""
-  for pkg in huggingface_hub mlx mlx-lm; do
+  for pkg in huggingface_hub mlx mlx-lm mlx-vlm; do
     if "$VENV/bin/python3" -m pip install --quiet --disable-pip-version-check "$pkg" 2>/dev/null; then
       say "   ✓ $pkg"
     else
@@ -192,7 +192,7 @@ if [ -x "$VENV/bin/python3" ] && [ "${MLX_SKIP_DEPS:-}" != "1" ]; then
   done
   if [ -n "$MISSING" ]; then
     say "   这些包没装上：$MISSING"
-    say "   影响：下载权重（需 huggingface_hub）与启动模型（需 mlx-lm）不可用。"
+    say "   影响：下载权重（需 huggingface_hub）、启动文本模型（需 mlx-lm）、启动多模态模型（需 mlx-vlm）不可用。"
     say "   补装：$VENV/bin/python3 -m pip install$MISSING"
   fi
 elif [ "${MLX_SKIP_DEPS:-}" = "1" ]; then
@@ -206,10 +206,23 @@ fi
 # 「尚未采集后端能力信息」—— 装完就得先自己发现要跑一次 caps refresh。
 # 采集失败**不中止安装**：venv 没建成时它必然失败，而工具本体仍然可用。
 say "== 采集后端能力"
-if MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" caps refresh >/dev/null 2>&1; then
+# 失败要**说出原因**：此前输出被丢进 /dev/null，用户只看到「采集失败」，
+# 查不到是 venv 没建成、包没装上、还是别的。
+if caps_out=$(MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" caps refresh 2>&1); then
   say "   ✓ caps.json"
 else
-  say "   ! 采集失败 —— 装好推理依赖后手动跑：mlx caps refresh"
+  say "   ! 采集失败：$(printf '%s' "$caps_out" | tail -n 3)"
+  say "     装好推理依赖后手动跑：mlx caps refresh"
+fi
+
+say "== 生成密钥（只补空值，已有的不动）"
+# spec §5.2：两把密钥（backend.api_key、api.token）存 settings.json，0600。
+# `bootstrap keys` 的输出**只含键名**，所以原样转印是安全的。
+if keys_out=$(MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" bootstrap keys 2>&1); then
+  printf '%s\n' "$keys_out" | sed 's/^/   /'
+else
+  say "   ! 密钥生成失败：$(printf '%s' "$keys_out" | tail -n 3)"
+  say "     补齐之前，多模态模型（mlx_vlm）与网关将拒绝启动。补：mlx bootstrap keys"
 fi
 
 say "== 校验产物（按 manifest.tsv）"

@@ -6,6 +6,8 @@ v6 的教训（`c637647` 逐字）：L0/L1/L2 共 665 条断言全部针对仓�
 """
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 import time
@@ -293,3 +295,24 @@ def test_l3_reinstall_removes_retired_types_table(tmp_path, repo):
                        capture_output=True, text=True, timeout=60, check=False, env=env)
     assert r.returncode == 0, f"安装器失败：{r.stderr}"
     assert not old.exists(), "退役文件在重装后仍然存在"
+
+
+def test_l3_fresh_install_generates_keys_without_printing_them(tmp_path, repo):
+    """spec §6.4 第 4 步与 §5.2：全新安装生成两把密钥、0600、**值不出现在安装器输出里**。"""
+    roots = {k: tmp_path / v for k, v in
+             (("MLX_ROOT_CODE", "code"), ("MLX_ROOT_DATA", "data"),
+              ("MLX_ROOT_WEIGHTS", "weights"))}
+    env = dict(os.environ, PATH="/usr/bin:/bin", **{k: str(v) for k, v in roots.items()})
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+                       capture_output=True, text=True, timeout=60, check=False, env=env)
+    assert r.returncode == 0, f"安装器失败：{r.stderr}"
+    st = roots["MLX_ROOT_DATA"] / "settings.json"
+    assert st.exists(), f"安装器没有生成 settings.json：\n{r.stdout}"
+    assert stat.S_IMODE(st.stat().st_mode) == 0o600
+    s = json.loads(st.read_text())
+    out = r.stdout + r.stderr
+    for k in ("backend.api_key", "api.token"):
+        v = s.get(k) or ""
+        assert re.fullmatch(r"[A-Za-z0-9_-]{32,128}", v), f"{k} 没有生成或格式不对"
+        assert v not in out and v[:8] not in out, f"安装器输出里出现了 {k} 的值"
+        assert k in out, f"安装器输出应列出生成了哪些键（只列键名）：缺 {k}"

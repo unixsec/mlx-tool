@@ -24,15 +24,14 @@ from .result import Ok, Unknown, is_unknown
 # 「判定与它的证据同居」（`02-architecture.md:1806`），两份常量正是反着做。
 PACKAGES = ("mlx", "mlx_lm", "mlx_vlm")
 
-# **探测面 ⊃ 安装面，两者故意不等。**
-# `install.sh` 只装 `huggingface_hub mlx mlx-lm`；`mlx_vlm` 探测但不装 ——
-# 它只服务 `--type=vision`，且会拖进 torch/transformers 一大串。
-# 这个差集此前**只存在于两份文件的字里行间**，于是 `mlx version` 把
-# 「探测清单里没装的」一律渲染成「未装：mlx_vlm」，读起来像装漏了东西
-# （2026-09-02 用户按这行字来问「mlx_lm 怎么没装」—— 而它明明装了 0.31.3）。
-# 现在把「必需」与「可选」写成两个常量，让渲染层能分开说。
-REQUIRED = ("mlx", "mlx_lm")
-OPTIONAL = {"mlx_vlm": "仅 --type=vision 需要"}
+# **探测面 == 安装面的后端部分。** `install.sh` 装 `huggingface_hub mlx mlx-lm mlx-vlm`；
+# `huggingface_hub` 不是后端、不进 fingerprint，所以不在 `PACKAGES` 里。
+# mlx_vlm 此前是「可选」：它只服务 `--type=vision`，而那条路径根本起不来
+# （KNOWN-ISSUES 1.0.0 #4）。现在多模态模型经 `up` 现场判定路由到它（spec D3），
+# 缺了它 `up` 就拒绝（P1）—— 一个缺了就拒绝启动的包不是可选包。
+# 「必需」与「可选」仍分两个常量：`mlx version` 只把必需包的缺失报成缺陷。
+REQUIRED = ("mlx", "mlx_lm", "mlx_vlm")
+OPTIONAL = {}
 
 
 def path(ctx):
