@@ -368,6 +368,10 @@ def rebuild_machine(ctx, disk_facts, stack=None):
 
     res = load(ctx, MODELS)
     diffs = []
+    # 本循环里已成功落地的记录（命名与 `model_reclaim.py` 一致：
+    # `models.jsonl:<id>`）——某条中途 commit 失败时，`Failed.committed`
+    # 要报它们，不能像此前那样一律 `[]`（之前的记录可能已经真的落了盘）。
+    committed = []
     for rec in res.records:
         fact = by_repo.get(rec.user.get("repo"))
         if fact is None:
@@ -385,8 +389,10 @@ def rebuild_machine(ctx, disk_facts, stack=None):
             try:
                 commit(ctx, MODELS, ModelsTx(rec.id, filled, mode="machine"), stack)
             except Exception as exc:          # noqa: BLE001
-                # commit 失败 ⇒ 原文件逐字节不变
-                return Failed(1, "repair.commit_failed", [], id=rec.id,
+                # commit 失败 ⇒ 原文件逐字节不变；committed 只报本循环里
+                # 在它之前已经成功落地的记录
+                return Failed(1, "repair.commit_failed", committed, id=rec.id,
                               detail=str(exc))
+            committed.append(f"models.jsonl:{rec.id}")
     return Done({"kind": "repair", "changes": diffs,
                  "scanned": len(by_repo), "records": len(res.records)})

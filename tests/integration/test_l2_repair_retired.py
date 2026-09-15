@@ -114,3 +114,61 @@ def test_repair_failed_committed_empty_when_first_write_fails(payload, sys_py):
     assert got["rc"] == 1, got
     assert got["msg_key"] == "repair.commit_failed", got
     assert got["committed"] == [], got
+
+
+def test_repair_failed_committed_includes_a_and_b_when_settings_write_fails(payload, sys_py):
+    # 第 3 次 commit（C 动作清 settings.json 的退役键）失败：A（重建 "new"）
+    # 与 B（清理 "old" 的旧字段/退役键）都已落地，committed 须含二者；
+    # 刚失败、其实没落地的 settings.json 绝不能出现。
+    got = run_floor(payload, sys_py, PROG_FAIL, FAIL_AT=3)
+    assert got["rc"] == 1, got
+    assert got["msg_key"] == "repair.commit_failed", got
+    assert sorted(got["committed"]) == ["models.jsonl:new", "models.jsonl:old"], got
+    assert "settings.json" not in got["committed"], \
+        "committed 里出现了刚失败、其实没落地的 settings.json"
+
+
+# `store.rebuild_machine` 自身的循环里（controller ruling，C3-2）：此前某条记录
+# 中途 commit 失败时一律 `committed=[]`，即便循环里更早的记录已经真的落地——
+# 与上面 `repair()` 整体编排里同一类缺陷（Fix round 1）同源，但发生在
+# `rebuild_machine` 自己的循环内部，PROG_FAIL 那个世界只有一条记录需要
+# A 动作重建，测不到这条路径，得单独造一个两条记录都要重建的世界。
+PROG_REBUILD_MULTI = WORLD + """
+from mlx_server import store
+seed("a", "org/a", 8101, config={}, machine={"size_mb": 0})
+seed("b", "org/b", 8102, config={}, machine={"size_mb": 0})
+
+class Facts:
+    installed = [{"repo": "org/a", "revision": "r-a", "size_mb": 111},
+                 {"repo": "org/b", "revision": "r-b", "size_mb": 222}]
+
+_orig_commit = store.commit
+_calls = {"n": 0}
+def _fake_commit(ctx, target, tx, stack=None):
+    _calls["n"] += 1
+    if _calls["n"] == @FAIL_AT@:
+        raise RuntimeError("boom-injected")
+    return _orig_commit(ctx, target, tx, stack)
+store.commit = _fake_commit
+
+out = store.rebuild_machine(ctx, Facts(), None)
+print(json.dumps({"rc": out.rc, "msg_key": getattr(out, "msg_key", None),
+                  "committed": getattr(out, "committed", None)}))
+"""
+
+
+def test_rebuild_machine_committed_lists_landed_record_before_mid_loop_failure(payload, sys_py):
+    # 两条记录（"a"、"b"）都需要重建（size_mb 空态哨兵）；第 2 次 commit
+    # （"b"）失败——committed 须恰为第一条已落地的记录 "a"，不含 "b"。
+    got = run_floor(payload, sys_py, PROG_REBUILD_MULTI, FAIL_AT=2)
+    assert got["rc"] == 1, got
+    assert got["msg_key"] == "repair.commit_failed", got
+    assert got["committed"] == ["models.jsonl:a"], got
+
+
+def test_rebuild_machine_committed_empty_when_first_of_two_commits_fails(payload, sys_py):
+    got = run_floor(payload, sys_py, PROG_REBUILD_MULTI, FAIL_AT=1)
+    assert got["rc"] == 1, got
+    assert got["msg_key"] == "repair.commit_failed", got
+    assert got["committed"] == [], got
+    assert got["committed"] == [], got
