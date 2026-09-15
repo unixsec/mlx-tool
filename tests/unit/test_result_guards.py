@@ -6,6 +6,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 REFUSED_OK = {2, 3, 5, 6, 7, 8, 9}
 FAILED_OK = {1, 3, 4, 10}
 
@@ -36,6 +38,189 @@ def test_result01_code_literals_in_registered_sets(payload: Path):
     assert not bad, f"退出码不在登记集合内：{bad}"
 
 
+CREATORS = {"mkdir", "makedirs", "commit", "spawn", "spawn_supervised",
+            "materialize", "lock", "open"}
+
+
+def _creates(node):
+    """这次调用是否**创建**资源。
+
+    `open` 要看模式：只读的 `open(p)` / `open(p, encoding=...)` 什么都不建，
+    把它算进来会让「先读文件再校验、校验失败 Refused」这种完全正当的
+    写法被判红 —— 守卫的提取面比不变式宽，报的是假阳性。
+    判据：第二个位置参或 `mode=` 里含 `w`/`a`/`x`/`+`。
+    """
+    nm = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+    if nm != "open":
+        return nm in CREATORS
+    mode = None
+    if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+        mode = node.args[1].value
+    for kw in node.keywords:
+        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+            mode = kw.value.value
+    return bool(mode) and any(c in str(mode) for c in "wax+")
+
+
+_FUNC = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_TRY = tuple(t for t in (getattr(ast, "Try", None), getattr(ast, "TryStar", None)) if t)
+
+
+def _creators_in(node):
+    """`node` 内部的创建调用 [(行, 名)]。不进入内嵌函数 / lambda —— 定义不等于执行。"""
+    out, stack = [], [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, ast.Call) and _creates(n):
+            out.append((n.lineno, getattr(n.func, "id", None) or getattr(n.func, "attr", None)))
+        stack.extend(c for c in ast.iter_child_nodes(n) if not isinstance(c, _FUNC))
+    return out
+
+
+def _creators_before_next(stmts):
+    """执行完这串语句、**控制流继续往下走**时，可能已发生的创建调用。
+
+    `if` 的某个分支以 `return` / `raise` 结尾 ⇒ 走进该分支就不会到达后续语句，
+    其内创建不计；否则递归看分支（`elif` 链的 orelse 末条是 `If`，要继续往里看）。
+    其它语句（with / for / try / 表达式 …）内部的创建一律计入。
+    """
+    out = []
+    for st in stmts:
+        if isinstance(st, ast.If):
+            out += _creators_in(st.test)
+            for branch in (st.body, st.orelse):
+                if branch and isinstance(branch[-1], (ast.Return, ast.Raise)):
+                    continue
+                out += _creators_before_next(branch)
+        elif not isinstance(st, _FUNC):
+            out += _creators_in(st)
+    return out
+
+
+def _creators_reaching(call, parent):
+    """执行到 `call` 之前、同一函数内可能已发生的创建调用（「可达前序语句」）。
+
+    自 `call` 逐层上溯到最近的函数边界，每层收集：
+    · 所在语句列表里、包含 `call` 那条语句**之前**的兄弟语句；
+    · 外层复合语句先于该体执行的部分 —— `if`/`while` 条件、`for` 迭代、`with` 项；
+    · `except` 体：整个 `try` 体都计入（异常可能在创建之后抛出）；
+    · `try` 的 `else` 体 / 循环的 `else` 体：主体已正常走完；
+    · `finally` 体：`try` 体、各 `except`、`else` 全部计入（`return` 也会途经 finally）。
+    同一条语句内先于 `Refused` 求值的创建（如条件表达式）不处理。
+    """
+    out, child = [], call
+    while child in parent:
+        node = parent[child]
+        for field in ("body", "orelse", "finalbody"):
+            seq = getattr(node, field, None)
+            if not isinstance(seq, list) or child not in seq:
+                continue
+            out += _creators_before_next(seq[:seq.index(child)])
+            if isinstance(node, (ast.If, ast.While)):
+                out += _creators_in(node.test)
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                out += _creators_in(node.iter)
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    out += _creators_in(item.context_expr)
+            if field == "orelse" and isinstance(node, (ast.For, ast.AsyncFor, ast.While) + _TRY):
+                out += _creators_before_next(node.body)
+            if field == "finalbody":
+                for part in [node.body, node.orelse] + [h.body for h in node.handlers]:
+                    for st in part:
+                        out += _creators_in(st)
+        if isinstance(node, ast.ExceptHandler):
+            if node.type is not None:
+                out += _creators_in(node.type)
+            for st in parent[node].body:
+                out += _creators_in(st)
+        if isinstance(node, _FUNC):
+            return out
+        child = node
+    return None                         # 不在函数内（模块级），不在本守卫的求值面上
+
+
+def _violations(tree):
+    """`L0·result-02` 的判定：返回 [(Refused 行, 创建调用名, 创建调用行)]。
+
+    按**执行顺序**判：`Refused(...)` 的可达前序语句里出现创建调用即违规。
+    旧判定边 `ast.walk`（广度优先）边收集，结论取决于 AST 深度 ——
+    深处的 `commit` 之后顶层 `Refused` 漏报；`except` 里的 `Refused` 误报。
+    """
+    parent = {}
+    for n in ast.walk(tree):
+        for c in ast.iter_child_nodes(n):
+            parent[c] = n
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) != "Refused":
+            continue
+        reaching = _creators_reaching(node, parent)
+        if reaching:
+            line, nm = max(reaching)
+            out.append((node.lineno, nm, line))
+    return sorted(out)
+
+
+# 语义样本：(id, 源码, 是否应报)。前七条逐字取自 P2-pre A 简报。
+_R02_SAMPLES = [
+    ("probe-deep-commit-then-top-refused",
+     'def f():\n    if a:\n        with b:\n            store.commit(x)\n'
+     '    return Refused(6, "k")\n', True),
+    ("early-return-branch-commit-ignored",
+     'def f(v):\n    if v == "u":\n        store.commit(x)\n        return Done(1)\n'
+     '    return Refused(6, "k")\n', False),
+    ("refused-in-except-try-body-clean",
+     'def f():\n    try:\n        val = coerce(v)\n    except E as e:\n'
+     '        return Refused(6, "k")\n    store.commit(val)\n', False),
+    ("refused-in-except-after-try-body-commit",
+     'def f():\n    try:\n        store.commit(x)\n    except E:\n'
+     '        return Refused(6, "k")\n', True),
+    ("order-ok-refused-before-commit",
+     'def f():\n    if bad:\n        return Refused(6, "k")\n    store.commit(x)\n', False),
+    ("read-mode-open-before",
+     'def f():\n    open(p)\n    return Refused(6, "k")\n', False),
+    ("write-mode-open-before",
+     'def f():\n    open(p, "w")\n    return Refused(6, "k")\n', True),
+    # 计划 1 为之改写 `cmd/config.py::_coerce` 的假阳性形态：
+    # 早返回分支里的 commit 行号更前、AST 更浅，旧判定误报 except 里的 Refused。
+    ("early-return-commit-then-refused-in-except",
+     'def f(v):\n    if v == "u":\n        store.commit(x)\n        return Done(1)\n'
+     '    try:\n        val = coerce(v)\n    except E:\n        return Refused(6, "k")\n'
+     '    return Done(0)\n', False),
+    # elif 链：orelse 的末条是 If 而不是 return，要递归看它的分支才不误报。
+    ("elif-chain-all-early-return",
+     'def f(v):\n    if v == "a":\n        store.commit(x)\n        return Done(1)\n'
+     '    elif v == "b":\n        store.commit(y)\n        return Done(2)\n'
+     '    return Refused(6, "k")\n', False),
+    ("elif-chain-one-falls-through",
+     'def f(v):\n    if v == "a":\n        store.commit(x)\n        return Done(1)\n'
+     '    elif v == "b":\n        store.commit(y)\n'
+     '    return Refused(6, "k")\n', True),
+    # 外层复合语句的头部（with 项、if 条件、for 迭代）先于体执行。
+    ("refused-inside-with-lock",
+     'def f():\n    with store.lock(p):\n        return Refused(6, "k")\n', True),
+    ("refused-in-else-of-try-after-commit",
+     'def f():\n    try:\n        store.commit(x)\n    except E:\n        pass\n'
+     '    else:\n        return Refused(6, "k")\n', True),
+    ("refused-in-finally-after-early-return-commit",
+     'def f():\n    try:\n        if a:\n            store.commit(x)\n            return Done(1)\n'
+     '    finally:\n        return Refused(6, "k")\n', True),
+    # 未被调用的内嵌函数体不在执行路径上。
+    ("nested-def-body-not-executed",
+     'def f():\n    def g():\n        store.commit(x)\n    return Refused(6, "k")\n', False),
+]
+
+
+@pytest.mark.parametrize("name,src,expect", _R02_SAMPLES, ids=[s[0] for s in _R02_SAMPLES])
+def test_result02_violations_semantics(name, src, expect):
+    """`_violations` 的判定按**执行顺序**，不按 AST 深度或行号。"""
+    got = _violations(ast.parse(src))
+    assert bool(got) is expect, f"{name}：期望{'报' if expect else '不报'}，实得 {got}"
+
+
 def test_result02_refused_precondition_is_zero_resource(payload: Path):
     """`L0·result-02`〔按裁决改写〕：`Refused` 的唯一前提是**零资源已创建**。
 
@@ -46,42 +231,10 @@ def test_result02_refused_precondition_is_zero_resource(payload: Path):
 
     可求值的形态：构造 `Refused` 的函数体内，不得在该构造点**之前**出现资源创建调用。
     """
-    CREATORS = {"mkdir", "makedirs", "commit", "spawn", "spawn_supervised",
-                "materialize", "lock", "open"}
-
-    def _creates(node):
-        """这次调用是否**创建**资源。
-
-        `open` 要看模式：只读的 `open(p)` / `open(p, encoding=...)` 什么都不建，
-        把它算进来会让「先读文件再校验、校验失败 Refused」这种完全正当的
-        写法被判红 —— 守卫的提取面比不变式宽，报的是假阳性。
-        判据：第二个位置参或 `mode=` 里含 `w`/`a`/`x`/`+`。
-        """
-        nm = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-        if nm != "open":
-            return nm in CREATORS
-        mode = None
-        if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
-            mode = node.args[1].value
-        for kw in node.keywords:
-            if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                mode = kw.value.value
-        return bool(mode) and any(c in str(mode) for c in "wax+")
     bad = []
     for f, tree in _product_trees(payload):
-        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
-            created = []          # (lineno, name)
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Call):
-                    nm = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-                    if _creates(node):
-                        created.append((node.lineno, nm))
-                    elif nm == "Refused" and created:
-                        earlier = [c for c in created if c[0] < node.lineno]
-                        if earlier:
-                            bad.append(
-                                f"{f.name}:{node.lineno} 在 {earlier[-1][1]}@{earlier[-1][0]} 之后构造 Refused"
-                            )
+        for line, nm, cline in _violations(tree):
+            bad.append(f"{f.name}:{line} 在 {nm}@{cline} 之后构造 Refused")
     assert not bad, f"违反 BCR-R-01（Refused 的前提是零资源已创建）：{bad}"
 
 
