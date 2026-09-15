@@ -16,13 +16,18 @@ class SpecRefusal(Exception):
 
 
 class LaunchSpec:
-    """冻结的启动规格。**七字段**（裁决 R4-1 增 `service`）。"""
+    """冻结的启动规格。**九字段**（裁决 R4-1 增 `service`；spec §3.1 增 `route`、`secret_env`）。
+
+    `secret_env`：env 里属于密钥的变量名。**渲染层据此打码**，spec 本身保留原值 ——
+    spawn 要用原值，`--dry-run` 与日志只能看到 `****`。
+    """
 
     __slots__ = ("service", "argv", "env", "cwd_rel", "model_arg",
-                 "self_id_expected", "sources")
+                 "self_id_expected", "sources", "route", "secret_env")
 
-    def __init__(self, service, argv, env, cwd_rel, model_arg, self_id_expected, sources):
-        # type: (str, tuple, dict, str, object, object, dict) -> None
+    def __init__(self, service, argv, env, cwd_rel, model_arg, self_id_expected, sources,
+                 route=None, secret_env=()):
+        # type: (str, tuple, dict, str, object, object, dict, object, tuple) -> None
         self.service = service
         self.argv = tuple(argv)
         self.env = dict(env)
@@ -30,12 +35,24 @@ class LaunchSpec:
         self.model_arg = model_arg
         self.self_id_expected = self_id_expected
         self.sources = dict(sources)
+        self.route = route
+        self.secret_env = tuple(secret_env)
 
 
-def spec(service, cfg, caps):
-    # type: (str, object, dict) -> LaunchSpec
-    """产出 argv 向量。`G-SSOT-14`：非表驱动分支的集合 **== {api}**（相等断言）。
+def _fill(template, **kw):
+    # type: (str, object) -> list
+    """参数模板 → token 列表。**先按空白切分再逐个替换** —— 值里有空格也不会被切开。"""
+    if template in ("", "-", None):
+        return []
+    return [t.format(**kw) for t in template.split()]
 
+
+def spec(service, cfg, route):
+    # type: (str, object, object) -> object
+    """产出 argv 向量。**模型服务的 argv / env 全部来自 `route.row`（`backends.tsv`）**。
+
+    G-SSOT-14：非表驱动分支的集合 **== {api}**。模型目标缺判定结论 ⇒ None
+    （校验段据此 `Refused(5, svc.spec_unavailable)`）。
     态 A（INV-01）：`model_arg == 短 id`，**snapshot 绝对路径不出现在 argv 里**。
     """
     v = cfg.values
@@ -46,40 +63,46 @@ def spec(service, cfg, caps):
         return LaunchSpec(
             service=service,
             argv=("/usr/bin/python3", "-m", "gateway"),
-            # `MLX_GATEWAY_BIND` 从配置来，不再只有一个写死的默认值。
-            # `MLX_GATEWAY_TOKEN` 不在这里 —— 它由用户在环境里给，
-            # `runtime.spawn` 把父进程环境整体传下去（见那里的注释）。
             env={"MLX_GATEWAY_PORT": str(v["port"]),
                  "MLX_GATEWAY_BIND": str(v.get("api.bind", "127.0.0.1"))},
             cwd_rel="", model_arg=None, self_id_expected=None,
             sources=dict(cfg.sources),
         )
 
-    # 表驱动：模型服务。model_arg 是短 id，不是路径（INV-01 态 A）
-    # **argv[0] 是可执行的解释器路径**，不是包名。`backend` 声明的是「用哪个
-    # 后端模块」（`mlx_lm`），跑它需要一个解释器 —— 那个解释器由 ctx 注入。
-    # 此前这里直接把 `mlx_lm` 放进 argv[0]，`runtime.spawn` 在启动前再换掉，
-    # 于是 argv 有了第二个产出点，而 `--dry-run` 看不见它（INV-02）。
+    row = getattr(route, "row", None)
+    if not row:
+        return None
+    # **argv[0] 是可执行的解释器路径**，由 ctx 注入（INV-02：argv 只有这一个产出点）
     interp = cfg.venv_python or "python3"
-    argv = [
-        interp, "-m", f"{v['backend']}.server",
-        "--model", service,
-        "--port", str(v["port"]),
-        "--max-tokens", str(v["max_tokens"]),
-    ]
-    # **投机解码**：值是 `<id>-draft`，一个**相对 cwd 的别名**，不是路径 ——
-    # cwd 就是 `supervisor.materialize` 建的那个别名目录，里面有同名链接。
-    # 传绝对路径会违反 INV-01 态 A；传 HF repo id 则解析不到
-    # （`mlx_lm` 用 `snapshot_download(local_files_only=True)`，要标准缓存布局，
-    # 而本工具的下载器产出 `snapshots/main/` 无 refs —— 实测 LocalEntryNotFoundError）。
+    argv = [interp, "-m", row["module"],
+            "--model", service,
+            "--port", str(v["port"]),
+            "--max-tokens", str(v["max_tokens"]),
+            "--host", row["host"]]
+    n_concurrency = v.get("max_concurrency", 8)
+    argv += _fill(row["concurrency_args"], n=n_concurrency)
+    # **投机解码（完整小模型 drafter）**：值是 `<id>-draft`，一个**相对 cwd 的别名**，
+    # 不是路径 —— cwd 就是 `supervisor.materialize` 建的那个别名目录（BCR-2026-09-02）。
     if v.get("draft_model"):
-        argv += ["--draft-model", f"{service}-draft"]
-        if v.get("num_draft_tokens"):
-            argv += ["--num-draft-tokens", str(v["num_draft_tokens"])]
-    argv = tuple(argv)
+        argv += _fill(row["draft_args"], alias=f"{service}-draft",
+                      k=v.get("num_draft_tokens", 3))
+    if row.get("thinking") == "template" and getattr(route, "thinking", False):
+        argv.append("--enable-thinking")
+
+    env, secret = {}, []
+    if row.get("offline") == "1":
+        env["HF_HUB_OFFLINE"] = "1"
+    for raw_name in (row.get("env_clear") or "-").split(","):
+        name = raw_name.strip()
+        if name and name != "-":
+            env[name] = ""                   # 置空中和父进程继承（上游以真值判断）
+    key_env = row.get("key_env")
+    if key_env not in ("", "-", None) and v.get("backend.api_key"):
+        env[key_env] = str(v["backend.api_key"])
+        secret.append(key_env)
     return LaunchSpec(
-        service=service, argv=argv, env={},
+        service=service, argv=argv, env=env,
         cwd_rel=f"run/alias/{service}",
         model_arg=service, self_id_expected=service,
-        sources=dict(cfg.sources),
+        sources=dict(cfg.sources), route=route, secret_env=secret,
     )

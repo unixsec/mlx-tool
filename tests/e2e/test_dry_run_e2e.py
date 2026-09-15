@@ -80,10 +80,15 @@ def test_e1_argv_comes_from_product_spec_not_from_test(payload: Path, installed:
     ref = subprocess.run(
         [sys_py, "-c", textwrap.dedent("""
             import json
-            from mlx_server import backendarg, schema
-            cfg = schema.effective("qwen", {})
-            print(json.dumps(list(backendarg.spec("qwen", cfg, {}).argv)))
-        """)],
+            from mlx_server import backendarg, route, schema
+            from mlx_server.tables import TablesView
+            tv = TablesView("{share}")
+            cfg = schema.effective("qwen", {{}})
+            row = next(r for r in tv.backends() if r["backend"] == "mlx_lm")
+            rt = route.Route("mlx_lm", row, "R4", False, [], "", None,
+                             cfg.values.get("max_concurrency"), None)
+            print(json.dumps(list(backendarg.spec("qwen", cfg, rt).argv)))
+        """).format(share=payload / "share")],
         capture_output=True, text=True, check=False, timeout=15,
         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(payload / "lib")},
     )

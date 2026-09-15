@@ -114,9 +114,18 @@ def _dispatch(inv, c, stack, verbs):
         venv_py = _os.path.join(c.venv, "bin", "python3") if c.venv else ""
         if venv_py and not _os.path.exists(venv_py):
             venv_py = ""                       # venv 没建成 ⇒ 回落（§0.4.2）
-        return backendarg.spec(
-            target, schema.effective(target, layers or {}, venv_python=venv_py,
-                             defaults=_factory_defaults(c)), {})
+        cfg = schema.effective(target, layers or {}, venv_python=venv_py,
+                               defaults=_factory_defaults(c))
+        rt = None
+        if target != "api":
+            # **过渡**：Task 9 把判定接进校验段之前，模型目标恒走 mlx_lm 行 ——
+            # 与本改动前的行为逐字一致（argv 只多出 --host 与并发参数）。
+            from . import route as _route
+            from .tables import open_tables
+            rows = {r["backend"]: r for r in open_tables(c).backends()}
+            rt = _route.Route("mlx_lm", rows["mlx_lm"], "R4", False, [], "", None,
+                              cfg.values.get("max_concurrency"), None)
+        return backendarg.spec(target, cfg, rt)
 
     deps["backendarg_spec"] = _spec
     return mod.run(c, stack, inv, deps)

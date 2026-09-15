@@ -847,7 +847,10 @@ def test_draft_model_value_is_an_alias_not_a_path():
     tv = TablesView(str(Path(__file__).resolve().parents[2] / "payload" / "share"))
     v = schema.defaults_from(tv)
     v.update({"draft_model": "d", "num_draft_tokens": 4})
-    argv = backendarg.spec("m", schema.ServiceConfig("m", v, {}, "/py"), {}).argv
+    from mlx_server import route  # noqa: PLC0415
+    row = next(r for r in tv.backends() if r["draft_args"] not in ("", "-"))
+    rt = route.Route(row["backend"], row, "R2", False, [], "", None, 8, None)
+    argv = backendarg.spec("m", schema.ServiceConfig("m", v, {}, "/py"), rt).argv
 
     assert "--draft-model" in argv, f"配了 draft_model 却没拼出参数：{argv}"
     val = argv[argv.index("--draft-model") + 1]

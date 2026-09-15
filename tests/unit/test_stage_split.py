@@ -23,6 +23,7 @@ def _run_on_floor(payload: Path, sys_py: str, body: str):
     """
     prog = textwrap.dedent("""
         import json, os, tempfile
+        SHARE = "@SHARE@"
         from mlx_server import backendarg, schema
         from mlx_server.ctx import Ctx
         from mlx_server.cmd.svc import EXECUTE_STEPS, VALIDATE_STEPS, Invocation, run
@@ -45,16 +46,22 @@ def _run_on_floor(payload: Path, sys_py: str, body: str):
                                   "machine": {"port": 8177, "revision": "main"}}) + "\\n")
         ctx = Ctx(os.path.join(_d, "code"), os.path.join(_d, "data"),
                   os.path.join(_d, "w"), os.path.join(_d, "venv"),
-                  8340, (8100, 8199), None)
+                  8340, (8100, 8199), None, share_root=SHARE)
 
         calls = []
         deps = {
             # 桩必须返回**产品的真类型**，不是 dict——否则是拿桩和桩对拍（审视 P0-1）
             "backendarg_spec": lambda t, layers=None: backendarg.spec(
-                t, schema.effective(t, layers or {}), {}),
+                t, schema.effective(t, layers or {}),
+                __import__("mlx_server.route", fromlist=["Route"]).Route(
+                    "mlx_lm", {r["backend"]: r for r in
+                               __import__("mlx_server.tables", fromlist=["TablesView"])
+                               .TablesView(SHARE).backends()}["mlx_lm"],
+                    "R4", False, [], "", None, 8, None)),
             "caps_drift": lambda: (calls.append("caps.drift"), False)[1],
         }
     """) + textwrap.dedent(body)
+    prog = prog.replace("@SHARE@", str(payload / "share"))
     r = subprocess.run(
         [sys_py, "-c", prog], capture_output=True, text=True, timeout=15, check=False,
         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(payload / "lib")},
