@@ -1,0 +1,5 @@
+# 开发与测试依赖。产品运行时不需要它们；推理依赖由 deployer/install.sh 装进部署 venv。
+pytest>=8
+ruff
+# 模板渲染子进程的测试解释器需要 jinja2（spec §2.3）
+jinja2>=3.1
