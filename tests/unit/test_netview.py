@@ -26,8 +26,13 @@ def loader():
     if state["fail"]:
         raise RuntimeError("networksetup rc=1")
     return HW, state["ifc"]
+def on_change(s):
+    # 新契约：on_change 返回是否送达；这里总能送达，好保留这条用例原先
+    # 对 snaps/calls 计数的断言 —— 待送达重试路径另有专门用例覆盖。
+    snaps.append(s)
+    return True
 v = peers.NetView(loader, allow_cidrs="198.51.100.0/24", clock=lambda: t[0],
-                  wall=lambda: 1000.0 + t[0], on_change=snaps.append)
+                  wall=lambda: 1000.0 + t[0], on_change=on_change)
 nets = lambda s: [a["net"] for a in s["allowed_nets"]]
 r = {"before": [v.snapshot()["nets_source"], nets(v.snapshot())]}
 v.tick()
@@ -85,3 +90,41 @@ def test_netview_recompute_rules(payload, sys_py):
     assert got["snaps"] == 3
     assert got["never_ok"] == ["fallback", ["127.0.0.0/8", "::1/128", "198.51.100.0/24"]]
     assert got["loader"] == ["HW", "IF", {"rc": "RuntimeError", "slow": "TimeoutExpired"}]
+
+
+PROG_PENDING = r"""
+import json
+from gateway import peers
+HW = open("@NET@/networksetup.txt").read()
+IF = open("@NET@/ifconfig.txt").read()
+t = [0.0]
+loader_calls = []
+def loader():
+    loader_calls.append(t[0])
+    return HW, IF
+delivered_calls = []
+def on_change(snap):
+    # 第一次没送达（比如运行记录还没写出来），此后都送达
+    delivered_calls.append(snap["nets_source"])
+    return len(delivered_calls) > 1
+v = peers.NetView(loader, clock=lambda: t[0], wall=lambda: t[0], on_change=on_change)
+r = {}
+v.refresh()
+r["after_refresh"] = [len(delivered_calls), len(loader_calls)]
+t[0] = 1.0
+r["tick1"] = [v.tick(), len(delivered_calls), len(loader_calls)]
+t[0] = 2.0
+r["tick2"] = [v.tick(), len(delivered_calls), len(loader_calls)]
+print(json.dumps(r))
+"""
+
+
+def test_netview_pending_report_retries_on_tick_until_delivered(payload, sys_py):
+    """M13 修复：送达失败不是「记完就算了」——`tick()` 在未到重算周期时
+    也要补发上一份快照（不跑 loader），直到送达成功；一旦送达，后续
+    未到周期的 tick() 不应再调 on_change。"""
+    got = run_floor(payload, sys_py, PROG_PENDING, with_gateway=True, timeout=30, NET=NET)
+    assert got["after_refresh"] == [1, 1], "首次 refresh：on_change 调用一次，loader 调用一次"
+    assert got["tick1"] == [None, 2, 1], \
+        "未到 30 s 周期但有待送达的报告：tick() 应重发 on_change，不跑 loader"
+    assert got["tick2"] == [None, 2, 1], "送达成功后，未到周期的 tick() 不应再调 on_change"

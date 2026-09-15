@@ -9,7 +9,6 @@
 **其余一律排除**：雷雳端口与雷雳网桥（按前缀匹配 `en*` / `bridge*` 会把它们放进来）、
 VPN 隧道（默认路由常在这里，按默认路由判断会放行 VPN 对端）、AirDrop 等。
 """
-import contextlib
 import ipaddress
 import re
 import subprocess
@@ -200,6 +199,13 @@ class NetView:
     - `classify(addr)`：来源不在放行集合时，距上次尝试 ≥ `min_gap_sec`（2 s）先重算一次再判 ——
       刚连上 Wi-Fi 的设备不必等满 30 s，扫描器的连串请求也不会把重算打成每请求一次；
     - 加载失败：**保留上一份**并记 `nets_source=fallback`；从未成功过 ⇒ 回环 + `api.allow_cidrs`。
+
+    `on_change` 的契约：**返回布尔** —— 送达 `True`，没送达 `False`（抛异常按没送达算）。
+    没送达不是本类的错（调用方的门面可能暂时没有记录可并，见 `gateway.__main__`），
+    但也不能就此不管：本类记 `_report_pending`，`tick()` 在不到重算周期时若发现
+    上一份还没送达，会**只重发那一份快照**（不跑 loader、不动 `_last_try`）——
+    后台刷新线程每 `refresh_sec`（5 s）调一次 `tick()`，于是重发的粒度是 5 s，
+    不必等满 30 s 的重算周期（Task 11 的 L3 只等 15 s）。
     """
 
     def __init__(self, loader, allow_cidrs="", clock=None, wall=None,
@@ -216,6 +222,18 @@ class NetView:
         self._source, self._error = "fallback", ""
         self._computed_at = None
         self._last_try = None
+        self._report_pending = False
+        self._last_snap = None
+
+    def _deliver(self, snap):
+        # type: (dict) -> bool
+        """调 `on_change`，返回是否送达。没有回调 ⇒ 视作送达（没人等这份报告）。"""
+        if self._on_change is None:
+            return True
+        try:
+            return bool(self._on_change(snap))
+        except Exception:                                # noqa: BLE001
+            return False
 
     def refresh(self):
         # type: () -> dict
@@ -236,17 +254,25 @@ class NetView:
             self._source, self._error = source, err
             self._computed_at = self._wall()
             snap = self._snapshot_locked()
-        if self._on_change is not None:
-            # 上报失败不影响判定（调用方自己记日志）
-            with contextlib.suppress(Exception):        # noqa: BLE001
-                self._on_change(snap)
+            self._last_snap = snap
+        delivered = self._deliver(snap)
+        with self._lock:
+            self._report_pending = not delivered
         return snap
 
     def tick(self):
         # type: () -> object
         with self._lock:
             due = self._last_try is None or self._clock() - self._last_try >= self._period
-        return self.refresh() if due else None
+            pending, snap = self._report_pending, self._last_snap
+        if due:
+            return self.refresh()
+        if pending and snap is not None:
+            # 只补发上一份快照 —— 不跑 loader，不算作一次「重算尝试」
+            delivered = self._deliver(snap)
+            with self._lock:
+                self._report_pending = not delivered
+        return None
 
     def classify(self, addr):
         # type: (str) -> object

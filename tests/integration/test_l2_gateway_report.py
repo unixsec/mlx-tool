@@ -52,3 +52,34 @@ def test_merge_record_is_narrow_and_facade_has_five_symbols(payload, sys_py):
     assert got["four_symbols"] == "ValueError"
     assert got["facade"] == ["store.load", "supervisor.running", "supervisor.port_owner",
                              "supervisor.snapshot", "supervisor.merge_record"]
+
+
+PROG_REPORT = r"""
+import json
+import gateway.__main__ as gw_main
+
+calls = []
+gw_main.log_event = lambda level, event, **f: calls.append([level, event, f])
+
+results = [False, False, True]
+def fake_merge(ctx, service, fields, pid=None):
+    return results.pop(0)
+
+facade = {"supervisor.merge_record": fake_merge}
+report = gw_main.make_reporter(facade, None)
+snap = {"allowed_nets": [], "excluded_ifaces": [], "nets_source": "parsed",
+        "nets_computed_at": 1.0, "nets_error": ""}
+r = {"deliveries": [report(snap), report(snap), report(snap)]}
+r["events"] = [[c[0], c[1]] for c in calls]
+print(json.dumps(r))
+"""
+
+
+def test_reporter_logs_skipped_once_per_failure_streak(payload, sys_py):
+    """M13 修复：`merge_record` 返回 `False` 不是异常，此前完全没有日志 ——
+    api.log 显示 `nets_refreshed` 而运行记录其实没变。现在：没送达只记一次
+    `nets_report_skipped`（不刷屏），送达成功才记 `nets_refreshed`。"""
+    got = run_floor(payload, sys_py, PROG_REPORT, with_gateway=True)
+    assert got["deliveries"] == [False, False, True]
+    assert got["events"] == [["error", "nets_report_skipped"], ["info", "nets_refreshed"]], \
+        "连续两次没送达只应记一次 nets_report_skipped；送达成功才记 nets_refreshed"
