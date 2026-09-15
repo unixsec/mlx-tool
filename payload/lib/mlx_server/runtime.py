@@ -32,6 +32,15 @@ from .weights import _dir_bytes
 
 # ── spawn ──────────────────────────────────────────────────────────
 
+# 子进程不得继承 shell 里的这两把密钥（评审 I-4；控制器裁决 P2-pre B1）：
+# `backend.api_key` 配置为空、而开发者 shell 导出了 `MLX_BACKEND_API_KEY` 时，
+# 若子进程仍从 `os.environ` 继承到它，网关（以及它拉起的 mlx_lm / mlx_vlm
+# 后端）就会在密钥「未声明」的情况下仍然工作 —— 运行记录写
+# `backend_key_fp=None`，轮换检测据此误报「没变」。`MLX_GATEWAY_TOKEN` 同理。
+# 只挡「shell 继承」这一条路径：`spec.env` 显式给出的值照常生效
+# （网关令牌经 ctx 折入 cfg 后由 `backendarg` 的 api 分支放进 `spec.env`）。
+_STRIP_INHERITED_ENV = ("MLX_GATEWAY_TOKEN", "MLX_BACKEND_API_KEY")
+
 def spawn(spec, cwd, log_path=None, venv_python=None, code_root=None):
     # type: (object, str, str, str) -> dict
     """起后端进程。**新会话新进程组**，日志重定向由本函数做（`BCR-R-24`）。
@@ -43,7 +52,10 @@ def spawn(spec, cwd, log_path=None, venv_python=None, code_root=None):
     if venv_python and argv and argv[0] in VENV_PACKAGES:
         argv[0] = venv_python                      # `mlx_lm` 这类名字换成 venv 解释器
 
-    env = dict(os.environ, **dict(spec.env or {}))
+    env = dict(os.environ)
+    for _name in _STRIP_INHERITED_ENV:
+        env.pop(_name, None)
+    env.update(spec.env or {})
     if code_root:
         # 网关以 `-m gateway` 起，包在代码根下；T1 在 code_root/lib
         env["PYTHONPATH"] = os.pathsep.join(
