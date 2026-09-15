@@ -25,9 +25,6 @@ api.honest_no_boundary	同机场景下模型端口本就在回环上无鉴权监
 bootstrap.manifest_missing	分发清单缺失：{missing}
 check.failed	有检查项未通过（见上）。每一项的下一步写在它自己那行
 check.undeterminable	有检查项无法判定（见上）。通常是探测工具不可用，不代表那一项坏了
-gateway.no_upstream	网关未接上游
-gateway.upstream_error	上游返回错误
-gateway.upstream_timeout	上游超时
 meta.confirm_declined	确认未通过
 bench.no_transport	基准需要一个可用的推理后端，当前没有配置传输层
 bench.not_running	{service} 没在跑。先起它：mlx up {service}

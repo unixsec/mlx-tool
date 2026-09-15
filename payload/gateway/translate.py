@@ -65,13 +65,14 @@ def rewrite_frame(frame, short_id):
     return b"data: " + json.dumps(obj, ensure_ascii=False).encode() + b"\n\n"
 
 
-def build_error(status, msg_key, request_id=None):
-    # type: (int, str, str) -> tuple
-    """错误响应的**唯一构造点**。**签名里没有 body 入参** ——
+def build_error(status, err_type, message=None, request_id=None):
+    # type: (int, str, str, str) -> tuple
+    """网关自身错误的**唯一构造点**。**签名里没有 body 入参** ——
 
-    有了它，上游的错误体就能顺着传出去（`X-T2-17-b` 的坏样本）。
+    有了它，上游的错误体就能顺着传出去（`X-T2-17-b` 的坏样本）。上游 4xx 的透传与净化
+    走 `upstream_error`（Task 6），不经这里。
     """
-    body = {"error": {"message": msg_key, "type": "upstream_error"}}
+    body = {"error": {"message": message or err_type, "type": err_type}}
     if request_id:
         body["error"]["request_id"] = request_id
     return (status, body)

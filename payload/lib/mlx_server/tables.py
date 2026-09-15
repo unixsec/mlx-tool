@@ -57,7 +57,7 @@ class TablesView:
                    "restart", "exportable", "secret", "group", "readers"),
         "drafters": ("model_type",),
         "backends": ("backend", "module", "host", "offline", "concurrency_args",
-                     "draft_args", "thinking", "ready", "key_env", "env_clear"),
+                     "draft_args", "thinking", "ready", "key_env", "env_clear", "endpoints"),
     }
 
     def __init__(self, tables_root):

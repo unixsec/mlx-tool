@@ -5,7 +5,7 @@
 import json
 import sys
 
-from . import guard, peers, routes, translate
+from . import endpoints, guard, peers, routes, translate
 
 # `G-DEP-03` 的五符号白名单（第五个是 spec §3.4 的放行网段上报，只能写
 # `supervisor.MERGEABLE` 里的键）。**相等断言** —— 网关 import 了 store 就能调
@@ -79,10 +79,11 @@ class Gateway:
     def prepare(self, path, headers=None, body=None, method="POST", peer="127.0.0.1"):
         """请求预处理的**唯一实现**（非流式 `handle` 与 server 层流式路径共用）。
 
-        顺序固定（spec §4.2）：**来源分类 → 预检短路 → 鉴权 → Content-Type → 本地端点 → 路由**。
-        返回 `("reply", (status, body))`，或 `("forward", port, model_arg, short_id, peer_class)`。
+        顺序固定（spec §4.2）：**来源分类 → 预检短路 → 鉴权 → Content-Type → 路径规范化与白名单
+        → 路由（body.model 或扇出）→ 目标 `endpoints` 包含性**。
         """
         headers = {k.lower(): v for k, v in (headers or {}).items()}
+        path, query = endpoints.normalize(path)
         peer_class = self.classify(peer)
         blocked = guard.peer_guard(peer_class)
         if blocked:
@@ -95,10 +96,23 @@ class Gateway:
             if out:
                 return ("reply", out)
 
-        if path == "/healthz":
-            return ("reply", self.healthz())
-        if path == "/v1/models":
-            return ("reply", translate.list_models(self.view))
+        hit = endpoints.match(method, path)
+        if hit is None:
+            return ("reply", translate.build_error(
+                404, "endpoint_not_supported", f"{method} {path} is not served by this gateway"))
+        family, how = hit
+        if how == "local":
+            return ("reply", self.healthz() if path == "/healthz"
+                    else translate.list_models(self.view))
+        # 查询串**只给扇出端点**（`input_items` 的分页参数在这里）。按 body 路由的端点丢掉它：
+        # mlx_lm 按路径**精确匹配**（`/v1/messages?beta=true` 这类客户端默认带的查询串会让它 404），
+        # 而这些端点的参数全在请求体里
+        upstream = path + ("?" + query if query and how == "fanout" else "")
+        if how == "fanout":
+            targets = [(sid, self.view.port_of(sid)) for sid in self.view.route_keys()
+                       if family in endpoints.endpoints_of(
+                           self.facade["supervisor.snapshot"](self.ctx, sid))]
+            return ("fanout", targets, upstream, peer_class)
 
         blocked = guard.route_guard(path, body, self.view.route_keys())
         if blocked:
@@ -106,33 +120,55 @@ class Gateway:
         short_id = (body or {}).get("model")
         port = self.view.port_of(short_id)
         if port is None:
-            return ("reply", translate.build_error(503, "gateway.route_lost"))
-
-        # INV-27：对正在跑的服务，`model_arg` 只从运行记录快照读，不调 `spec()`
+            return ("reply", translate.build_error(503, "route_lost",
+                                                   f"model {short_id!r} is no longer routable"))
+        # INV-27：对正在跑的服务，`model_arg` 与能力只从运行记录快照读，不调 `spec()`
         snap = self.facade["supervisor.snapshot"](self.ctx, short_id)
+        if family not in endpoints.endpoints_of(snap):
+            return ("reply", translate.build_error(
+                404, "endpoint_not_supported_by_backend",
+                f"model {short_id!r} ({(snap or {}).get('backend') or 'mlx_lm'}) does not serve {path}"))
         model_arg = (snap or {}).get("model_arg") or short_id
-        return ("forward", port, model_arg, short_id, peer_class)
+        return ("forward", port, model_arg, short_id, peer_class, upstream)
 
     def handle(self, method, path, headers=None, body=None, forward=None, peer="127.0.0.1"):
         """一次**非流式**请求的完整链路。流式在 server 层，见 `prepare`。"""
         kind, *rest = self.prepare(path, headers, body, method=method, peer=peer)
         if kind == "reply":
             return rest[0]
-        port, model_arg, short_id, _peer_class = rest
-
         if forward is None:
-            return translate.build_error(503, "gateway.no_upstream")
+            return translate.build_error(503, "no_upstream", "gateway has no upstream transport")
+
+        if kind == "fanout":
+            targets, upstream, _peer_class = rest
+
+            def call(sid, port):
+                hdrs = self.upstream_headers(sid)
+                return lambda: forward(port, upstream, body if method == "POST" else None,
+                                       method=method, timeout_sec=endpoints.FANOUT_TIMEOUT_SEC,
+                                       **({"headers": hdrs} if hdrs else {}))
+            status, rbody, sid = endpoints.fanout([(s, call(s, p)) for s, p in targets])
+            if 200 <= status < 300:
+                return (status, translate.outbound(rbody, sid))
+            if status == 404:
+                return translate.build_error(404, "not_found", "no running backend knows this id")
+            if status == 504:
+                return translate.build_error(504, "upstream_timeout", "backends did not answer in time")
+            return translate.build_error(502 if status >= 500 else status, "upstream_error",
+                                         "backend returned an error")
+
+        port, model_arg, short_id, _peer_class, upstream = rest
         hdrs = self.upstream_headers(short_id)
         # 只在需要时传 headers —— 不需要鉴权的转发，调用形态与此前逐字一致
-        out = forward(port, path, translate.inbound(body, model_arg),
+        out = forward(port, upstream, translate.inbound(body, model_arg),
                       **({"headers": hdrs} if hdrs else {}))
         if out is None:
-            return translate.build_error(504, "gateway.upstream_timeout")
+            return translate.build_error(504, "upstream_timeout", "backend did not answer in time")
         status, rbody = out
         if status >= 400:
-            # **错误响应体不透传** —— 上游的内部信息不回给客户端
-            return translate.build_error(502 if status >= 500 else status,
-                                         "gateway.upstream_error")
+            # **错误响应体不透传** —— 上游的内部信息不回给客户端（Task 6 按来源细化）
+            return translate.build_error(502 if status >= 500 else status, "upstream_error",
+                                         "backend returned an error")
         return (status, translate.outbound(rbody, short_id))
 
 

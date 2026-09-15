@@ -201,7 +201,8 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce):
                     "max_concurrency": rt.max_concurrency,
                     "rule": rt.rule,
                     "effort_domain": list(rt.effort_domain),
-                    "key_fp": rt.key_fp})
+                    "key_fp": rt.key_fp,
+                    "endpoints": [e for e in (rt.row.get("endpoints") or "").split(",") if e]})
     if not spec.model_arg:
         # 网关：密钥只存指纹（spec §3.4），`status` 用它判「已变更，需重启」
         from .route import key_fingerprint

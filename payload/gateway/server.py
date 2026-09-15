@@ -18,13 +18,12 @@ from .app import log_event
 _MAX_BODY = 8 * 1024 * 1024          # 8 MB：拒绝超大体，防内存打爆
 
 
-def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None):
-    """把改写后的请求转给本机后端。返回 `(status, body)`；传输失败返回 `None`。"""
-    req = urllib.request.Request(
-        f"http://{host}:{port}{path}",
-        data=json.dumps(payload).encode(), method="POST",
-        headers=dict({"Content-Type": "application/json"}, **(headers or {})),
-    )
+def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None, method="POST"):
+    """把请求转给本机后端。返回 `(status, body)`；传输失败返回 `None`。`payload is None` ⇒ 无请求体。"""
+    data = None if payload is None else json.dumps(payload).encode()
+    base = {"Content-Type": "application/json"} if data is not None else {}
+    req = urllib.request.Request(f"http://{host}:{port}{path}", data=data, method=method,
+                                 headers=dict(base, **(headers or {})))
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as r:  # noqa: S310
             return (r.status, json.loads(r.read() or b"{}"))
@@ -104,7 +103,7 @@ def make_handler(gw):
                                               "type": "invalid_request"}})
 
         def do_GET(self):        # noqa: N802
-            st, body = gw.handle("GET", self.path.split("?")[0], dict(self.headers),
+            st, body = gw.handle("GET", self.path, dict(self.headers),
                                  peer=self.client_address[0])
             self._reply(st, body)
 
@@ -115,15 +114,20 @@ def make_handler(gw):
             clen = (self.headers.get("Content-Length") or "").strip()
             if self.headers.get("Transfer-Encoding") is not None or clen.lstrip("0"):
                 self.close_connection = True
-            st, body = gw.handle("OPTIONS", self.path.split("?")[0], dict(self.headers),
+            st, body = gw.handle("OPTIONS", self.path, dict(self.headers),
                                  peer=self.client_address[0])
             self._reply(st, body, preflight=(st == 204))
+
+        def do_DELETE(self):     # noqa: N802
+            st, body = gw.handle("DELETE", self.path, dict(self.headers), None,
+                                 forward=forward, peer=self.client_address[0])
+            self._reply(st, body)
 
         def do_POST(self):       # noqa: N802
             body, err = self._read_body()
             if err:
                 return self._reply(*err)
-            path = self.path.split("?")[0]
+            path = self.path
             # **流式要走另一条转发路径。** 此前不分流：`stream: true` 的请求
             # 被原样转给后端，后端回 SSE，而 `forward` 用 json.loads 解析它 ⇒
             # ValueError ⇒ None ⇒ 客户端收到 504 upstream_timeout。
@@ -146,7 +150,11 @@ def make_handler(gw):
                                      peer=self.client_address[0])
             if kind == "reply":
                 return self._reply(*rest[0])
-            port, model_arg, short_id, _peer_class = rest
+            if kind == "fanout":                 # 按 id 的端点没有流式形态，按非流式处理
+                st, out = gw.handle("POST", path, dict(self.headers), body, forward=forward,
+                                    peer=self.client_address[0])
+                return self._reply(st, out)
+            port, model_arg, short_id, _peer_class, upstream = rest
 
             dec = SseDecoder()
             state = {"started": False}
@@ -167,12 +175,12 @@ def make_handler(gw):
                     self.wfile.flush()
 
             hdrs = gw.upstream_headers(short_id)
-            ok = forward_stream(port, path, translate.inbound(body, model_arg), on_chunk,
+            ok = forward_stream(port, upstream, translate.inbound(body, model_arg), on_chunk,
                                 **({"headers": hdrs} if hdrs else {}))
             if not state["started"]:
                 # 一个字节都没来 ⇒ 还能正常回一个错误响应
                 return self._reply(*translate.build_error(
-                    504, "gateway.upstream_timeout"))
+                    504, "upstream_timeout", "backend did not answer in time"))
             if dec.pending():
                 # 未终结的帧**不得当作正常结束**（SseDecoder.pending 的契约）
                 log_event("error", "sse_truncated", model=short_id,

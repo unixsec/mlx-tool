@@ -10,6 +10,7 @@
 #   ready             bind = 先监听后加载；load = 加载完成才监听（决定就绪超时）
 #   key_env           后端密钥注入的环境变量；`-` = 上游无鉴权机制
 #   env_clear         置空的环境变量（中和父进程继承，逗号分隔）；`-` = 无
-# 列（顺序即 tables.COLUMNS）：backend module host offline concurrency_args draft_args thinking ready key_env env_clear
-mlx_lm	mlx_lm.server	127.0.0.1	1	--decode-concurrency {n} --prompt-concurrency {n}	--draft-model {alias} --num-draft-tokens {k}	-	bind	-	-
-mlx_vlm	mlx_vlm.server	127.0.0.1	1	--max-num-seqs {n}	-	template	load	MLX_VLM_SERVER_API_KEY	MLX_VLM_DRAFT_MODEL,MLX_VLM_DRAFT_KIND,MLX_VLM_DRAFT_BLOCK_SIZE,MLX_TRUST_REMOTE_CODE,MLX_VLM_MAX_NUM_SEQS
+#   endpoints         该后端服务的端点族（spec §4.2）：chat / completions / responses / messages，逗号分隔
+# 列（顺序即 tables.COLUMNS）：backend module host offline concurrency_args draft_args thinking ready key_env env_clear endpoints
+mlx_lm	mlx_lm.server	127.0.0.1	1	--decode-concurrency {n} --prompt-concurrency {n}	--draft-model {alias} --num-draft-tokens {k}	-	bind	-	-	chat,completions
+mlx_vlm	mlx_vlm.server	127.0.0.1	1	--max-num-seqs {n}	-	template	load	MLX_VLM_SERVER_API_KEY	MLX_VLM_DRAFT_MODEL,MLX_VLM_DRAFT_KIND,MLX_VLM_DRAFT_BLOCK_SIZE,MLX_TRUST_REMOTE_CODE,MLX_VLM_MAX_NUM_SEQS	chat,responses,messages
