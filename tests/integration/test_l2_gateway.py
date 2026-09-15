@@ -35,7 +35,8 @@ def facade(running=None):
     return {"store.load": lambda c: Res(),
             "supervisor.running": running or (lambda c, s: Ok(True)),
             "supervisor.port_owner": lambda c, s: Ok(True),
-            "supervisor.snapshot": lambda c, s: {"model_arg": s}}
+            "supervisor.snapshot": lambda c, s: {"model_arg": s},
+            "supervisor.merge_record": lambda c, s, f, pid=None: True}
 '''
 
 

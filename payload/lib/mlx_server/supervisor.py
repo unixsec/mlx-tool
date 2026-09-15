@@ -216,6 +216,32 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce):
         fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True))
 
 
+# 网关经门面能并进 api 运行记录的键（spec §3.4）。**白名单**：门面给网关的是
+# 「报告自己算出的放行网段」的能力，不是改 pid / 端口 / 指纹的能力。
+MERGEABLE = frozenset({"allowed_nets", "excluded_ifaces", "nets_source",
+                       "nets_computed_at", "nets_error"})
+
+
+def merge_record(ctx, service, fields, pid=None):
+    # type: (object, str, dict, object) -> bool
+    """把 `fields` 并进已有运行记录。**运行记录的写者仍只有本模块**（`write_record` 与这里）。
+
+    记录不存在 ⇒ False（不新建：网关不是经 `mlx up api` 起的就没有记录可并）；
+    给了 `pid` 而记录的 pid 不同 ⇒ False（陈旧记录属于上一个进程，不替它写）。
+    """
+    bad = sorted(set(fields) - MERGEABLE)
+    if bad:
+        raise ValueError(f"merge_record 不接受这些键：{bad}")
+    snap = snapshot(ctx, service)
+    if snap is None or (pid is not None and snap.get("pid") != pid):
+        return False
+    snap.update(fields)
+    from . import atomic
+    with atomic.replace(_record_path(ctx, service), mode=0o600) as fh:
+        fh.write(json.dumps(snap, ensure_ascii=False, sort_keys=True))
+    return True
+
+
 def effective_port(ctx, service, registered=None):
     # type: (object, str, object) -> object
     """服务**实际在用**的端口。run 记录优先（那是真在跑的那个），回落登记值。

@@ -1,24 +1,26 @@
 """T2 · 网关装配与生命周期。
 
-只经**四符号只读门面**调 T1（`G-DEP-03` 相等断言，多一个少一个都红）。
+只经**五符号只读门面**调 T1（`G-DEP-03` 相等断言，多一个少一个都红）。
 """
 import json
 import sys
 
 from . import guard, routes, translate
 
-# `G-DEP-03` 的四符号白名单。**相等断言** —— 网关 import 了 store 就能调 commit，
-# 所以门面必须是白名单而不是「别乱调」的口头约定。
+# `G-DEP-03` 的五符号白名单（第五个是 spec §3.4 的放行网段上报，只能写
+# `supervisor.MERGEABLE` 里的键）。**相等断言** —— 网关 import 了 store 就能调
+# commit，所以门面必须是白名单而不是「别乱调」的口头约定。
 T1_FACADE = ("store.load", "supervisor.running",
-             "supervisor.port_owner", "supervisor.snapshot")
+             "supervisor.port_owner", "supervisor.snapshot", "supervisor.merge_record")
 
 
 class Gateway:
     """网关进程内状态。**日志两条流写本进程 fd 1/2**，文件由 supervisor 重定向。"""
 
-    __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key")
+    __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key", "nets")
 
-    def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None, backend_key=None):
+    def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None, backend_key=None,
+                 nets=None):
         self.ctx = ctx
         self.facade = facade            # {name: callable}，键集 == T1_FACADE
         self.view = routes.RouteView()
@@ -26,6 +28,7 @@ class Gateway:
         # 令牌在**装配段**注入，请求处理路径改不了它（信任边界）
         self._token = token
         self._backend_key = backend_key
+        self.nets = nets
         missing = set(T1_FACADE) - set(facade)
         extra = set(facade) - set(T1_FACADE)
         if missing or extra:

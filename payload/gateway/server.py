@@ -173,10 +173,14 @@ def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0):
         while not stop.wait(refresh_sec):
             try:
                 gw.refresh_routes()
+                if gw.nets is not None:
+                    gw.nets.tick()
             except Exception as e:                      # noqa: BLE001
                 # 刷新失败**不能让网关死** —— 路由表转 stale，请求仍按旧表转发
                 log_event("error", "route_refresh_failed", detail=str(e)[:200])
 
+    if gw.nets is not None:
+        gw.nets.refresh()
     gw.refresh_routes()
     t = threading.Thread(target=refresher, daemon=True)
     t.start()

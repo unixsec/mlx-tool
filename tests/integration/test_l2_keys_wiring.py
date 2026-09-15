@@ -74,7 +74,8 @@ snaps = {"vlm": {"model_arg": "vlm", "backend_auth": True},
          "txt": {"model_arg": "txt", "backend_auth": False}}
 facade = {"store.load": lambda c: Res(), "supervisor.running": lambda c, s: Ok(True),
           "supervisor.port_owner": lambda c, s: Ok(True),
-          "supervisor.snapshot": lambda c, s: snaps.get(s)}
+          "supervisor.snapshot": lambda c, s: snaps.get(s),
+          "supervisor.merge_record": lambda c, s, f, pid=None: True}
 cap = {}
 def fwd(port, path, body, headers=None):
     cap[body["model"]] = headers

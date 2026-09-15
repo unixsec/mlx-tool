@@ -27,6 +27,9 @@ DEFAULT_BINS = {
     "lsof": "/usr/sbin/lsof",
     "pgrep": "/usr/bin/pgrep",
     "vm_stat": "/usr/bin/vm_stat",
+    # 网关计算放行网段用（spec §4.1）
+    "networksetup": "/usr/sbin/networksetup",
+    "ifconfig": "/sbin/ifconfig",
 }
 
 
