@@ -423,6 +423,30 @@ def test_g_cli_03_code_literals_subset_of_registered():
     Cardinality.check("实现中超出登记集合的退出码", sorted(set(over)), rel="empty")
 
 
+def _read_sites(src):
+    """`G-CLI-01` 的读点提取：源码里 `args` / `flags` / `inv.args` 邻近 `.get("name")` 的 name 集合。"""
+    read = set(re.findall(r'\b(?:args|flags|inv\.args)\b[^)\n]{0,40}?'
+                          r'\.get\(\s*"([a-z_]+)"', src))
+    read |= set(re.findall(r'\(inv\.args or \{\}\)\.get\("([a-z_]+)"', src))
+    return read
+
+
+@pytest.mark.parametrize("src,expect", [
+    # 字符串字面量里的子串 `args` 不是读点（计划 1 Task 8 为此拆过一行）
+    ('row = ("concurrency_args", v.get("max_concurrency", 8))', set()),
+    ('x = my_flags.get("reveal")', set()),
+    ('x = argsx.get("reveal")', set()),
+    # 守卫现有识别形态仍然识别
+    ('x = args.get("reveal")', {"reveal"}),
+    ('x = flags.get("reveal")', {"reveal"}),
+    ('x = inv.args.get("reveal", False)', {"reveal"}),
+    ('x = (inv.args or {}).get("reveal")', {"reveal"}),
+])
+def test_g_cli_01_read_site_extraction(src, expect):
+    """读点正则的名称部分带词边界：子串不构成读取，否则假读点会掩盖「登记了却从未读取」。"""
+    assert _read_sites(src) == expect
+
+
 def test_g_cli_01_flags_match_read_sites():
     """**`G-CLI-01`**：`cli.tsv` 的 flag 集合 == 实现中的读取点集合。
 
@@ -436,10 +460,7 @@ def test_g_cli_01_flags_match_read_sites():
     lib = Path(__file__).resolve().parents[2] / "payload" / "lib" / "mlx_server"
     read = set()
     for f in lib.rglob("*.py"):
-        src = f.read_text()
-        read |= set(re.findall(r'(?:args|flags|inv\.args)[^)\n]{0,40}?'
-                               r'\.get\(\s*"([a-z_]+)"', src))
-        read |= set(re.findall(r'\(inv\.args or \{\}\)\.get\("([a-z_]+)"', src))
+        read |= _read_sites(f.read_text())
     # **内部注入键**：这些不来自命令行，由 deps / 上层构造塞进 args。
     # 它们不该出现在 cli.tsv 里 —— 用户从命令行传它们必须被拒
     # （`--layers=x` 曾经因此把解释器打出 traceback）。
