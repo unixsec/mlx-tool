@@ -30,10 +30,10 @@ gc	model	cmd.model.reclaim		?		0,1,2,5,6,9	可回收量 + 实际回收量	--json
 repair	model	cmd.model.reclaim		?		0,1,2,5,6,9	重建前后逐字段差异	--json	无差异 → 合法空数组	从磁盘读到了什么	yes	store.load().record(<id>).machine ✅	public	USER-GUIDE.md#repair	无
 ls	model	cmd.model.query		0		0,2	表格	--json	无注册项 → 合法空数组	探测降级	no	store.load().records ✅	public	USER-GUIDE.md#ls	无
 info	model	cmd.model.query		1		0,2,6	全部 user 段 + machine 段字段	--json	n/a	—	no	store.load().record(<id>) ✅	public	USER-GUIDE.md#info	无
-get	config	cmd.config		1		0,2,6	键值 + 逐行来源标注	--json	无匹配 → 合法空数组	—	no	schema.effective(<key>) ✅	public	USER-GUIDE.md#get	无
-set	config	cmd.config		1		0,1,2,6,7	生效后的值 + 生效时机三态文案	--json	n/a	需重启哪个消费者（文案中的命令必须存在）	yes	schema.effective(<key>) ✅	public	USER-GUIDE.md#set	无
-ls	config	cmd.config		0		0,2,6	键值 + 逐行来源标注	--json	无匹配 → 合法空数组	—	no	schema.effective(<key>) 的全键集合 ✅	public	USER-GUIDE.md#ls	无
-validate	config	cmd.config		0		0,2,6,64,65	每检查项一行 name<TAB>verdict<TAB>detail	是	n/a	文件名 + 行号 + 字段名	no	schema.effective(<key>) 的全键集合 + ports.conflict_check() 类型核对：conflict_c	public	USER-GUIDE.md#validate	无
+get	config	cmd.config		1		0,2,3,6	键值 + 逐行来源标注	--json	无匹配 → 合法空数组	—	no	schema.effective(<key>) ✅	public	USER-GUIDE.md#get	无
+set	config	cmd.config		1		0,1,2,3,6,7	生效后的值 + 生效时机三态文案	--json	n/a	需重启哪个消费者（文案中的命令必须存在）	yes	schema.effective(<key>) ✅	public	USER-GUIDE.md#set	无
+ls	config	cmd.config		0		0,2,3,6	键值 + 逐行来源标注	--json	无匹配 → 合法空数组	—	no	schema.effective(<key>) 的全键集合 ✅	public	USER-GUIDE.md#ls	无
+validate	config	cmd.config		0		0,2,3,6,64,65	每检查项一行 name<TAB>verdict<TAB>detail	是	n/a	文件名 + 行号 + 字段名	no	schema.effective(<key>) 的全键集合 + ports.conflict_check() 类型核对：conflict_c	public	USER-GUIDE.md#validate	无
 show	caps	cmd.caps		0		0,2	每 (type, param) 一行三态 + 采集时间 + 三包指纹	--json	n/a	漂移提示	no	caps.get(<type>,<param>) 类型核对：返回 cap_state 三态 ✅	public	USER-GUIDE.md#show	无
 refresh	caps	cmd.caps		0		0,1,2,3,5,6,9	采集结果差异	--json	无变化 → 合法空数组	逐项 --help 的进度；unknown 项计入报告	yes	caps.get(<type>,<param>) + caps.collected_at()	public	USER-GUIDE.md#refresh	无
 verify	bootstrap	cmd.bootstrap		0		0,2,3,6	每成员一行 path<TAB>verdict	是	n/a	缺失/多余成员的绝对路径	no	tables.manifest() ✅	public	USER-GUIDE.md#verify	无
@@ -43,7 +43,7 @@ confirm	internal	cmd.meta		1		0,5				—	no	写不出 —— 确认结果是一�
 trash ls	model	cmd.model.reclaim		0		0,1,2,5,6	条目表	--json	空回收站 → 合法空数组		no	vault.entries()	public	USER-GUIDE.md#trash	
 trash restore	model	cmd.model.reclaim		1		0,1,2,5,6	恢复结论	--json	n/a		yes	os.path.exists(<原路径>)	public	USER-GUIDE.md#trash	#trash
 trash empty	model	cmd.model.reclaim		0		0,1,2,5,6	清空结论	--json	n/a	确认提示	yes	vault.entries() == []	public	USER-GUIDE.md#trash	
-unset	config	cmd.config		?		0,1,2,6,7	撤销结论 + 回落后的生效值	--json	本来就没设 → 合法空对象		yes	schema.effective(<key>)	public	USER-GUIDE.md#config	
-diff	config	cmd.config		?		0,2,6	只列与默认值不同的键	--json	无差异 → 合法空数组		no	schema.effective(<key>)	public	USER-GUIDE.md#config	
-export	config	cmd.config		?		0,1,2,5,6,7,8	可导出的键值对	--json	无改动 → 合法空对象		no	schema.effective(<key>)	public	USER-GUIDE.md#config	
-import	config	cmd.config		?		0,1,2,5,6,7,8	逐条结论：应用/拒绝/失败	--json	空文件 → 合法空数组	预览与逐条报告	yes	schema.effective(<key>)	public	USER-GUIDE.md#config	
+unset	config	cmd.config		?		0,1,2,3,6,7	撤销结论 + 回落后的生效值	--json	本来就没设 → 合法空对象		yes	schema.effective(<key>)	public	USER-GUIDE.md#config	
+diff	config	cmd.config		?		0,2,3,6	只列与默认值不同的键	--json	无差异 → 合法空数组		no	schema.effective(<key>)	public	USER-GUIDE.md#config	
+export	config	cmd.config		?		0,1,2,3,5,6,7,8	可导出的键值对	--json	无改动 → 合法空对象		no	schema.effective(<key>)	public	USER-GUIDE.md#config	
+import	config	cmd.config		?		0,1,2,3,5,6,7,8	逐条结论：应用/拒绝/失败	--json	空文件 → 合法空数组	预览与逐条报告	yes	schema.effective(<key>)	public	USER-GUIDE.md#config	

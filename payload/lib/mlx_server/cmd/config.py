@@ -16,6 +16,14 @@ def _coerce(key, val, defs):
         return val, str(exc)
 
 
+def _mask1(key, value, defs):
+    # type: (str, object, dict) -> object
+    """`schema.masked({key: value}, defs)[key]` 的单键省字版。**唯一实现点**——
+    此前 `get`/`validate`/`diff`/`unset`/`set` 五处各抄一份同样的三段式，
+    抄的次数越多，漏改一处（比如某处传错 `defs`）就越难被人眼看出来。"""
+    return schema.masked({key: value}, defs)[key]
+
+
 def _defs(ctx, deps):
     # type: (object, dict) -> dict
     """键定义（十一列）。**来自 `schema.tsv`** —— 表缺失时回落硬编码默认值，
@@ -89,6 +97,15 @@ def _layers(ctx, target, deps=None):
 
 
 def run(ctx, stack, inv, deps=None):
+    # **失败关闭**（fail-closed，finding I-1）：`schema.tsv` 读不到 ⇒ `_defs` 回落
+    # `{}` ⇒ `is_secret` 恒假 ⇒ `ls`/`get`/`diff`/`validate`/`export`/`set`/`unset`
+    # 会把密钥原值当普通值回显，`import` 也一样收。宁可这些命令整体不可用，
+    # 也不能在表坏掉时把密钥吐出来。必须排在本函数**任何** commit 之前
+    # （`L0·result-02` 的 AST 行号判据）——本模块唯一做 commit 的分支是
+    # `set`/`unset`/`import`，这个检查在它们之前、且在函数体最顶端。
+    if not _defs(ctx, deps):
+        return Refused(3, "tables.unreadable",
+                       detail="schema.tsv 读不到，为避免密钥打码失效已整体拒绝（重装：`mlx install`）")
     layers = (inv.args or {}).get("layers")
     if layers is None:
         # 目标是键名（`config set port ...`）还是模型 id（`config set qwen ...`）——
@@ -124,7 +141,7 @@ def run(ctx, stack, inv, deps=None):
         value = cfg.values[key]
         # `--reveal` 是查看密钥原值的**唯一**入口（spec §5.2）
         if not (inv.args or {}).get("reveal"):
-            value = schema.masked({key: value}, defs)[key]
+            value = _mask1(key, value, defs)
         return Done({"kind": "config_get", "key": key,
                      "value": value, "source": cfg.sources[key]})
     if inv.verb == "validate":
@@ -133,6 +150,7 @@ def run(ctx, stack, inv, deps=None):
         # **不短路**：一个键坏了要继续走完剩下的，否则「行数 == 检查项数」
         # 不可能成立（R-OBSERVE-31 的验收）。
         rows, bad = [], []
+        defs = _defs(ctx, deps)
         try:
             cfg = schema.effective(inv.target or "api", layers, defaults=_factory(ctx, deps))
             err = None
@@ -149,7 +167,7 @@ def run(ctx, stack, inv, deps=None):
                 bad.append(key)
                 continue
             val, src = cfg.values.get(key), cfg.sources.get(key, "?")
-            val = schema.masked({key: val}, _defs(ctx, deps))[key]
+            val = _mask1(key, val, defs)
             rows.append((key, "ok", f"{val}（来自 {src}）"))
         payload = {"kind": "checks", "rows": rows, "failed": bad,
                    "undeterminable": []}
@@ -170,7 +188,7 @@ def run(ctx, stack, inv, deps=None):
             # 兜底，从它取而不是再碰一次 `schema.DEFAULTS`（那读起来像
             # 「拿硬编码当配置域」，守卫也分不出来）。
             factory = (defs.get(key) or {}).get("default", _fac.get(key))
-            rows.append({"key": key, "value": schema.masked({key: cfg.values[key]}, defs)[key],
+            rows.append({"key": key, "value": _mask1(key, cfg.values[key], defs),
                          "source": src, "factory": factory})
         return Done({"kind": "config_diff", "rows": rows,
                      "target": inv.target or "（全局）"})
@@ -265,7 +283,7 @@ def run(ctx, stack, inv, deps=None):
             inv.target, _layers(ctx, None if scope == "global" else inv.target, deps),
             defaults=_factory(ctx, deps))
         return Done({"kind": "config_unset", "unset": key, "scope": scope,
-                     "was_set": True, "now": schema.masked({key: eff.values.get(key)}, defs)[key],
+                     "was_set": True, "now": _mask1(key, eff.values.get(key), defs),
                      "source": eff.sources.get(key)})
 
     if inv.verb == "export":
@@ -335,5 +353,5 @@ def run(ctx, stack, inv, deps=None):
         scope = inv.target
     # 效果读路径（INV-25）：用**登记的那个读函数**回读，报的是真生效值
     eff = schema.effective(inv.target, _layers(ctx, None if scope == "global" else inv.target, deps), defaults=_factory(ctx, deps))
-    return Done({"kind": "config_set", "set": key, "value": schema.masked({key: eff.values[key]}, defs)[key],
+    return Done({"kind": "config_set", "set": key, "value": _mask1(key, eff.values[key], defs),
                  "scope": scope, "source": eff.sources[key]})
