@@ -64,7 +64,8 @@ def spec(service, cfg, route):
                "MLX_GATEWAY_BIND": str(v.get("api.bind", "127.0.0.1"))}
         secret = []
         # 密钥经环境变量交给网关进程（spec §4.8）：spawn 以 spec.env 覆盖继承的环境，
-        # 所以这里设了就是它；值为空则不设（不以空串抹掉 shell 里的同名变量）
+        # 所以这里设了就是它；值为空则不设——继承的同名变量由 `runtime.spawn`
+        # 统一剔除，网关令牌若来自 shell 是经 ctx 折入 cfg 后才在这里放进 env 的
         for name, key in (("MLX_GATEWAY_TOKEN", "api.token"),
                           ("MLX_BACKEND_API_KEY", "backend.api_key")):
             if v.get(key):
