@@ -374,7 +374,10 @@ def _tool_status(ctx):
                    "port": snap.get("port") or store.model_port(rec),
                    "state": store.model_state(rec),
                    # 用户视角要看到的：这个 id 到底是哪个模型、装了没、多大
-                   "repo": user.get("repo"), "type": user.get("type"),
+                   "repo": user.get("repo"), "modality": user.get("modality") or "auto",
+                   # 上一次启动的判定结论（运行记录快照，spec §3.4）；没起过就是 None
+                   "backend": snap.get("backend"),
+                   "max_concurrency": snap.get("max_concurrency"),
                    "revision": machine.get("revision"),
                    "size_mb": machine.get("size_mb"),
                    "pid": snap.get("pid")}
@@ -460,7 +463,9 @@ def run(ctx, stack, inv, deps):
                      "running": None if is_unknown(st) else st.value,
                      "undeterminable": st.kind if is_unknown(st) else None,
                      "pid": (snap or {}).get("pid"),
-                     "port": (snap or {}).get("port")})
+                     "port": (snap or {}).get("port"),
+                     "backend": (snap or {}).get("backend"),
+                     "max_concurrency": (snap or {}).get("max_concurrency")})
 
     # ── `down` / `restart` 的 `--dry-run`〔2026-09-02〕──────────────────
     # 此前这两条**在门之前就动手了**：`down` 在 375 行直接 `supervisor.down()`,

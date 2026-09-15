@@ -22,7 +22,10 @@ def _config_ls(p):
     w = max(ui._w(k) for k in vals)
     lines = [f"  {ui._pad(k, w)}  {ui._pad(ui._flat(v), 12)}{srcs.get(k, '')}"
              for k, v in sorted(vals.items())]
-    return "\n".join(lines + ["", f"  共 {len(vals)} 个键；右列是取值来源的层"])
+    tail = ["", f"  共 {len(vals)} 个键；右列是取值来源的层"]
+    if p.get("dropped"):
+        tail += ["", "  已退役的键：" + "、".join(p["dropped"]) + "（`mlx model repair` 清除）"]
+    return "\n".join(lines + tail)
 
 
 def _config_get(p):

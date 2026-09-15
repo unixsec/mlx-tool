@@ -97,8 +97,17 @@ def run(ctx, stack, inv, deps=None):
         layers = _layers(ctx, inv.target if inv.target not in _dom else None, deps)
     if inv.verb == "ls":
         cfg = schema.effective(inv.target or "api", layers, defaults=_factory(ctx, deps))
+        # 表外键（spec §2.2：生效配置里被丢弃的那些）要看得见 —— 否则用户设过的
+        # `backend` 在 ls 里凭空消失，他不知道是被忽略了还是被删了
+        dom = _domain(ctx, deps)
+        dropped = sorted(k for k in store.load_settings(ctx) if k not in dom)
+        if inv.target and inv.target not in dom:
+            rec = store.load(ctx, store.MODELS).by_id(inv.target)
+            if rec is not None:
+                dropped += sorted(k for k in rec.user
+                                  if k not in dom and k not in ("repo", "type"))
         return Done({"kind": "config_ls", "values": schema.masked(cfg.values, _defs(ctx, deps)),
-                     "sources": cfg.sources})
+                     "sources": cfg.sources, "dropped": dropped})
     if inv.verb == "get":
         key = (inv.args or {}).get("key")
         defs = _defs(ctx, deps)

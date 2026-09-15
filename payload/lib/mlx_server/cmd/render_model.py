@@ -14,14 +14,35 @@ def _models(p):
     ms = p.get("models") or []
     if not ms:
         return "（尚未登记任何模型。`mlx model register <id>` 登记一个）"
-    cols = ["id", "modality", "port", "state"]
-    hdr = {"id": "ID", "modality": "模态", "port": "端口", "state": "状态"}
+    cols = ["id", "modality_display", "port", "state"]
+    hdr = {"id": "ID", "modality_display": "模态", "port": "端口", "state": "状态"}
     w = {c: max(ui._w(hdr[c]), max((ui._w(m.get(c, "")) for m in ms), default=0)) for c in cols}
     lines = ["  " + "  ".join(ui._pad(hdr[c], w[c]) for c in cols),
              "  " + "  ".join("─" * w[c] for c in cols)]
     for m in ms:
         lines.append("  " + "  ".join(ui._pad(ui._flat(m.get(c)), w[c]) for c in cols))
     lines += ["", f"  共 {len(ms)} 个"]
+    return "\n".join(lines)
+
+
+def _model_info(p):
+    # type: (dict) -> str
+    """`model info`：模态与依据、模板默认的思考开关与 effort 值域、路径对照、待清理的旧字段。"""
+    mod, tpl = p.get("modality") or {}, p.get("template") or {}
+    basis = f"；依据 {mod['basis']}" if mod.get("basis") else ""
+    rows = [("ID", p.get("id")), ("仓库", (p.get("user") or {}).get("repo")),
+            ("模态", f"{mod.get('display')}（配置 {mod.get('configured')}{basis}）")]
+    if "undeterminable" in tpl:
+        rows.append(("思考默认", f"判不出（{tpl['undeterminable']}）"))
+    else:
+        rows += [("思考默认", "开" if tpl.get("thinking_default") else "关"),
+                 ("effort 值域", "、".join(tpl.get("effort_domain") or [])
+                  or "（模板不支持，请求里不传）")]
+    rows += [("期望路径", p.get("weights_expected")), ("实际找到", p.get("weights_found"))]
+    lines = ui._kv([(k, ui._flat(v)) for k, v in rows])
+    extra = (p.get("old_fields") or []) + (p.get("retired_keys") or [])
+    if extra:
+        lines += ["", "  旧字段 / 退役键：" + "、".join(extra) + "（`mlx model repair` 清除）"]
     return "\n".join(lines)
 
 
@@ -119,6 +140,7 @@ def _install_dry_run(p):
 ui.register({
     "models": _models,
     "model_install_dry_run": _install_dry_run,
+    "model_info": _model_info,
     "model_register": _model_register,
     "model_rm": _model_rm,
     "gc": _gc,

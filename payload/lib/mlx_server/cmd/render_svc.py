@@ -64,6 +64,8 @@ def _model_table(models):
             ("模型", lambda m: m.get("repo") or "—"),
             ("状态", lambda m: m.get("state") or "—"),
             ("端口", lambda m: f":{m['port']}" if m.get("port") else "—"),
+            ("后端", lambda m: m.get("backend") or "—"),
+            ("并发", lambda m: str(m["max_concurrency"]) if m.get("max_concurrency") else "—"),
             ("PID", lambda m: str(m["pid"]) if m.get("running") and m.get("pid") else "—"),
             ("内存", lambda m: f"{m['rss_mb']:.0f} MB" if m.get("rss_mb") else "—"),
             ("体积", lambda m: f"{m['size_mb']:.0f} MB" if m.get("size_mb") else "—")]
@@ -89,7 +91,8 @@ def _service_status(p):
     run = p.get("running")
     head = f"{ui._mark(run)} {p.get('service')}   " + (
         "在跑" if run else ("状态不可判定" if run is None else "未运行"))
-    rows = [(k, ui._flat(p.get(k))) for k in ("pid", "port", "undeterminable")
+    rows = [(k, ui._flat(p.get(k))) for k in ("pid", "port", "backend",
+                                              "max_concurrency", "undeterminable")
             if p.get(k) is not None]
     return "\n".join([head] + (ui._kv(rows, indent="    ") if rows else []))
 
@@ -126,6 +129,10 @@ def _svc_change(p):
     act = p.get("started") or p.get("stopped") or p.get("service") or ""
     if p.get("already_stopped"):
         return f"  · {act}   本来就没在跑"
+    if p.get("started") and p.get("backend"):
+        # spec §6.5：`✓ qwen38 已启动 · mlx_vlm · 并发 8 · port 8100` —— 判定结论要看得见
+        return (f"  ✓ {act} 已启动 · {p['backend']} · 并发 {p.get('max_concurrency')}"
+                f" · port {p.get('port')}")
     verb = "已启动" if p.get("started") else ("已停止" if p.get("stopped") else "")
     tail = "".join(f"   {k} {p[k]}" for k in ("port", "pid") if p.get(k))
     return f"  ✓ {act}   {verb}{tail}"
