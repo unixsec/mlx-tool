@@ -615,7 +615,7 @@ _LAYER = {
     # B 层 · 单一资源的原语
     "atomic": 2, "proc": 2, "probe": 2, "wire": 2, "tables": 2, "ui": 2, "ctx": 2,
     # P 层 · 纯策略（不碰 I/O，探针值由调用方注入）
-    "schema": 3, "backendarg": 3, "fitness": 3,
+    "schema": 3, "backendarg": 3, "fitness": 3, "route": 3,
     # C 层 · 资源所有者
     "store": 4, "ports": 4, "weights": 4, "vault": 4, "supervisor": 4,
     "sessions": 4, "caps": 4, "checks": 4, "templates": 4,

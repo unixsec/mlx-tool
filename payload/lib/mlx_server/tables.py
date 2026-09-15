@@ -38,7 +38,7 @@ class TablesView:
     """只读访问器。构造一次，之后不再碰盘。"""
 
     __slots__ = ("_root", "_messages", "_manifest", "_verbs", "_cli",
-                 "_schema", "_types", "_drafters")
+                 "_schema", "_types", "_drafters", "_backends")
 
     COLUMNS = {
         "messages": ("key", "text"),
@@ -57,6 +57,8 @@ class TablesView:
                    "restart", "exportable", "secret", "group", "readers"),
         "types": ("type", "module", "server_arg"),
         "drafters": ("model_type",),
+        "backends": ("backend", "module", "host", "offline", "concurrency_args",
+                     "draft_args", "thinking", "ready", "key_env", "env_clear"),
     }
 
     def __init__(self, tables_root):
@@ -69,6 +71,7 @@ class TablesView:
         self._schema = None
         self._types = None
         self._drafters = None
+        self._backends = None
 
     def _load(self, name):
         p = os.path.join(self._root, f"{name}.tsv")
@@ -148,6 +151,13 @@ class TablesView:
         if self._drafters is None:
             self._drafters = self._load("drafters")
         return self._drafters
+
+    def backends(self):
+        # type: () -> list
+        """后端定义（`backends.tsv`，spec §3.1）。`backendarg` 的 argv 全部来自这里。"""
+        if self._backends is None:
+            self._backends = self._load("backends")
+        return self._backends
 
 
 def open_tables(ctx):

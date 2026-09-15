@@ -197,5 +197,13 @@ config.not_a_config_key	{key} 不是配置项（scope={scope}）—— 它是工
 svc.draft_not_found	{id} 配了 draft_model={draft}，但没有登记名为 {draft} 的模型。`mlx model ls` 看有哪些；不想用投机解码就 `mlx config unset {id} --key=draft_model`
 svc.draft_weights_missing	{id} 的 drafter「{draft}」权重不在盘上（仓库 {repo}）。先 `mlx model install {draft} --repo={repo}`
 svc.draft_is_self	{id} 的 draft_model 指向了它自己 —— drafter 必须是另一个（更小的）模型
+svc.not_standalone_model	{id} 是附属 drafter（model_type={model_type}），只有预测头、不能单独启动。本版也不支持把它配给主模型（mlx-vlm #2033：并发请求下输出静默损坏）
+svc.inspect_undeterminable	判不出 {id} 是否多模态（{detail}）—— 不猜成纯文本。可显式指定：`mlx config set {id} --key=modality --value=text`（或 vision）
+svc.draft_inspect_undeterminable	读不出 {id} 的 drafter「{draft}」的 config.json —— 不猜它能不能用。检查它的权重，或撤销：`mlx config unset {id} --key=draft_model`
+svc.draft_unsupported	{id} 的 drafter「{draft}」是附属预测头（model_type={model_type}，如 MTP）。本版不支持：mlx_vlm 在并发请求下会静默输出损坏（mlx-vlm #2033，0.7.0 仍未修）。撤销：`mlx config unset {id} --key=draft_model`
+svc.draft_backend_conflict	{id} 是多模态模型，而 drafter「{draft}」只能在 mlx_lm 上用，mlx_lm 处理不了图像。二选一：`mlx config unset {id} --key=draft_model`，或 `mlx config set {id} --key=modality --value=text` 放弃视觉
+svc.backend_missing	{id} 需要 {pkg} 后端，但 venv 里没有。重跑安装器 `bash <源码目录>/deployer/install.sh` 补装，然后 `mlx caps refresh`
+svc.backend_key_missing	{id} 走带鉴权的后端，需要 backend.api_key，但它是空的。生成：`mlx bootstrap keys`
+svc.size_undeterminable	量不出 {id} 的权重体积 —— 就绪等待的超时按体积算，量不出就不启动。`mlx model repair` 重新扫盘后再试
 chat.model_not_found	没有名为「{id}」的模型。已登记：{known}\nchat 的第一个参数是**模型 id**，问题用 --prompt= 传：\n  mlx chat {example} --prompt="{id}"\n不带 --prompt 则进入多轮对话：mlx chat {example}
 bench.model_not_found	没有名为「{id}」的模型。已登记：{known}\nbench 的第一个参数是模型 id：mlx bench {known_first}
