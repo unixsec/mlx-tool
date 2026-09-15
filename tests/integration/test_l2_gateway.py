@@ -37,6 +37,9 @@ def facade(running=None):
             "supervisor.port_owner": lambda c, s: Ok(True),
             "supervisor.snapshot": lambda c, s: {"model_arg": s},
             "supervisor.merge_record": lambda c, s, f, pid=None: True}
+TOK = "t" * 43
+AUTH = {"Authorization": "Bearer " + TOK}
+JSON_AUTH = dict(AUTH, **{"Content-Type": "application/json"})
 '''
 
 
@@ -47,8 +50,8 @@ def test_l2_models_ids_come_from_route_keys(payload, sys_py):
     ⇒ 客户端拿到一个转发时命不中的 id（`R-API-21` 三向一致的反例）。
     """
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
-        g = Gateway(None, facade()); g.refresh_routes()
-        st, body = g.handle("GET", "/v1/models")
+        g = Gateway(None, facade(), token=TOK); g.refresh_routes()
+        st, body = g.handle("GET", "/v1/models", headers=AUTH)
         print(json.dumps({"status": st, "ids": [m["id"] for m in body["data"]],
                           "keys": g.view.route_keys()}))
     ''')
@@ -62,11 +65,12 @@ def test_l2_three_way_id_consistency(payload, sys_py):
     这是「三项配置够用」的核心 —— 列表里能看见、发过去用不了就是白搭。
     """
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
-        g = Gateway(None, facade()); g.refresh_routes()
-        _, body = g.handle("GET", "/v1/models")
+        g = Gateway(None, facade(), token=TOK); g.refresh_routes()
+        _, body = g.handle("GET", "/v1/models", headers=AUTH)
         results = []
         for m in body["data"]:
             st, rb = g.handle("POST", "/v1/chat/completions", body={"model": m["id"]},
+                              headers=JSON_AUTH,
                               forward=lambda p, pa, b: (200, {"model": b["model"]}))
             results.append([m["id"], st, rb.get("model")])
         print(json.dumps({"results": results}))
@@ -84,8 +88,8 @@ def test_l2_models_endpoint_not_blocked_by_route_guard(payload, sys_py):
     """
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
         from gateway.guard import ROUTE_EXEMPT
-        g = Gateway(None, facade()); g.refresh_routes()
-        st, _ = g.handle("GET", "/v1/models")
+        g = Gateway(None, facade(), token=TOK); g.refresh_routes()
+        st, _ = g.handle("GET", "/v1/models", headers=AUTH)
         print(json.dumps({"status": st, "exempt": sorted(ROUTE_EXEMPT)}))
     ''')
     assert got["status"] == 200, "/v1/models 被 route_guard 打掉了"
@@ -98,8 +102,8 @@ def test_l2_building_returns_503_not_empty_list(payload, sys_py):
     空列表让客户端显示「没有模型」而不是「服务未就绪」，用户处置完全不同。
     """
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
-        g = Gateway(None, facade())          # 不 refresh ⇒ state == building
-        st, body = g.handle("GET", "/v1/models")
+        g = Gateway(None, facade(), token=TOK)          # 不 refresh ⇒ state == building
+        st, body = g.handle("GET", "/v1/models", headers=AUTH)
         print(json.dumps({"status": st, "has_data": "data" in body}))
     ''')
     assert got["status"] == 503 and not got["has_data"]
@@ -109,7 +113,8 @@ def test_l2_unknown_running_not_routed(payload, sys_py):
     """`running == Unknown` 的服务**不进路由表** —— 转发到所有权不可证的端口
     会把请求发给别人的进程。"""
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
-        g = Gateway(None, facade(lambda c, s: Unknown("PS_FAILED") if s == "qwen" else Ok(True)))
+        g = Gateway(None, facade(lambda c, s: Unknown("PS_FAILED") if s == "qwen" else Ok(True)),
+                    token=TOK)
         g.refresh_routes()
         print(json.dumps({"keys": g.view.route_keys()}))
     ''')
@@ -119,8 +124,9 @@ def test_l2_unknown_running_not_routed(payload, sys_py):
 def test_l2_upstream_error_body_not_forwarded(payload, sys_py):
     """上游 5xx 的响应体**不透传** —— 防上游内部信息泄漏（`X-T2-17-b`）。"""
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
-        g = Gateway(None, facade()); g.refresh_routes()
+        g = Gateway(None, facade(), token=TOK); g.refresh_routes()
         st, body = g.handle("POST", "/v1/chat/completions", body={"model": "qwen"},
+                            headers=JSON_AUTH,
                             forward=lambda p, pa, b: (500, {"internal": "SECRET_MARKER"}))
         print(json.dumps({"status": st, "raw": json.dumps(body)}))
     ''')
@@ -161,14 +167,14 @@ def test_l2_models_requires_auth_when_nonlocal(payload, sys_py):
     """
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
         from gateway.guard import AUTH_EXEMPT, ROUTE_EXEMPT
-        g = Gateway(None, facade(), bind_addr="0.0.0.0", token="s3cret")
+        g = Gateway(None, facade(), bind_addr="0.0.0.0", token=TOK)
         g.refresh_routes()
         r = {}
         r["no_token"] = g.handle("GET", "/v1/models")[0]
         r["bad_token"] = g.handle("GET", "/v1/models",
                                   headers={"Authorization": "Bearer wrong"})[0]
         r["good_token"] = g.handle("GET", "/v1/models",
-                                   headers={"Authorization": "Bearer s3cret"})[0]
+                                   headers={"Authorization": "Bearer " + TOK})[0]
         r["healthz"] = g.handle("GET", "/healthz")[0]
         print(json.dumps({**r, "auth_exempt": sorted(AUTH_EXEMPT),
                           "route_exempt": sorted(ROUTE_EXEMPT)}))
@@ -196,26 +202,18 @@ def test_l2_nonlocal_without_token_refuses_service(payload, sys_py):
     assert got["status"] == 503, f"未配令牌时放行了：{got['status']}"
 
 
-def test_l2_exposure_from_bind_addr_only(payload, sys_py):
-    """**安全审查 trust-boundary**：暴露等级**由绑定地址唯一决定**（`R-API-25`）。
-
-    `bind_addr` 与 `token` 都在装配段注入，请求处理路径改不了它们 ——
-    否则请求头就能把自己声明成「本地」从而关掉鉴权。
-    """
+def test_l2_forwarding_headers_do_not_change_peer_class(payload, sys_py):
+    """**安全审查 trust-boundary**：来源只看 socket 对端地址，转发头伪造不改变分类或鉴权结果。"""
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
-        from gateway.guard import exposure_level
-        g = Gateway(None, facade(), bind_addr="0.0.0.0", token="t")
+        g = Gateway(None, facade(), bind_addr="0.0.0.0", token=TOK)
         g.refresh_routes()
-        # 伪造转发头，试图把自己声明成本地
-        spoofed = g.handle("GET", "/v1/models", headers={
-            "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1",
-            "Host": "localhost"})[0]
-        print(json.dumps({"spoofed": spoofed,
-                          "lo": exposure_level("127.0.0.1"),
-                          "nonlo": exposure_level("0.0.0.0")}))
+        spoof = {"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1", "Host": "localhost"}
+        print(json.dumps({"remote": g.handle("GET", "/v1/models", headers=spoof,
+                                             peer="192.168.2.50")[0],
+                          "loopback_no_token": g.handle("GET", "/v1/models", headers=spoof)[0]}))
     ''')
-    assert got["spoofed"] == 401, "转发头伪造成功地绕过了鉴权"
-    assert got["lo"] == "LOOPBACK" and got["nonlo"] == "NONLOCAL"
+    assert got["remote"] == 403, "无网段视图时外部地址应 403，转发头不得把它变成本地"
+    assert got["loopback_no_token"] == 401, "回环也要令牌（D13）"
 
 
 def test_l2_streaming_request_reaches_backend_as_sse(payload, sys_py):
@@ -256,7 +254,7 @@ def test_l2_streaming_request_reaches_backend_as_sse(payload, sys_py):
         threading.Thread(target=up.serve_forever, daemon=True).start()
         up_port = up.server_address[1]
 
-        g = Gateway(None, facade()); g.refresh_routes()
+        g = Gateway(None, facade(), token=TOK); g.refresh_routes()
         g.view._routes["qwen"] = {"port": up_port}      # 把路由指向这个假上游
 
         gwsrv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(g))
@@ -267,7 +265,8 @@ def test_l2_streaming_request_reaches_backend_as_sse(payload, sys_py):
             "http://127.0.0.1:%d/v1/chat/completions" % gwsrv.server_address[1],
             data=json.dumps({"model": "qwen", "stream": True,
                              "messages": [{"role": "user", "content": "x"}]}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + TOK},
+            method="POST")
         # 坏样本（不分流）下上游会回 504，urlopen 抛 HTTPError。
         # 捕获它 —— 否则子进程崩掉，测试报的是「returncode != 0」而不是原因。
         try:

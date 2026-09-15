@@ -20,6 +20,8 @@ from cardinality import Cardinality  # noqa: E402
 
 pytestmark = pytest.mark.e2e
 
+TOK = "t" * 43
+
 FAKE_BACKEND = '''
 import json, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -57,7 +59,8 @@ def _wait(port, timeout=8):
 
 
 def _get(url, timeout=5, headers=None):
-    req = urllib.request.Request(url, headers=headers or {})
+    req = urllib.request.Request(url, headers=dict({"Authorization": "Bearer " + TOK},
+                                                   **(headers or {})))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
             return r.status, json.loads(r.read() or b"{}")
@@ -68,7 +71,8 @@ def _get(url, timeout=5, headers=None):
 def _post(url, payload, timeout=8):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                  method="POST",
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          "Authorization": "Bearer " + TOK})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
             return r.status, json.loads(r.read() or b"{}")
@@ -84,7 +88,7 @@ def stack(tmp_path, repo):
              "MLX_ROOT_WEIGHTS": tmp_path / "weights"}
     gw_port, be_port = _free_port(), _free_port()
     env = dict(os.environ, PATH="/usr/bin:/bin",
-               MLX_GATEWAY_PORT=str(gw_port),
+               MLX_GATEWAY_PORT=str(gw_port), MLX_GATEWAY_TOKEN=TOK,
                **{k: str(v) for k, v in roots.items()})
     r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
                        capture_output=True, text=True, timeout=60, check=False, env=env)
@@ -129,7 +133,7 @@ def test_l3_healthz(stack):
     """`/healthz` 回路由表状态 —— 它是唯一始终匿名的端点。"""
     base, _ = stack
     st, body = _get(f"{base}/healthz")
-    assert st == 200 and body["routes_state"] in ("fresh", "building")
+    assert st == 200 and body["routes"] in ("fresh", "building") and sorted(body) == ["routes", "ts"]
 
 
 def test_l3_models_lists_running_service(stack):
@@ -172,3 +176,15 @@ def test_l3_missing_model_field_rejected(stack):
     base, _ = stack
     st, _ = _post(f"{base}/v1/chat/completions", {"messages": []})
     assert st == 400
+
+
+def test_l3_requests_without_token_are_refused_even_on_loopback(stack):
+    """D13：回环也要令牌。"""
+    base, _ = stack
+    req = urllib.request.Request(f"{base}/v1/models")
+    try:
+        urllib.request.urlopen(req, timeout=5)        # noqa: S310
+        status = 200
+    except urllib.error.HTTPError as e:
+        status = e.code
+    assert status == 401

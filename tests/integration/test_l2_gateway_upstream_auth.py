@@ -91,7 +91,10 @@ facade = {"store.load": lambda c: Res(), "supervisor.running": lambda c, s: Ok(T
           "supervisor.snapshot": lambda c, s: snaps.get(s),
           "supervisor.merge_record": lambda c, s, f, pid=None: True}
 
-g = Gateway(None, facade, backend_key="@KEY@")
+# D13：所有来源都要网关令牌。客户端发的 `Bearer @CLIENT_TOKEN@` 就是网关令牌 ——
+# 它必须**过得了**网关鉴权，同时仍不得出现在上游收到的任何头里。
+# 请求经 127.0.0.1 发出、Gateway 未注入网段视图 ⇒ 来源分类为回环。
+g = Gateway(None, facade, token="@CLIENT_TOKEN@", backend_key="@KEY@")
 g.refresh_routes()
 # 两个模型都路由到桩上游端口
 g.view._routes["vis"] = {"port": up_port}

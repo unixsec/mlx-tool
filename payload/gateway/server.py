@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from mlx_server.wire import SseDecoder
 
-from . import translate
+from . import guard, translate
 from .app import log_event
 
 _MAX_BODY = 8 * 1024 * 1024          # 8 MB：拒绝超大体，防内存打爆
@@ -74,13 +74,21 @@ def make_handler(gw):
             """默认实现写 stderr 的非结构化行。换成结构化事件（BC-D-02）。"""
             log_event("info", "http", line=fmt % args)
 
-        def _reply(self, status, body):
-            raw = json.dumps(body, ensure_ascii=False).encode()
+        def _reply(self, status, body, preflight=False):
+            raw = b"" if body is None else json.dumps(body, ensure_ascii=False).encode()
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            # CORS：普通响应只带 Allow-Origin；**不发 Allow-Credentials**（令牌走头，不走 cookie）
+            self.send_header("Access-Control-Allow-Origin", "*")
+            if preflight:
+                self.send_header("Access-Control-Allow-Methods", guard.CORS_ALLOW_METHODS)
+                self.send_header("Access-Control-Allow-Headers", guard.CORS_ALLOW_HEADERS)
+                self.send_header("Access-Control-Max-Age", guard.CORS_MAX_AGE)
+            if body is not None:
+                self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
-            self.wfile.write(raw)
+            if raw:
+                self.wfile.write(raw)
 
         def _read_body(self):
             n = int(self.headers.get("Content-Length") or 0)
@@ -96,8 +104,14 @@ def make_handler(gw):
                                               "type": "invalid_request"}})
 
         def do_GET(self):        # noqa: N802
-            st, body = gw.handle("GET", self.path.split("?")[0], dict(self.headers))
+            st, body = gw.handle("GET", self.path.split("?")[0], dict(self.headers),
+                                 peer=self.client_address[0])
             self._reply(st, body)
+
+        def do_OPTIONS(self):    # noqa: N802
+            st, body = gw.handle("OPTIONS", self.path.split("?")[0], dict(self.headers),
+                                 peer=self.client_address[0])
+            self._reply(st, body, preflight=(st == 204))
 
         def do_POST(self):       # noqa: N802
             body, err = self._read_body()
@@ -111,7 +125,7 @@ def make_handler(gw):
             if body and body.get("stream"):
                 return self._stream(path, body)
             st, out = gw.handle("POST", path, dict(self.headers), body,
-                                forward=forward)
+                                forward=forward, peer=self.client_address[0])
             self._reply(st, out)
 
         def _stream(self, path, body):
@@ -122,10 +136,11 @@ def make_handler(gw):
             （只在完整 Frame 上改，不对 chunk 做字节级替换）。
             鉴权与路由解析走 `gw.prepare` —— 与非流式同一处判定。
             """
-            kind, *rest = gw.prepare(path, dict(self.headers), body)
+            kind, *rest = gw.prepare(path, dict(self.headers), body, method="POST",
+                                     peer=self.client_address[0])
             if kind == "reply":
                 return self._reply(*rest[0])
-            port, model_arg, short_id = rest
+            port, model_arg, short_id, _peer_class = rest
 
             dec = SseDecoder()
             state = {"started": False}
@@ -133,6 +148,7 @@ def make_handler(gw):
             def on_chunk(chunk):
                 if not state["started"]:
                     self.send_response(200)
+                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
                     # 不发 Content-Length（长度未知）⇒ 用连接关闭标界

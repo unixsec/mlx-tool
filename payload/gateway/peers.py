@@ -311,8 +311,14 @@ class NetView:
         verdict = classify_peer(addr, nets)
         if verdict is not None:
             return verdict
+        # 「是否到期」与「占住这次重算」必须在**同一次**持锁里完成：分两次拿锁的话，
+        # 多个请求线程上同时来的未知来源会各自判到期、各自起一次重算（每次最长数秒）。
+        # 赢的线程先把 `_last_try` 写掉再放锁，其余线程看到的就是「未到期」。
         with self._lock:
-            due = self._last_try is None or self._clock() - self._last_try >= self._gap
+            now = self._clock()
+            due = self._last_try is None or now - self._last_try >= self._gap
+            if due:
+                self._last_try = now
         if not due:
             return None
         self.refresh()

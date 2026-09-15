@@ -5,7 +5,7 @@
 import json
 import sys
 
-from . import guard, routes, translate
+from . import guard, peers, routes, translate
 
 # `G-DEP-03` 的五符号白名单（第五个是 spec §3.4 的放行网段上报，只能写
 # `supervisor.MERGEABLE` 里的键）。**相等断言** —— 网关 import 了 store 就能调
@@ -65,34 +65,44 @@ class Gateway:
         return {"Authorization": "Bearer " + self._backend_key}
 
     def healthz(self):
-        return (200, {"routes_state": self.view.state,
-                      "refreshed_at": self.view.refreshed_at,
-                      "bind": self.bind_addr})
+        # 免鉴权，所以**只回状态**：绑定地址等配置不在这里（spec §4.1）
+        return (200, {"routes": self.view.state, "ts": self.view.refreshed_at})
 
-    def prepare(self, path, headers=None, body=None):
-        """两道 guard + 端点分派 + 路由解析的**唯一实现**。
+    def classify(self, peer):
+        # type: (str) -> object
+        """来源分类。没有网段视图（测试或装配前）⇒ 只认回环，不放行任何外部地址。"""
+        if self.nets is not None:
+            return self.nets.classify(peer)
+        ip = peers.normalize_peer(peer)
+        return "LOOPBACK" if ip is not None and ip.is_loopback else None
 
-        返回 `("reply", (status, body))` —— 直接回给客户端；
-        或 `("forward", port, model_arg, short_id)` —— 该转发给后端。
+    def prepare(self, path, headers=None, body=None, method="POST", peer="127.0.0.1"):
+        """请求预处理的**唯一实现**（非流式 `handle` 与 server 层流式路径共用）。
 
-        `handle`（非流式）与 server 层的**流式**路径共用它。
-        分成两处写的话，流式路径就会长出第二套鉴权与路由判定 ——
-        而这个网关的第一个 auth-bypass 正是「两个豁免集合并成一个」造成的。
+        顺序固定（spec §4.2）：**来源分类 → 预检短路 → 鉴权 → Content-Type → 本地端点 → 路由**。
+        返回 `("reply", (status, body))`，或 `("forward", port, model_arg, short_id, peer_class)`。
         """
         headers = {k.lower(): v for k, v in (headers or {}).items()}
-
-        blocked = guard.source_guard(path, headers, self.bind_addr, self._token)
+        peer_class = self.classify(peer)
+        blocked = guard.peer_guard(peer_class)
         if blocked:
+            log_event("warn", "peer_denied", addr=str(peer))
             return ("reply", blocked)
-        blocked = guard.route_guard(path, body, self.view.route_keys())
-        if blocked:
-            return ("reply", blocked)
+        for check in (lambda: guard.preflight(method, headers),
+                      lambda: guard.auth_guard(path, headers, self._token),
+                      lambda: guard.content_type_guard(method, headers)):
+            out = check()
+            if out:
+                return ("reply", out)
 
         if path == "/healthz":
             return ("reply", self.healthz())
         if path == "/v1/models":
             return ("reply", translate.list_models(self.view))
 
+        blocked = guard.route_guard(path, body, self.view.route_keys())
+        if blocked:
+            return ("reply", blocked)
         short_id = (body or {}).get("model")
         port = self.view.port_of(short_id)
         if port is None:
@@ -101,14 +111,14 @@ class Gateway:
         # INV-27：对正在跑的服务，`model_arg` 只从运行记录快照读，不调 `spec()`
         snap = self.facade["supervisor.snapshot"](self.ctx, short_id)
         model_arg = (snap or {}).get("model_arg") or short_id
-        return ("forward", port, model_arg, short_id)
+        return ("forward", port, model_arg, short_id, peer_class)
 
-    def handle(self, method, path, headers=None, body=None, forward=None):
+    def handle(self, method, path, headers=None, body=None, forward=None, peer="127.0.0.1"):
         """一次**非流式**请求的完整链路。流式在 server 层，见 `prepare`。"""
-        kind, *rest = self.prepare(path, headers, body)
+        kind, *rest = self.prepare(path, headers, body, method=method, peer=peer)
         if kind == "reply":
             return rest[0]
-        port, model_arg, short_id = rest
+        port, model_arg, short_id, _peer_class = rest
 
         if forward is None:
             return translate.build_error(503, "gateway.no_upstream")

@@ -80,12 +80,15 @@ cap = {}
 def fwd(port, path, body, headers=None):
     cap[body["model"]] = headers
     return (200, {"model": body["model"]})
-g = Gateway(None, facade, backend_key="@KEY@"); g.refresh_routes()
+g = Gateway(None, facade, token="@TOK@", backend_key="@KEY@"); g.refresh_routes()
 for m in ("vlm", "txt"):
-    g.handle("POST", "/v1/chat/completions", body={"model": m}, forward=fwd)
-g2 = Gateway(None, facade); g2.refresh_routes()
+    g.handle("POST", "/v1/chat/completions", body={"model": m}, forward=fwd,
+             headers={"Content-Type": "application/json", "Authorization": "Bearer @TOK@"})
+g2 = Gateway(None, facade, token="@TOK@"); g2.refresh_routes()
 three_arg = g2.handle("POST", "/v1/chat/completions", body={"model": "txt"},
-                      forward=lambda p, pa, b: (200, {"model": b["model"]}))
+                      forward=lambda p, pa, b: (200, {"model": b["model"]}),
+                      headers={"Content-Type": "application/json",
+                               "Authorization": "Bearer @TOK@"})
 print(json.dumps({"cap": cap, "three_arg_status": three_arg[0],
                   "headers_vlm": g.upstream_headers("vlm"), "headers_txt": g.upstream_headers("txt")}))
 '''

@@ -206,3 +206,58 @@ def test_netview_concurrent_pending_resend_never_delivers_stale_after_fresh(payl
     assert got["delivered"][-1] == "S2", (
         f"最后一次送达必须是最新快照，不能是旧快照追在新快照后面：{got['delivered']}"
     )
+
+
+PROG_CLASSIFY_RACE = r"""
+import json, threading
+from gateway import peers
+HW = open("@NET@/networksetup.txt").read()
+IF = open("@NET@/ifconfig.txt").read()
+calls = []
+def loader():
+    calls.append(threading.current_thread().name)
+    return HW, IF
+v = peers.NetView(loader, clock=lambda: 0.0)
+a_paused, b_checked = threading.Event(), threading.Event()
+class Probe:
+    # 包住真锁、计每个线程的放锁次数。classify() 对未知来源的第 2 次放锁就是
+    # 「是否到期」那次：A 放完第 2 次后停住，等 B 也放完它的第 2 次再放行 ——
+    # 恰好插进「判到期」与「占住 _last_try」之间，逼出两个线程都判到期的交织
+    def __init__(self, inner):
+        self._inner, self._n = inner, {}
+    def __enter__(self):
+        return self._inner.__enter__()
+    def __exit__(self, *exc):
+        out = self._inner.__exit__(*exc)
+        name = threading.current_thread().name
+        self._n[name] = self._n.get(name, 0) + 1
+        if self._n[name] == 2 and name == "A":
+            a_paused.set()
+            b_checked.wait(5.0)
+        elif self._n[name] == 2 and name == "B":
+            b_checked.set()
+        return out
+v._lock = Probe(v._lock)
+res = {}
+def run(name):
+    res[name] = v.classify("10.14.0.7")
+ta = threading.Thread(target=run, args=("A",), name="A")
+ta.start()
+a_paused.wait(5.0)
+tb = threading.Thread(target=run, args=("B",), name="B")
+tb.start()
+tb.join(10.0)
+ta.join(10.0)
+print(json.dumps({"loader_calls": len(calls), "res": res,
+                  "b_checked": b_checked.is_set(), "alive": ta.is_alive() or tb.is_alive()}))
+"""
+
+
+def test_netview_concurrent_unknown_peers_start_only_one_recompute(payload, sys_py):
+    """Task 3 评审：`classify()` 的「是否到期」与 `_last_try` 更新曾分两次持锁，
+    多个请求线程上同时来的未知来源会各自起一次重算（每次最长数秒）。
+    断言：并发的两个未知来源只触发**一次** loader，没抢到的那个直接判不放行。"""
+    got = run_floor(payload, sys_py, PROG_CLASSIFY_RACE, with_gateway=True, timeout=30, NET=NET)
+    assert not got["alive"] and got["b_checked"], got
+    assert got["res"] == {"A": None, "B": None}, got
+    assert got["loader_calls"] == 1, f"并发未知来源各自起了重算：{got}"
