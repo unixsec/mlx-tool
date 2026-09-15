@@ -14,8 +14,8 @@ def _models(p):
     ms = p.get("models") or []
     if not ms:
         return "（尚未登记任何模型。`mlx model register <id>` 登记一个）"
-    cols = ["id", "type", "port", "state"]
-    hdr = {"id": "ID", "type": "类型", "port": "端口", "state": "状态"}
+    cols = ["id", "modality", "port", "state"]
+    hdr = {"id": "ID", "modality": "模态", "port": "端口", "state": "状态"}
     w = {c: max(ui._w(hdr[c]), max((ui._w(m.get(c, "")) for m in ms), default=0)) for c in cols}
     lines = ["  " + "  ".join(ui._pad(hdr[c], w[c]) for c in cols),
              "  " + "  ".join("─" * w[c] for c in cols)]
@@ -28,7 +28,7 @@ def _models(p):
 def _model_register(p):
     # type: (dict) -> str
     lines = [f"  ✓ 已登记  {p.get('registered')}",
-             f"    类型    {p.get('type')}（依据 {p.get('evidence')}）"]
+             f"    模态    {p.get('modality')}（auto = 每次 up 按权重判定）"]
     rep = p.get("replaced")
     if rep:
         # **覆盖必须显式说出来**：同一个 id 再登记一次是 upsert，
@@ -105,7 +105,7 @@ def _install_dry_run(p):
     lines = ["  这是预览（--dry-run），一个字节都没动",
              f"  将登记  {p.get('id')}" + ("（并下载权重）" if verb == "install" else ""),
              f"    repo  {p.get('repo')}",
-             f"    类型  {p.get('type')}   端口  {p.get('port')}"]
+             f"    模态  {p.get('modality')}   端口  {p.get('port')}"]
     if p.get("revision"):
         lines.append(f"    版本  {p['revision']}")
     if p.get("replaces"):

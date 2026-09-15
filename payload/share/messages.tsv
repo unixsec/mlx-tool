@@ -4,8 +4,6 @@ svc.spec_unavailable	无法为 {id} 生成启动参数
 svc.no_spawner	执行段缺少进程启动器（{detail}）
 model.not_found	没有登记名为 {id} 的模型
 model.uniqueness	端口 {port} 已被 {holder} 占用
-model.type_domain	type={type} 不在允许集合 {allowed} 内
-model.type_undeterminable	无法判定模型类型，且未取得回答 —— 不落默认值（{detail}）
 model.confirm_rm	确认删除 {id}？此操作移入回收站
 model.confirm_declined	已取消，未删除任何东西
 config.unknown_key	未知配置键 {key}
@@ -95,7 +93,7 @@ flag.all	作用于全部有运行记录的服务
 flag.yes	跳过确认（仅在非交互场景使用）
 flag.force	强制执行
 flag.repo	HuggingFace 仓库名，形如 mlx-community/Qwen3.8-27B-8bit
-flag.type	后端类型，值域见 types 表
+flag.type	模态覆盖：text / vision（不给 = auto，每次 up 按权重判定）；写进该模型的 modality 配置
 flag.port	监听端口，须落在配置的端口区间内
 flag.weights	连同权重文件一起回收（默认只删登记）
 flag.reveal	显示 secret 键（如 api.token）的原值；不加时一律打码为 ****
@@ -136,7 +134,7 @@ help.up.example	mlx up api            # 起网关\nmlx up qwen27b api    # 一�
 help.down.example	mlx down api\nmlx down --all        # 停掉全部有运行记录的服务
 help.status.example	mlx status            # 工具全局 + 每个模型的状态\nmlx status api        # 只看网关\nmlx status --json     # 给脚本用
 help.model.rm.example	mlx model rm qwen27b             # 只删登记，权重保留\nmlx model rm qwen27b --weights   # 连权重一起回收
-help.model.register.example	mlx model register qwen27b \\n    --repo=mlx-community/Qwen3.8-27B-8bit --type=text --port=8100
+help.model.register.example	mlx model register qwen27b \\n    --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
 help.check.example	mlx check             # 九项逐行\nmlx check --json      # 给脚本用
 help.install.example	bash <源码目录>/deployer/install.sh                        # 首次\nmlx install                                            # 重装 / 升级
 help.uninstall.example	mlx uninstall         # 会要求键入 yes 确认

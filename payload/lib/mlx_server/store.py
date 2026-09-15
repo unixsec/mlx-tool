@@ -44,6 +44,7 @@ class BadLine:
 # 配置键标 user）；`repo`/`type` 不是配置键，在这里补齐。
 # 表读不到时（引导期、表损坏）回落到这份内置清单 —— 它只用于**报错**，
 # 不参与任何判定，所以回落是安全的。
+# `type` / `type_evidence` 是 1.0.0 的旧字段：新代码不再写，只剩 `model repair` 清除时读。
 _KNOWN_SEG = {
     "repo": "user", "type": "user", "type_evidence": "machine",
     "revision": "machine", "size_mb": "machine", "layout": "machine",
@@ -117,12 +118,7 @@ class LoadResult:
 
 
 class ModelsTx:
-    """target == MODELS 的事务。
-
-    `patch` 里的 `type` 键做**域校验**（裁决 R2-2）：
-    `type ∈ types.tsv 主键集合`，否则抛、不写盘 —— 否则 `backendarg`
-    读到它时才炸，而那时记录已经写进 models.jsonl。
-    """
+    """target == MODELS 的事务。"""
 
     __slots__ = ("id", "port", "src", "patch", "mode", "user_keys", "unset_user")
 
@@ -269,22 +265,14 @@ def _owns_pid(pid):
     return proc.started_at_raw(pid)
 
 
-def commit(ctx, target, tx, stack=None, types=None):
-    # type: (object, str, object, object, object) -> LoadResult
+def commit(ctx, target, tx, stack=None):
+    # type: (object, str, object, object) -> LoadResult
     """锁内：读 → 校验 → 渲染 → 原子替换 → 重建内存视图。"""
     if target == SETTINGS:
         return _commit_settings(ctx, tx, stack)
     if target != MODELS:
         raise NotImplementedError(f"target {target!r} 的 commit 尚未落地")
     p = _path(ctx, target)
-
-    if "type" in tx.patch:
-        allowed = set(types or ())
-        if allowed and tx.patch["type"] not in allowed:
-            raise ValueError(
-                f"type={tx.patch['type']!r} ∉ types.tsv 主键集合 {sorted(allowed)} —— "
-                "不写盘（否则 backendarg 读到它时才炸，而记录已经落地）"
-            )
 
     # **传 `owns`**：陈旧锁按持有者存活判定后清理（`01-requirements.md:1296`）。
     # 不传的话 `atomic.lock` 里那整段四态判定是死代码 —— 写注册表期间进程被
@@ -309,7 +297,7 @@ def commit(ctx, target, tx, stack=None, types=None):
                 # 逐字是 `store.load().record(<id>).machine.revision`，
                 # 且 §1 写「`revision` 的唯一产者是 weights」—— 它是磁盘事实，
                 # 不是用户填的。此前归入 user 段与台账相悖。
-                seg = r.user if (k in ("repo", "type") or k in tx.user_keys) else r.machine
+                seg = r.user if (k == "repo" or k in tx.user_keys) else r.machine
                 seg[k] = v
             for k in getattr(tx, "unset_user", ()):
                 r.user.pop(k, None)

@@ -20,7 +20,7 @@
 --dry-run	up,down,restart,bench,install,uninstall,config import,model gc,model install,model register	no	-	-	false	exec.plan_only	flag.dry_run
 --all	down,status	no	-	target_selection	false	target.all	flag.all
 --repo	model register,model install	yes	<hf-repo>	-	-	model.source_repo	flag.repo
---type	model register,model install	yes	#model_type	-	-	model.backend_type	flag.type
+--type	model register,model install	yes	#modality	-	-	model.backend_type	flag.type
 --port	model register,model install	yes	#port_range	-	-	model.listen_port	flag.port
 --weights	model rm	no	-	-	false	reclaim.include_weights	flag.weights
 --revision	model register,model install	yes	<git-ref>	-	-	model.revision	flag.revision

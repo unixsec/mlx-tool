@@ -78,7 +78,7 @@ def seed_model(data_dir, weights_dir, mid="qwen", repo="x/y", port=8100, revisio
     import json
     data_dir, weights_dir = Path(data_dir), Path(weights_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    rec = {"id": mid, "user": {"repo": repo, "type": "text"},
+    rec = {"id": mid, "user": {"repo": repo},
            "machine": {"port": port, "revision": revision}}
     with (data_dir / "models.jsonl").open("a") as fh:
         fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")

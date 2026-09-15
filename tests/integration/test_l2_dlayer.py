@@ -6,7 +6,6 @@ import textwrap
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cardinality import Cardinality  # noqa: E402
 
 
 def _floor(payload, sys_py, body):
@@ -34,34 +33,17 @@ ctx = C()
 '''
 
 
-def test_l2_decide_type_four_levels_short_circuit(payload, sys_py):
-    """**裁决 R2-2**：四级判定链按序短路，**不设默认值第五级**。
-
-    坏样本：加一个 `return "text"` 兜底 ⇒ 猜错的 type 让 backendarg 产出错误 argv
-    ⇒ 后端起得来但推理全错且 rc 0，比起不来更难发现。
-    """
-    got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
-        from mlx_server.cmd.model_acquire import decide_type
-        r = {}
-        r["cli"]   = decide_type({"architectures": ["LlamaForCausalLM"]}, ["a.safetensors"], "vision", None)
-        r["arch"]  = decide_type({"architectures": ["LlavaForConditionalGeneration"]}, [], None, None)
-        r["file"]  = decide_type({}, ["model.safetensors"], None, None)
-        r["none"]  = decide_type({}, [], None, None)
-        r["asked"] = decide_type({}, [], None, lambda k: "text")
-        print(json.dumps({k: list(v) for k, v in r.items()}))
-    ''')
-    assert got["cli"] == ["vision", "CLI_EXPLICIT"], "CLI 显式值未优先"
-    assert got["arch"][1] == "CONFIG_ARCH"
-    assert got["file"][1] == "FILE_PATTERN"
-    assert got["none"] == [None, None], "四级全不确定时给了默认值 —— 不得有第五级"
-    assert got["asked"] == ["text", "ASKED"]
-    Cardinality.check("decide_type·四级", [got[k][1] for k in ("cli", "arch", "file", "asked")],
-                      ["CLI_EXPLICIT", "CONFIG_ARCH", "FILE_PATTERN", "ASKED"], rel="equal")
-
-
 def test_l2_acquire_refuses_before_commit(payload, sys_py):
-    """`BCR-R-01`：唯一性冲突在**校验段**被拒 ⇒ `Refused` 且**零落地**。"""
-    got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
+    """`BCR-R-01`：唯一性冲突在**校验段**被拒 ⇒ `Refused` 且**零落地**。
+
+    ruling L3：本用例传 `--type`，`model_acquire.run` 因此要读表做模态域校验 ——
+    ctx 需要一个真实的 `share_root`（指到产品的 `payload/share`），否则读表就崩。
+    """
+    pre = PRE.replace(
+        "ctx = C()",
+        "C.share_root = " + repr(str(payload / "share")) + "\nctx = C()",
+    )
+    got = _floor(payload, sys_py, pre + "\n@@\n" + '''
         from mlx_server import store
         from mlx_server.cmd import model_acquire
         store.commit(ctx, store.MODELS, store.ModelsTx("a", {"repo": "x/y", "type": "text"}, port=8100), CleanupStack())

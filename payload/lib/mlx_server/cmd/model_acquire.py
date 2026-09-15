@@ -6,33 +6,6 @@
 from .. import store, weights
 from ..result import Done, Failed, Refused, is_unknown
 
-TYPE_EVIDENCE = ("CLI_EXPLICIT", "CONFIG_ARCH", "FILE_PATTERN", "ASKED")
-
-
-def decide_type(meta, files, cli_type, ask):
-    # type: (dict, list, object, object) -> tuple
-    """`user.type` 的四级判定链（裁决 R2-2）。**按序短路，不设默认值第五级**。
-
-    猜错的 type 会让 backendarg 产出错误 argv ⇒ 后端起得来但推理全错且 rc 0，
-    比起不来更难发现。
-    """
-    if cli_type:
-        return cli_type, "CLI_EXPLICIT"
-    arch = (meta or {}).get("architectures") or []
-    if any("vision" in str(a).lower() for a in arch):
-        return "vision", "CONFIG_ARCH"
-    if arch:
-        return "text", "CONFIG_ARCH"
-    names = {f.lower() for f in (files or [])}
-    if any(n.endswith(".safetensors") for n in names):
-        if any("vision" in n or "image" in n for n in names):
-            return "vision", "FILE_PATTERN"
-        return "text", "FILE_PATTERN"
-    if ask is None:
-        return None, None
-    answer = ask("model.ask_type")
-    return (answer, "ASKED") if answer else (None, None)
-
 
 def run(ctx, stack, inv, deps=None):
     deps = deps or {}
@@ -46,29 +19,21 @@ def run(ctx, stack, inv, deps=None):
     r = weights.resolve(ctx, repo, (inv.args or {}).get("revision"))
     resolved = r.value if not is_unknown(r) else None
 
-    t, evidence = decide_type((inv.args or {}).get("meta"),
-                              (inv.args or {}).get("files"),
-                              (inv.args or {}).get("type"),
-                              deps.get("ask"))
-    if t is None:
-        return Refused(9, "model.type_undeterminable",
-                       detail="四级判定链全不确定且未取得回答 —— 不落默认值")
+    # **登记期不判定模态**（spec §6.2）：判定挪到每次 `up` 现场做（权重可能在登记之后才落盘）。
+    # `--type` 仍可用，含义变成「显式覆盖」，写进该模型的 `modality`。
+    from .. import schema as _schema
+    modality = (inv.args or {}).get("type") or None
+    if modality is not None:
+        from ..tables import open_tables
+        bad = _schema.check_domain("modality", modality, _schema.keydefs(open_tables(ctx)))
+        if bad:
+            return Refused(6, "config.invalid", key="modality", kind=bad)
 
     # **端口归一成 int**。CLI 给的是字符串，落盘后
     # `ports.conflict_check` 的 `machine["port"] == ctx.gateway_port` 恒为假，
     # 网关端口互斥这道检查从不命中（`mlx check` 的 ports 项也因此恒绿）。
-    from .. import schema as _schema
     port = _schema.coerce("port", (inv.args or {}).get("port"))
 
-    # 唯一性与 type 域校验**前置到校验段**（纯读，零资源）——
-    # 放在 commit 的 except 里虽然语义上也是「零落地」，但那让
-    # `L0·result-02` 的 AST 判据（构造点行号 > 资源创建行号）无法区分，
-    # 而守卫宁可误红也不能漏。前置之后两者都成立：判据过、语义也对。
-    types = deps.get("types")
-    if callable(types):
-        types = types()          # 惰性：只有真要校验类型时才读表
-    if types and t not in set(types):
-        return Refused(6, "model.type_domain", type=t, allowed=sorted(types))
     existing = store.load(ctx, store.MODELS)
     # **网关端口也在登记面上**（它是 §6 登记的单例槽位）。此前唯一性只比模型之间，
     # 于是登记在网关端口上的模型要等到 `mlx up` 才被拦下 —— 而那时用户已经
@@ -91,11 +56,14 @@ def run(ctx, stack, inv, deps=None):
         if old_repo != repo or (port is not None and old_port != port):
             replaced = {"repo": old_repo, "port": old_port}
 
-    patch = {"repo": repo, "type": t, "type_evidence": evidence}
+    patch = {"repo": repo}
+    if modality is not None:
+        patch["modality"] = modality
     if resolved:
         patch["revision"] = resolved["revision"]
         patch["layout"] = resolved["layout"]
-    tx = store.ModelsTx(inv.target, patch, port=port)
+    tx = store.ModelsTx(inv.target, patch, port=port,
+                        user_keys=("modality",) if modality is not None else ())
 
     # ── `--dry-run` 在**提交点①之前**返回（`DE-T-035`，`04-interfaces.md:3386`）──
     # 判据逐字：「`install --dry-run`：`commit_user_placeholder()` **未被调用**
@@ -115,18 +83,18 @@ def run(ctx, stack, inv, deps=None):
         # 前者只写一行登记，后者还要下几十 GB。措辞跟着动词走。
         return Done({"kind": "model_install_dry_run", "verb": inv.verb,
                      "id": inv.target,
-                     "repo": repo, "type": t, "port": port,
+                     "repo": repo, "modality": modality or "auto", "port": port,
                      "revision": (resolved or {}).get("revision"),
                      "would_commit": dict(patch),
                      "replaces": replaced})
 
     # ── stage_split（提交点①）·此后只能 Failed 且带 committed ──
-    store.commit(ctx, store.MODELS, tx, stack, types=types)
+    store.commit(ctx, store.MODELS, tx, stack)
 
     # ── 执行段（已有资源落地，只能 Failed 且带 committed）──
     if inv.verb == "register":
         return Done({"kind": "model_register", "registered": inv.target,
-                     "type": t, "evidence": evidence,
+                     "modality": modality or "auto",
                      **({"replaced": replaced} if replaced else {})})
 
     fetch = deps.get("fetch")
@@ -172,7 +140,7 @@ def run(ctx, stack, inv, deps=None):
             # 明说状态没跟上、以及怎么补。
             stale = f"machine 段未回填（{exc}）—— 跑 `mlx model repair` 补上"
     return Done({"kind": "model_install", "installed": inv.target,
-                 "type": t, "evidence": evidence,
+                 "modality": modality or "auto",
                  "path": placed.get("path"),
                  "state": store.model_state(
                      store.load(ctx, store.MODELS).by_id(inv.target)),

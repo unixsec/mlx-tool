@@ -278,3 +278,18 @@ def test_l3_falls_back_to_system_python_when_venv_gone(installed):
         assert ".venv" not in json.loads(r.stdout)["python"], "没真的回落"
     finally:
         moved.rename(venv)
+
+
+def test_l3_reinstall_removes_retired_types_table(tmp_path, repo):
+    """spec §6.4：`cp -R` 只增不删 —— 1.0.0 留下的 `types.tsv` 要由安装器显式删掉。"""
+    roots = {k: tmp_path / v for k, v in
+             (("MLX_ROOT_CODE", "code"), ("MLX_ROOT_DATA", "data"),
+              ("MLX_ROOT_WEIGHTS", "weights"))}
+    (roots["MLX_ROOT_CODE"] / "share").mkdir(parents=True)
+    old = roots["MLX_ROOT_CODE"] / "share" / "types.tsv"
+    old.write_text("text\tmlx_lm\t--model\n")
+    env = dict(os.environ, PATH="/usr/bin:/bin", **{k: str(v) for k, v in roots.items()})
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+                       capture_output=True, text=True, timeout=60, check=False, env=env)
+    assert r.returncode == 0, f"安装器失败：{r.stderr}"
+    assert not old.exists(), "退役文件在重装后仍然存在"

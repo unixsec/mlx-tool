@@ -64,6 +64,13 @@ cp -R "$SRC/payload/bin/." "$CODE_ROOT/bin/"
 cp -R "$SRC/payload/lib/." "$CODE_ROOT/lib/"
 cp -R "$SRC/payload/gateway/." "$CODE_ROOT/gateway/"
 cp -R "$SRC/payload/share/." "$CODE_ROOT/share/"
+# **退役文件**（spec §6.4）：`cp -R` 只增不删，旧版装过的表会一直躺在 share/ 里，
+# 而卸载器按**本版** manifest 删文件，永远扫不到它们。不进 manifest ——
+# manifest 是本版产物清单，退役文件恰恰不是。
+RETIRED=(share/types.tsv)
+for _r in "${RETIRED[@]}"; do
+  rm -f "$CODE_ROOT/$_r"
+done
 # 部署器与载荷副本进代码根（R-DEPLOY-37）：
 # · 没有 deployer/ ⇒ 源码树一删，用户手上只剩一堆无法收敛的文件
 # · 没有 payload/  ⇒ `mlx install` 找不到重装的源（install.sh 用 $0/.. 定位载荷，

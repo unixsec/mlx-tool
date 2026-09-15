@@ -333,15 +333,6 @@ def build_deps(ctx):
         # `ports.conflict_check` 的契约逐字是「在其所属命令的真实运行模式下
         # **必然执行**（不得因降级模式恒空跑）」，而它恰恰恒空跑了。
         "ports_conflict": lambda target: _ports_conflict(ctx),
-        # 模型类型的值域，**来自 `types.tsv` 的主键列**（设计：「type ∈ types.tsv
-        # 主键集合」）。此前它是 `schema.MODEL_TYPES` 常量 —— 两道域校验
-        # （cmd 与 store）读同一个常量，少一处引用就一起失效。
-        # **惰性读**：装配期直接读表会让「表缺失」变成**每一条命令**都崩，
-        # 连 `help` / `version` 都起不来 —— 而它们的契约是「任何状态下都能跑」。
-        # 现在只有真要用到类型域的那条命令会碰它。
-        "types": lambda: tuple(r["type"] for r in _tables(ctx).model_types()),
-        # type 四级判定链的第 ④ 级。缺了它，不给 `--type` 必然 rc 9。
-        "ask": _ask,
         # `chat` 的多轮读取源与输出。**提示走 stderr、回复走 stdout** ——
         # 台账给 chat 的主产物是「逐字节只含回复正文」，把「你 > 」混进去
         # 会让 `mlx chat x > out.txt` 的文件里夹着提示符。
@@ -522,34 +513,6 @@ def _ports_conflict(ctx):
     except Exception:                              # noqa: BLE001
         return None                                # 读不到注册表不是端口冲突
     return ports.conflict_check(ctx, recs)
-
-
-def _ask(msg_key):
-    # type: (str) -> str
-    """向用户问一句并读一行。**只从 `/dev/tty` 读**，无 tty ⇒ 返回空串。
-
-    读写用两个独立的流 —— 同一个 buffered 流上 write 之后 readline 需要 seek，
-    而 tty 不可 seek，抛的 `io.UnsupportedOperation` 继承自 `OSError`，
-    会被吞掉（`confirm` 踩过这个坑，见它的 docstring）。
-    """
-    try:
-        w = open("/dev/tty", "w")                  # noqa: SIM115
-    except OSError:
-        return ""
-    try:
-        r = open("/dev/tty")                       # noqa: SIM115
-    except OSError:
-        w.close()
-        return ""
-    try:
-        w.write(f"{msg_key}: ")
-        w.flush()
-        return (r.readline() or "").strip()
-    except OSError:
-        return ""
-    finally:
-        r.close()
-        w.close()
 
 
 def wait_ready(ctx, spec, port, log_path=None, timeout_sec=20, poll_sec=0.25):

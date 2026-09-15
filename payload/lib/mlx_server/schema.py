@@ -24,7 +24,6 @@ DEFAULTS = {
     "fit.reserve_pct": 20,     # 预留给系统的份额
     "fit.tight_pct": 75,       # 超过预算的这个比例 ⇒ TIGHT（能起，但挤）
     "fit.over_pct": 95,        # 超过这个比例 ⇒ OVER（拒绝启动）
-    "backend": "mlx_lm",
     "max_tokens": 81920,
     "modality": "auto",
     "max_concurrency": 8,

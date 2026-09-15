@@ -38,7 +38,7 @@ class TablesView:
     """只读访问器。构造一次，之后不再碰盘。"""
 
     __slots__ = ("_root", "_messages", "_manifest", "_verbs", "_cli",
-                 "_schema", "_types", "_drafters", "_backends")
+                 "_schema", "_drafters", "_backends")
 
     COLUMNS = {
         "messages": ("key", "text"),
@@ -55,7 +55,6 @@ class TablesView:
         # 11 列，逐字按 `04-iface-P.md:86` 的 `KeyDef`
         "schema": ("key", "type", "domain", "default", "scope", "level",
                    "restart", "exportable", "secret", "group", "readers"),
-        "types": ("type", "module", "server_arg"),
         "drafters": ("model_type",),
         "backends": ("backend", "module", "host", "offline", "concurrency_args",
                      "draft_args", "thinking", "ready", "key_env", "env_clear"),
@@ -69,7 +68,6 @@ class TablesView:
         self._cli = None
         self._manifest = None
         self._schema = None
-        self._types = None
         self._drafters = None
         self._backends = None
 
@@ -137,13 +135,6 @@ class TablesView:
         if self._schema is None:
             self._schema = self._load("schema")
         return self._schema
-
-    def model_types(self):
-        # type: () -> list
-        """模型类型定义（`types.tsv`）。`--type` 的值域来自它的主键列。"""
-        if self._types is None:
-            self._types = self._load("types")
-        return self._types
 
     def drafters(self):
         # type: () -> list

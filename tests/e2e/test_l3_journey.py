@@ -92,13 +92,14 @@ def test_l3_journey(cli):
     steps.append(("register", rc))
     assert rc == 0, f"登记失败：{err}"
     assert out["registered"] == "qwen"
-    assert out["evidence"] == "CLI_EXPLICIT", "显式 --type 应走第一级判定链"
+    assert out["modality"] == "text", "显式 --type 应写进 modality"
 
     # 3 · 列表 —— 登记的东西要看得见，且带来源证据
     rc, out, _ = cli("model", "ls")
     steps.append(("ls", rc))
     assert rc == 0 and [m["id"] for m in out["models"]] == ["qwen"]
-    assert out["models"][0]["type_evidence"] == "CLI_EXPLICIT"
+    assert out["models"][0]["modality"] == "text"
+    assert "type_evidence" not in out["models"][0], "登记期不再产出类型证据"
 
     # 4 · 健康检查 —— 九项都要真的求值，不能报「未注入」
     rc, out, err = cli("check")
