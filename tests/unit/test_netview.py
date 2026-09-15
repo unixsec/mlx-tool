@@ -128,3 +128,81 @@ def test_netview_pending_report_retries_on_tick_until_delivered(payload, sys_py)
     assert got["tick1"] == [None, 2, 1], \
         "未到 30 s 周期但有待送达的报告：tick() 应重发 on_change，不跑 loader"
     assert got["tick2"] == [None, 2, 1], "送达成功后，未到周期的 tick() 不应再调 on_change"
+
+
+PROG_RACE = r"""
+import json, threading
+from gateway import peers
+HW = open("@NET@/networksetup.txt").read()
+IF = open("@NET@/ifconfig.txt").read()
+def inject(ifc, iface, line):
+    out = []
+    for ln in ifc.splitlines(True):
+        out.append(ln)
+        if ln.startswith(iface + ": flags="):
+            out.append("\t" + line + "\n")
+    return "".join(out)
+IF2 = inject(IF, "en3", "inet 192.168.50.10 netmask 0xffffff00 broadcast 192.168.50.255")
+
+ifc_state = {"text": IF}
+def loader():
+    return HW, ifc_state["text"]
+
+def has_probe_net(snap):
+    return "192.168.50.0/24" in [a["net"] for a in snap["allowed_nets"]]
+
+delivered = []
+evt = threading.Event()
+bg = {}
+count = [0]
+
+def on_change(snap):
+    count[0] += 1
+    n = count[0]
+    tag = "S2" if has_probe_net(snap) else "S1"
+    if n == 1:
+        # 第一次 refresh：模拟「运行记录还没写出来」——没送达，留一份待送达
+        delivered.append(tag)
+        return False
+    if n == 2:
+        # tick() 的补发：**在这次调用内部**并发起一次新的 refresh()，制造
+        # 「补发旧快照」跟「刚算出的新快照自己送达」之间的竞争。
+        ifc_state["text"] = IF2
+        t2 = threading.Thread(target=v.refresh)
+        bg["t2"] = t2
+        t2.start()
+        # 有 _deliver_lock 时，t2 送达前必须等这次调用返回、释放锁 —— 超时是
+        # **预期**（不是这条用例的失败）；没有那把锁的旧代码里，t2 会在超时
+        # 前就送达并置位这个事件。
+        evt.wait(timeout=2.0)
+        delivered.append(tag)
+        return True
+    # n == 3：并发那次 refresh() 自己的送达
+    delivered.append(tag)
+    evt.set()
+    return True
+
+v = peers.NetView(loader, clock=lambda: 0.0, wall=lambda: 0.0, on_change=on_change)
+v.refresh()
+v.tick()
+t2 = bg.get("t2")
+if t2 is not None:
+    t2.join(timeout=5.0)
+print(json.dumps({"delivered": delivered, "t2_alive": bool(t2 and t2.is_alive())}))
+"""
+
+
+def test_netview_concurrent_pending_resend_never_delivers_stale_after_fresh(payload, sys_py):
+    """re-review 修复：`tick()` 补发的是「读到那一刻」的快照；如果没有锁把
+    「重读最新 + 调 on_change」串成一步，一次并发 `refresh()`（比如
+    `classify()` 触发的）可能先把更新的快照送达成功，而补发那次紧跟着又把
+    旧快照送达一次，用旧数据覆盖刚合并进去的新记录。用一个在 `on_change`
+    内部起并发线程、经 `threading.Event` 握手的钩子逼出这个交织顺序：
+    断言**最后一次送达的快照必须是最新那份**，不能是新的送达之后又追一次
+    旧的。"""
+    got = run_floor(payload, sys_py, PROG_RACE, with_gateway=True, timeout=30, NET=NET)
+    assert not got["t2_alive"], "并发的 refresh() 线程应已经跑完"
+    assert "S2" in got["delivered"], got["delivered"]
+    assert got["delivered"][-1] == "S2", (
+        f"最后一次送达必须是最新快照，不能是旧快照追在新快照后面：{got['delivered']}"
+    )

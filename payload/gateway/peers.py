@@ -206,6 +206,14 @@ class NetView:
     上一份还没送达，会**只重发那一份快照**（不跑 loader、不动 `_last_try`）——
     后台刷新线程每 `refresh_sec`（5 s）调一次 `tick()`，于是重发的粒度是 5 s，
     不必等满 30 s 的重算周期（Task 11 的 L3 只等 15 s）。
+
+    **送达经单独一把锁串行化**（`_deliver_lock`，跟保护状态的 `_lock`分开）：
+    `refresh()` 收尾时的送达、`tick()` 的补发送达，谁拿到 `_deliver_lock` 谁才能
+    调 `on_change`，且调之前**重新读一遍**当时最新的快照 —— 不是自己手上那份。
+    没有这把锁的话，`tick()` 补发的旧快照可能在并发 `classify()` 触发的
+    `refresh()` 已经把新快照送达成功**之后**才真的调用 `on_change`，用旧数据
+    覆盖刚合并进去的新记录（送达顺序乱了，落地顺序也就乱了）。`_deliver_lock`
+    不覆盖 loader/网络命令（那些在 `refresh()` 里，不持这把锁）。
     """
 
     def __init__(self, loader, allow_cidrs="", clock=None, wall=None,
@@ -218,6 +226,7 @@ class NetView:
         self._period, self._gap = period_sec, min_gap_sec
         self._on_change = on_change
         self._lock = threading.Lock()
+        self._deliver_lock = threading.Lock()
         self._nets = compute_nets({}, {}, self._cidrs)
         self._source, self._error = "fallback", ""
         self._computed_at = None
@@ -234,6 +243,33 @@ class NetView:
             return bool(self._on_change(snap))
         except Exception:                                # noqa: BLE001
             return False
+
+    def _deliver_latest(self, require_pending=False):
+        # type: (bool) -> object
+        """送达**当前最新**的快照（不是调用方手上那一份）。
+
+        `_deliver_lock` 把所有送达尝试串成一条队 —— 排到号才能读 `_last_snap`
+        并调 `on_change`；读的时刻已经是自己这次真正调用 `on_change` 前最后
+        一刻，所以永远读到当时最新一份。`require_pending`（`tick()` 补发用）：
+        排到号那一刻如果已经不再 pending（别的送达已经替它把最新那份送出去了），
+        直接跳过，不重复调 `on_change`。
+        """
+        with self._deliver_lock:
+            with self._lock:
+                if require_pending and not self._report_pending:
+                    return None
+                snap = self._last_snap
+            if snap is None:
+                return None
+            delivered = self._deliver(snap)
+            with self._lock:
+                if self._last_snap is snap:
+                    # 送达期间没有更新的快照产生 —— 这次结果说了算
+                    self._report_pending = not delivered
+                # 否则：送达期间已经有更晚一次 refresh() 把 `_last_snap` 换成
+                # 更新的一份并把 pending 置回 True —— 那次自己排的队会再送一次
+                # 最新的，这里不覆盖它的状态
+            return delivered
 
     def refresh(self):
         # type: () -> dict
@@ -255,23 +291,17 @@ class NetView:
             self._computed_at = self._wall()
             snap = self._snapshot_locked()
             self._last_snap = snap
-        delivered = self._deliver(snap)
-        with self._lock:
-            self._report_pending = not delivered
+            self._report_pending = True          # 送达结果由 _deliver_latest 更新
+        self._deliver_latest()
         return snap
 
     def tick(self):
         # type: () -> object
         with self._lock:
             due = self._last_try is None or self._clock() - self._last_try >= self._period
-            pending, snap = self._report_pending, self._last_snap
         if due:
             return self.refresh()
-        if pending and snap is not None:
-            # 只补发上一份快照 —— 不跑 loader，不算作一次「重算尝试」
-            delivered = self._deliver(snap)
-            with self._lock:
-                self._report_pending = not delivered
+        self._deliver_latest(require_pending=True)
         return None
 
     def classify(self, addr):
