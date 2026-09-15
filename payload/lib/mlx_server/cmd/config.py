@@ -26,8 +26,14 @@ def _mask1(key, value, defs):
 
 def _defs(ctx, deps):
     # type: (object, dict) -> dict
-    """键定义（十一列）。**来自 `schema.tsv`** —— 表缺失时回落硬编码默认值，
-    那让 `config` 在表坏掉时仍能报出「哪个键」而不是整条命令崩。"""
+    """键定义（十一列）。**来自 `schema.tsv`**；表读不到时返回 `{}`。
+
+    这个空返回值正是 `run()` 顶部 fail-closed 判据的来源
+    （`if not _defs(ctx, deps): return Refused(3, "tables.unreadable", ...)`，
+    修 I-1 后新增）：表读不到就在**任何** commit 之前整体拒绝，rc 3。
+    过了那道判据，`run()` 内其余分支再调 `_defs` 时表必已非空 ——
+    只有 `run()` 调用本函数，没有其它调用方，空返回真正被求值的只有
+    顶部那一次；后续调用点上「空表」这个分支本身不可达。"""
     tables = (deps or {}).get("tables")
     if tables is None:
         from ..tables import open_tables
@@ -42,16 +48,24 @@ def _defs(ctx, deps):
 
 
 def _domain(ctx, deps):
-    """本版认得的配置键集合。表在就用表，否则回落 `schema.DEFAULTS`。"""
+    """本版认得的配置键集合。**优先来自 `schema.tsv`**；`schema.DEFAULTS`
+    这条回落分支在 `run()` 内实际不可达 —— `run()` 顶部已用同一个
+    `_defs(ctx, deps)` 做过 fail-closed 判定（表读不到直接 `Refused(3)`，
+    rc 3），走到这里时 `_defs` 必已非空。本函数只被 `run()` 调用，
+    没有其它调用方；回落分支留着仅是函数自身按最坏输入防御，不代表
+    `run()` 里存在一条会用到它的路径。"""
     defs = _defs(ctx, deps)
     return set(defs) if defs else set(schema.DEFAULTS)
 
 
 def _factory(ctx, deps):
     # type: (object, dict) -> dict
-    """出厂默认值，**来自 `schema.tsv`**。表读不到时回落硬编码兜底。
+    """出厂默认值，**来自 `schema.tsv`**。`if not defs: return dict(schema.DEFAULTS)`
+    这条回落分支在 `run()` 内同样不可达 —— 理由与 `_domain` 一致：`run()`
+    顶部已经用 `_defs(ctx, deps)` fail-closed 过（表读不到即 `Refused(3)`，
+    rc 3），本函数只被 `run()` 调用，走到这里时 `defs` 必已非空。
 
-    `schema.effective` 是纯函数、不自己读表，所以每个调用点都要注入这个 —— 
+    `schema.effective` 是纯函数、不自己读表，所以每个调用点都要注入这个 ——
     不注入的话它只认硬编码的三个键，表里新加的键会被判「未知配置键」。
     """
     defs = _defs(ctx, deps)
