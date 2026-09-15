@@ -217,7 +217,7 @@ def load_settings(ctx):
     不可解析 ⇒ 抛 `StoreParseError`，由边界层翻成 `Refused(6)` ——
     **不静默当空**，那会让用户的设置在一次手滑编辑后无声消失。
     """
-    p = _path(ctx, SETTINGS)
+    p = settings_path(ctx)
     if not os.path.exists(p):
         return {}
     try:
@@ -239,7 +239,7 @@ def load_settings(ctx):
 def _commit_settings(ctx, tx, stack):
     # type: (object, object, object) -> dict
     """锁内：读 → 合并 → 原子替换。返回合并后的全量设置。"""
-    p = _path(ctx, SETTINGS)
+    p = settings_path(ctx)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     # **传 `owns`**：陈旧锁按持有者存活判定后清理（`01-requirements.md:1296`）。
     # 不传的话 `atomic.lock` 里那整段四态判定是死代码 —— 写注册表期间进程被
