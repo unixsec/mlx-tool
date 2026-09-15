@@ -263,13 +263,17 @@ def _v_backend(state, inv, deps):
         draft = (state["cfg_draft"], None if is_unknown(d) else d.value)
         dsize = _size_mb(state.get("draft_record"), state["draft_path"])
         size = None if (size is None or dsize is None) else size + dsize
-    template = None
-    # 模板只影响走模板开关的后端（mlx_vlm）；纯文本不必付 5 s 上限的子进程代价
-    if draft is None and route.effective_vision(facts.value.get("vision"),
-                                                cfg.values.get("modality")):
-        template = templates.inspect_template(
-            state["weights_path"], cfg.venv_python,
-            ps_path=(getattr(ctx, "bins", None) or {}).get("ps", "/bin/ps"))
+    # 模板采证对 R2/R3/R4 一视同仁（spec §2.3 不按后端限定；§4.5 mlx_lm 同样要把
+    # reasoning_effort 转发进 chat_template_kwargs）。此前只在「无 drafter 且
+    # vision」时才取证，R2（drafter）/R4（纯文本）两条路线因此恒记
+    # effort_domain == []，qwen38 被 modality=text 强制成文本后 reasoning
+    # effort 也跟着丢。判不出（没有可用 venv 解释器 / 没有 jinja2 / 模型没
+    # 模板）按 Unknown 处理，`route.decide` 已经把它消化成空证据——不对
+    # mlx_lm 引入新的拒绝，`--enable-thinking` 仍然只认 `backends.tsv` 的
+    # `thinking` 列（mlx_lm 该列是 `-`，恒不受此影响）。
+    template = templates.inspect_template(
+        state["weights_path"], cfg.venv_python,
+        ps_path=(getattr(ctx, "bins", None) or {}).get("ps", "/bin/ps"))
     out = route.decide(inv.target, facts.value, template, draft, cfg.values,
                        (caps.get(ctx) or {}).get("packages") or [],
                        {r["backend"]: r for r in tv.backends()}, size)

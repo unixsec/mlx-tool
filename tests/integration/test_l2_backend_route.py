@@ -30,6 +30,15 @@ def _run(payload, sys_py, body):
                      FIXTURES=FIX, RENDER_PY=sys.executable, KEY=KEY)
 
 
+def _run_no_venv(payload, sys_py, body):
+    """`RENDER_PY` 留空 ⇒ `WORLD` 不搭 venv 包装脚本，`ctx.venv` 指向不存在的路径 ——
+    模拟「渲染解释器不可用」（finding I-2 提到的 L3 临时安装那种场景：
+    `templates.inspect_template` 在 `python` 不存在时直接短路回 `Unknown`，
+    不读模板、不起子进程）。"""
+    return run_floor(payload, sys_py, UP + body, timeout=60,
+                     FIXTURES=FIX, RENDER_PY="", KEY=KEY)
+
+
 def test_text_model_goes_to_mlx_lm(payload, sys_py):
     got = _run(payload, sys_py, """
 seed("t", "org/t", 8101, config={})
@@ -151,3 +160,36 @@ print(json.dumps({"rc": out.rc, "key": out.msg_key, "detail": out.args.get("deta
     assert (rec["backend"], rec["backend_auth"], rec["max_concurrency"]) == ("mlx_vlm", True, 8)
     assert rec["effort_domain"] == ["low", "medium", "xhigh"] and len(rec["key_fp"]) == 12
     assert KEY not in json.dumps(rec), "运行记录里有密钥原值"
+
+
+def test_text_forced_model_carries_effort_domain_from_template(payload, sys_py):
+    """finding I-2：R4（mlx_lm，无 drafter）也要采证模板。
+
+    `qwen38` 本是多模态模型，`modality=text` 把它强制路由到 `mlx_lm`（R4）——
+    此前 `_v_backend` 只在「无 drafter 且 vision」时才调
+    `templates.inspect_template`，R4/R2 两条路线因此恒记 `effort_domain == []`，
+    reasoning effort 在这种「被强制成文本」的场景下会被悄悄丢弃。
+    """
+    got = _run(payload, sys_py, """
+seed("forced2", "org/forced2", 8108, config=VIS_CFG, template=VIS_TPL,
+     user={"modality": "text"})
+print(json.dumps(up("forced2")))
+""")
+    assert got["rc"] == 0, got
+    assert got["route"]["rule"] == "R4" and got["route"]["backend"] == "mlx_lm"
+    assert got["argv"][2] == "mlx_lm.server"
+    assert got["route"]["effort_domain"] == ["low", "medium", "xhigh"], got["route"]
+
+
+def test_text_model_template_unknown_when_interpreter_unavailable(payload, sys_py):
+    """模板判不出（没有可用 venv 解释器）不得给 mlx_lm 路线引入新的拒绝 ——
+    rc 仍是 0，`effort_domain` 按空证据处理（spec §2.3：Unknown ⇒ 空值域）。
+    """
+    got = _run_no_venv(payload, sys_py, """
+seed("noventv", "org/noventv", 8109, config=VIS_CFG, template=VIS_TPL,
+     user={"modality": "text"})
+print(json.dumps(up("noventv")))
+""")
+    assert got["rc"] == 0, got
+    assert got["route"]["rule"] == "R4" and got["route"]["backend"] == "mlx_lm"
+    assert got["route"]["effort_domain"] == [], got["route"]

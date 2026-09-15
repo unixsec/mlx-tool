@@ -70,11 +70,17 @@ def test_l2_dry_run_zero_external_commands(payload: Path, sys_py: str, tmp_path:
     这里的模型是文本模型（`qwen`，`config.json` 无 `vision_config`）——
     `DE-T-018` 权威判据逐字是「**stage_split 之后**外部命令计数 == 0」
     （`tests/unit/test_stage_split.py:3,67`），不是「校验段全程零外部命令」。
-    校验段本身允许只读取证：Task 9 接入的 `svc._v_backend` 对**多模态**模型会调
-    `templates.inspect_template`，那是一次真实的（沙箱）子进程渲染，发生在
-    `stage_split`/dry-run 早退**之前**，不计入本条判据的求值面。选文本模型
-    正是为了绕开这条取证路径，本用例的「零外部命令」结论**不能**推广到
-    多模态模型的 dry-run。多模态场景的显式覆盖见
+    校验段本身允许只读取证：`svc._v_backend` 现在对**每一条到达 R2/R3/R4 的路线**
+    都会调 `templates.inspect_template`（finding I-2：此前只对「无 drafter 且
+    vision」这一种路线取证，mlx_lm 路线因此恒记 `effort_domain == []`，
+    qwen38 被 `modality=text` 强制成文本后 reasoning effort 也跟着丢——
+    文本模型不再是这条取证路径之外的特例）。取证发生在 `stage_split`/dry-run
+    早退**之前**，不计入本条判据的求值面，这里断言仍是「零外部命令」的真正
+    原因是**本用例的沙箱没有 venv 解释器**（`ctx.venv` 指向的路径不存在）——
+    `templates.inspect_template` 在 `python` 不可用时直接短路回 `Unknown`，
+    连模板文件都不读、更不会 `Popen` 子进程；一旦沙箱真有可用解释器（如
+    `tests/integration/test_l2_backend_route.py` 用 `RENDER_PY=sys.executable`
+    包出来的那种 venv），取证就会真的跑，见下面对多模态场景的显式覆盖
     `tests/integration/test_l2_backend_route.py::test_vision_model_goes_to_mlx_vlm_with_key_masked`
     ——那里对 `spawn`/`wait_ready`（执行段的外部效应 deps）与模板渲染临时文件
     分别断言零调用 / 零残留。
