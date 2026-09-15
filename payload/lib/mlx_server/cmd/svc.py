@@ -635,10 +635,12 @@ def run(ctx, stack, inv, deps):
         timeout = ready_timeout(rt)
         if rt is not None and rt.row.get("ready") == "load":
             # 加载完才监听的后端：用户会等上一两分钟，先说清楚在等什么
-            from ..tables import open_tables
-            tvn = open_tables(ctx)
-            deps["notice"](tvn.text(tvn.msg("svc.loading_notice"), backend=rt.backend,
-                                    gb=round((rt.size_mb or 0) / 1024.0, 1), sec=timeout))
+            notice = deps.get("notice")
+            if notice is not None:
+                from ..tables import open_tables
+                tvn = open_tables(ctx)
+                notice(tvn.text(tvn.msg("svc.loading_notice"), backend=rt.backend,
+                                gb=round((rt.size_mb or 0) / 1024.0, 1), sec=timeout))
         verdict = wait(spec, port, timeout)
         if verdict is not None:
             reason, tail = verdict

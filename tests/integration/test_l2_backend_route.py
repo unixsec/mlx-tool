@@ -162,6 +162,21 @@ print(json.dumps({"rc": out.rc, "key": out.msg_key, "detail": out.args.get("deta
     assert KEY not in json.dumps(rec), "运行记录里有密钥原值"
 
 
+def test_load_backend_missing_notice_dep_does_not_raise(payload, sys_py):
+    """`deps` 缺 `notice` 键时（调用方没注入）执行段不得 KeyError —— 只是不出提示。
+    与上一条用例同一条走「加载完才监听」分支的路由，唯一差异是不给 `notice`。"""
+    got = _run(payload, sys_py, """
+seed("v", "org/v", 8107, config=VIS_CFG, template=VIS_TPL, machine={"size_mb": 2048.0})
+put_caps(["mlx", "mlx_lm", "mlx_vlm"])
+put_settings({"backend.api_key": "@KEY@"})
+deps.update({"spawn": lambda spec, cwd: {"pid": 999999, "pgid": 999999, "started_at": "t"},
+             "wait_ready": lambda spec, port, timeout_sec: ("timeout", "tail")})
+out = run(ctx, None, Invocation("up", "v"), deps)
+print(json.dumps({"rc": out.rc, "key": out.msg_key}))
+""")
+    assert (got["rc"], got["key"]) == (4, "svc.ready_timeout"), got
+
+
 def test_text_forced_model_carries_effort_domain_from_template(payload, sys_py):
     """finding I-2：R4（mlx_lm，无 drafter）也要采证模板。
 
