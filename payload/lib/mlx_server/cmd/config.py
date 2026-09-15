@@ -51,9 +51,10 @@ def _domain(ctx, deps):
     """本版认得的配置键集合。**优先来自 `schema.tsv`**；`schema.DEFAULTS`
     这条回落分支在 `run()` 内实际不可达 —— `run()` 顶部已用同一个
     `_defs(ctx, deps)` 做过 fail-closed 判定（表读不到直接 `Refused(3)`，
-    rc 3），走到这里时 `_defs` 必已非空。本函数只被 `run()` 调用，
-    没有其它调用方；回落分支留着仅是函数自身按最坏输入防御，不代表
-    `run()` 里存在一条会用到它的路径。"""
+    rc 3），走到这里时 `_defs` 必已非空。调用方是 `run()` 自身（多处）和
+    `_layers()`（:99）；`_layers()` 又只被 `run()` 调用，所以两条路径最终
+    都挂在同一次 `run()` 顶部的 fail-closed 判定之后。回落分支留着仅是
+    函数自身按最坏输入防御，不代表这些调用点存在一条会用到它的路径。"""
     defs = _defs(ctx, deps)
     return set(defs) if defs else set(schema.DEFAULTS)
 
