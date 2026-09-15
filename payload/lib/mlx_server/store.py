@@ -120,10 +120,10 @@ class LoadResult:
 class ModelsTx:
     """target == MODELS 的事务。"""
 
-    __slots__ = ("id", "port", "src", "patch", "mode", "user_keys", "unset_user")
+    __slots__ = ("id", "port", "src", "patch", "mode", "user_keys", "unset_user", "unset_machine")
 
     def __init__(self, rid, patch, mode="upsert", port=None, src=None,
-                 user_keys=(), unset_user=()):
+                 user_keys=(), unset_user=(), unset_machine=()):
         self.id = rid
         self.patch = dict(patch)
         self.mode = mode
@@ -139,6 +139,10 @@ class ModelsTx:
         # 写 `None` 不等于删：`None` 会作为一个显式的「设成了空」参与三级链，
         # 而 unset 的语义是「让它回落到下一层」。
         self.unset_user = tuple(unset_user)
+        # `repair` 的 C 动作：退役配置键要**删掉**、不是写 `None`——理由同
+        # `unset_user`，只是发生在 machine 段（`type_evidence` 是磁盘判定
+        # 留下的字段，不属 user）。
+        self.unset_machine = tuple(unset_machine)
 
 
 def _path(ctx, target):
@@ -301,6 +305,8 @@ def commit(ctx, target, tx, stack=None):
                 seg[k] = v
             for k in getattr(tx, "unset_user", ()):
                 r.user.pop(k, None)
+            for k in getattr(tx, "unset_machine", ()):
+                r.machine.pop(k, None)
             if tx.port is not None:
                 r.machine["port"] = tx.port
             recs[tx.id] = r

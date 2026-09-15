@@ -165,6 +165,12 @@ def _repair(p):
              [f"    {c['id']}.{c['field']}  {_flat(c.get('before'))} → {_flat(c.get('after'))}"
               for c in ch]) if ch else ["  没有需要重建的字段（machine 段都已填好）"]
     lines.append(f"  扫描到磁盘上 {p.get('scanned', 0)} 个仓库，注册表 {p.get('records', 0)} 条")
+    cl = p.get("cleared_fields") or []
+    lines += ["", f"  清除了 {len(cl)} 个 1.0.0 旧字段：" if cl else "  没有 1.0.0 旧字段"]
+    lines += [f"    {c['id']}.{c['segment']}.{c['field']}" for c in cl]
+    rt = p.get("retired_keys") or []
+    lines += ["", f"  清除了 {len(rt)} 个退役配置键：" if rt else "  没有退役配置键"]
+    lines += [f"    {'全局' if r['scope'] == 'global' else r['scope']}  {r['key']}" for r in rt]
     if p.get("registered_but_missing"):
         lines += ["", "  已登记但磁盘上没有：" + "、".join(p["registered_but_missing"]),
                   "    → 权重未下载或已被移走；`mlx model rm <id>` 清理登记"]

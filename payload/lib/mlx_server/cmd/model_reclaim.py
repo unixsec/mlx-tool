@@ -3,7 +3,7 @@ import contextlib
 import os
 
 from .. import store, vault, weights
-from ..result import Done, Refused, is_unknown
+from ..result import Done, Failed, Refused, is_unknown
 
 
 def run(ctx, stack, inv, deps=None):
@@ -154,6 +154,39 @@ def run(ctx, stack, inv, deps=None):
         if out.rc != 0:
             return out
 
+        # ── B / C（spec §6.3）：清除 1.0.0 旧字段与退役配置键 ──
+        # **只删列出的键**：machine 段其余字段、settings.json 其余键逐字节不变。
+        # 判据读 `schema.tsv`（与校验段「生效配置」记入 dropped 的判据同一个），
+        # 不在这里写死 `backend` —— 下一次退役一个键时这里不用改。
+        from .. import schema
+        from ..tables import open_tables
+        defs = schema.keydefs(open_tables(ctx))
+        cleared, retired = [], []
+        for r in store.load(ctx, store.MODELS).records:
+            old_u = [k for k in ("type",) if k in r.user]
+            old_m = [k for k in ("type_evidence",) if k in r.machine]
+            ret_u = sorted(k for k in r.user if k not in defs and k not in ("repo", "type"))
+            if not (old_u or old_m or ret_u):
+                continue
+            try:
+                store.commit(ctx, store.MODELS, store.ModelsTx(
+                    r.id, {}, unset_user=tuple(old_u + ret_u),
+                    unset_machine=tuple(old_m)), stack)
+            except Exception as exc:              # noqa: BLE001
+                return Failed(1, "repair.commit_failed", [f"models.jsonl:{r.id}"],
+                              id=r.id, detail=str(exc))
+            cleared += [{"id": r.id, "segment": "user", "field": k} for k in old_u]
+            cleared += [{"id": r.id, "segment": "machine", "field": k} for k in old_m]
+            retired += [{"scope": r.id, "key": k} for k in ret_u]
+        stale = sorted(k for k in store.load_settings(ctx) if k not in defs)
+        if stale:
+            try:
+                store.commit(ctx, store.SETTINGS, store.SettingsTx(unset=stale), stack)
+            except Exception as exc:              # noqa: BLE001
+                return Failed(1, "repair.commit_failed", ["settings.json"],
+                              id="settings.json", detail=str(exc))
+            retired += [{"scope": "global", "key": k} for k in stale]
+
         res = store.load(ctx, store.MODELS)
         on_disk = {i["repo"] for i in facts.installed}
         pay = dict(out.payload)
@@ -163,5 +196,7 @@ def run(ctx, stack, inv, deps=None):
             on_disk - {r.user.get("repo") for r in res.records})
         pay["bad_lines"] = [{"line": b.lineno, "why": b.reason_key}
                             for b in res.bad_lines]
+        pay["cleared_fields"] = cleared
+        pay["retired_keys"] = retired
         return Done(pay)
     return Refused(2, "cmd.unknown_verb", verb=inv.verb)
