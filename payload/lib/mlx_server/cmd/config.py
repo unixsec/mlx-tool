@@ -3,6 +3,19 @@ from .. import schema, store
 from ..result import Aggregate, Done, Refused
 
 
+def _coerce(key, val, defs):
+    # type: (str, object, dict) -> tuple
+    """`schema.coerce` 的不抛版本 → `(归一后的值, 错误说明 | None)`。
+
+    `set` 分支据此构造 `Refused`，与值域校验同层：`L0·result-02` 守卫按 AST 遍历序比较行号，
+    放在 `except` 里的 `Refused` 会被误判为「在 commit 之后构造」。
+    """
+    try:
+        return schema.coerce(key, val, defs), None
+    except schema.ConfigError as exc:
+        return val, str(exc)
+
+
 def _defs(ctx, deps):
     # type: (object, dict) -> dict
     """键定义（十一列）。**来自 `schema.tsv`** —— 表缺失时回落硬编码默认值，
@@ -286,10 +299,9 @@ def run(ctx, stack, inv, deps=None):
     #   · 目标是模型 id（`mlx config set demo --key=port --value=…`）⇒ 该模型 user 段
     # 此前无论哪种都写 `models.jsonl` 的 machine 段：前者在注册表里造出一个
     # 叫 `port` 的幽灵模型，后者绕过端口唯一性强制（那道检查只看 `tx.port`）。
-    try:
-        val = schema.coerce(key, val, defs)    # 唯一归一点，见 schema.coerce 的理由
-    except schema.ConfigError as exc:
-        return Refused(6, "config.invalid", key=key, kind=str(exc))
+    val, bad = _coerce(key, val, defs)    # 唯一归一点，见 schema.coerce 的理由
+    if bad:
+        return Refused(6, "config.invalid", key=key, kind=bad)
     # **值域校验在任何 commit 之前**（spec §2.2 单点；`L0·result-02` 的行号判据）
     bad = schema.check_domain(key, val, defs) if defs else None
     if bad:

@@ -131,18 +131,16 @@ _BOUNDARY_MAP = (
     ("TableError", 3, "tables.unreadable"),
     # 运行记录存在但读不了 —— **不是「没在跑」**，两者处置相反
     ("RunRecordUnreadable", 6, "run.unreadable"),
-    ("ConfigError", 6, "config.invalid"),
 )
 
 
 def _boundary_exc_types():
-    from . import atomic, schema, store, supervisor, tables
+    from . import atomic, store, supervisor, tables
     return {"StoreParseError": store.StoreParseError,
             "UniquenessError": store.UniquenessError,
             "LockTimeout": atomic.LockTimeout,
             "TableError": tables.TableError,
-            "RunRecordUnreadable": supervisor.RunRecordUnreadable,
-            "ConfigError": schema.ConfigError}
+            "RunRecordUnreadable": supervisor.RunRecordUnreadable}
 
 
 def _boundary_outcome(exc):
