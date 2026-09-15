@@ -48,3 +48,32 @@ print(json.dumps(r))
     assert got["validate"] and "****" in got["validate"][0]
     assert "api.token" in got["export"]["skipped"]
     assert got["empty_key"] == "", "未设置的密钥键不该被打成 ****"
+
+
+def test_unset_masks_secret_values(payload, sys_py):
+    """unset 分支在 `now` 字段回显秘密值时需打码（spec §8.3）。
+
+    在全局层和模型层都设置秘密值，从模型层 unset 后 now 字段应回落到全局层的值（被打码）。"""
+    got = run_floor(payload, sys_py, PRE + """
+import json
+r = {}
+# 设置全局层 api.token
+r["set_global"] = run("set", "api.token", key="api.token", value="@TOKEN@G")
+# 创建模型并在模型层设置 api.token
+from mlx_server import store
+stack = []
+store.commit(ctx, store.MODELS,
+             store.ModelsTx("test_model", {"repo": "o/m"}, port=8100), stack)
+# 设置模型层的 api.token
+r["set_model"] = run("set", "test_model", key="api.token", value="@TOKEN@M")
+# 从模型层 unset（应该保留全局层的值，回显为 ****）
+r["unset"] = run("unset", "test_model", key="api.token")
+print(json.dumps(r))
+""", TOKEN=TOKEN)
+    # 检查 unset 输出中都没有原始 token
+    blob = str(got["unset"])
+    assert TOKEN not in blob, f"密钥原值出现在 unset 输出里：{blob[:300]}"
+    # 确认 was_set 为 True（之前确实在模型层设过）
+    assert got["unset"]["was_set"] is True
+    # unset 后回落到全局层的值，应被打码为 ****
+    assert got["unset"]["now"] == "****", f"unset 后仍有值时应被打码，实得 {got['unset']['now']!r}"
