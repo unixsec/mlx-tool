@@ -56,8 +56,10 @@ def match(method, path):
 
 def endpoints_of(snap):
     # type: (object) -> tuple
+    """键缺失、或键在但值是空列表（`backends.tsv` 的 `endpoints` 列写了 `-` 或留空，
+    `write_record` 把两者都规范成 `[]`）—— 两种情况都当「未给」，回退到 `LEGACY_ENDPOINTS`。"""
     eps = (snap or {}).get("endpoints")
-    return tuple(eps) if isinstance(eps, list) else LEGACY_ENDPOINTS
+    return tuple(eps) if isinstance(eps, list) and eps else LEGACY_ENDPOINTS
 
 
 def fanout(calls, timeout_sec=FANOUT_TIMEOUT_SEC):

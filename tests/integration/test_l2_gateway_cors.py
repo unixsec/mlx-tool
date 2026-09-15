@@ -68,10 +68,10 @@ def call(method, path, headers, body=None):
     return out
 
 
-def raw(extra_headers, body):
-    # 真 socket：发一条带体的 OPTIONS，读到服务端关连接（或 3 s 无数据）为止
+def raw(method, target, extra_headers, body):
+    # 真 socket：发一条带体的请求，读到服务端关连接（或 3 s 无数据）为止
     s = socket.create_connection(("127.0.0.1", gw_port), timeout=3)
-    s.sendall(b"OPTIONS /v1/chat/completions HTTP/1.1\r\nHost: x\r\n" + extra_headers
+    s.sendall(("%s %s HTTP/1.1\r\nHost: x\r\n" % (method, target)).encode() + extra_headers
               + b"\r\n" + body)
     buf, closed = b"", False
     try:
@@ -97,12 +97,23 @@ out = {
                 body=json.dumps({"model": "qwen", "stream": True})),
 }
 inner = b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n"
-out["smuggle_cl"] = raw(b"Content-Length: %d\r\n" % len(inner), inner)
+out["smuggle_cl"] = raw("OPTIONS", "/v1/chat/completions",
+                        b"Content-Length: %d\r\n" % len(inner), inner)
 out["smuggle_cl_preflight"] = raw(
+    "OPTIONS", "/v1/chat/completions",
     b"Origin: http://x\r\nAccess-Control-Request-Method: POST\r\nContent-Length: %d\r\n"
     % len(inner), inner)
-out["smuggle_te"] = raw(b"Transfer-Encoding: chunked\r\n",
+out["smuggle_te"] = raw("OPTIONS", "/v1/chat/completions", b"Transfer-Encoding: chunked\r\n",
                         b"%x\r\n" % len(inner) + inner + b"\r\n0\r\n\r\n")
+# **裁决/复检 Critical 1**：`do_DELETE`／`do_GET` 此前没有 `do_OPTIONS` 那道
+# 「带体回完即关连接」的判定 —— keep-alive 连接上体里的字节被当成下一条请求解析，
+# 是请求走私。两者都用真实的扇出目标路径 + 有效令牌，走完整链路。
+out["smuggle_delete_cl"] = raw(
+    "DELETE", "/v1/responses/resp_1",
+    b"Authorization: Bearer @TOK@\r\nContent-Length: %d\r\n" % len(inner), inner)
+out["smuggle_get_cl"] = raw(
+    "GET", "/v1/models",
+    b"Authorization: Bearer @TOK@\r\nContent-Length: %d\r\n" % len(inner), inner)
 print(json.dumps(out))
 '''
 
@@ -142,3 +153,13 @@ def test_options_with_body_does_not_smuggle_a_second_request(payload, sys_py):
         assert len(r["status_lines"]) == 1, \
             f"{case}：带体的 OPTIONS 回了 {r['status_lines']} —— 体被当成了下一条请求"
         assert r["closed"], f"{case}：带体的 OPTIONS 回完没有关连接"
+
+
+def test_delete_and_get_with_body_do_not_smuggle_a_second_request(payload, sys_py):
+    """Critical 1 复检：`do_DELETE`/`do_GET` 与 `do_OPTIONS` 同一处坑，同一个修法。"""
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    for case in ("smuggle_delete_cl", "smuggle_get_cl"):
+        r = got[case]
+        assert len(r["status_lines"]) == 1, \
+            f"{case}：带体的请求回了 {r['status_lines']} —— 体被当成了下一条请求"
+        assert r["closed"], f"{case}：带体的请求回完没有关连接"

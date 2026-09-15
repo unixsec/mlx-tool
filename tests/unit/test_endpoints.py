@@ -37,7 +37,12 @@ fan = {"404_200": run([(0, 404), (0.05, 200)]), "200_404": run([(0.05, 200), (0,
 print(json.dumps({"norm": norm, "match": match, "fan": fan,
                   "empty": list(E.fanout([], timeout_sec=1)),
                   "legacy": list(E.endpoints_of({"model_arg": "x"})),
-                  "explicit": list(E.endpoints_of({"endpoints": ["chat", "responses"]}))}))
+                  "explicit": list(E.endpoints_of({"endpoints": ["chat", "responses"]})),
+                  # Important 2：backends.tsv 的 `endpoints` 列写 `-` 或留空，
+                  # write_record 把两者都规范成空列表；endpoints_of 收到空列表时
+                  # 要跟「键缺失」一样回退到 LEGACY_ENDPOINTS，不能当成「零端点」。
+                  "absent_key": list(E.endpoints_of({"model_arg": "x"})),
+                  "present_empty_list": list(E.endpoints_of({"endpoints": []}))}))
 """
 
 
@@ -71,3 +76,6 @@ def test_normalize_match_and_fanout(payload, sys_py):
     assert f["parallel"][:2] == [200, "m1"] and f["parallel"][2] < 1.5, "扇出必须并发"
     assert got["empty"] == [404, None, None]
     assert got["legacy"] == ["chat", "completions"] and got["explicit"] == ["chat", "responses"]
+    assert got["absent_key"] == ["chat", "completions"]
+    assert got["present_empty_list"] == ["chat", "completions"], \
+        "`endpoints` 键在但是空列表（`-`/空 cell 规范化后的样子）要回退到 LEGACY_ENDPOINTS"
