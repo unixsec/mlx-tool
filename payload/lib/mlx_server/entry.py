@@ -226,8 +226,13 @@ def main(argv, out=None, err=None):
                           f" · effort={','.join(rt['effort_domain']) or '（不传）'}"
                           + (f"（模板判不出：{rt['template_note']}，按不传处理）"
                              if rt.get("template_note") else "") + "\n")
+                # R2（挂了独立完整 drafter 的 mlx_lm）实际逐请求串行处理——
+                # `max_concurrency` 在这条路由下不生效，显示「并发上限 N」
+                # 会夸大真实并发能力，统一改显示「串行」（spec §2.4 R2 行，C1）。
+                conc = ("串行" if rt.get("rule") == "R2"
+                        else f"并发上限 {rt.get('max_concurrency')}")
                 err.write(f"  就绪  {rt['ready']} · 最多等 {pay.get('ready_timeout_sec')} 秒"
-                          f" · 并发上限 {rt.get('max_concurrency')}\n")
+                          f" · {conc}\n")
             if pay.get("dropped"):
                 err.write("  已退役的键：" + "、".join(pay["dropped"])
                           + "（`mlx model repair` 清除）\n")

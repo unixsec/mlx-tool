@@ -199,6 +199,7 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce):
         rec.update({"backend": rt.backend,
                     "backend_auth": rt.row.get("key_env") not in ("", "-", None),
                     "max_concurrency": rt.max_concurrency,
+                    "rule": rt.rule,
                     "effort_domain": list(rt.effort_domain),
                     "key_fp": rt.key_fp})
     if not spec.model_arg:

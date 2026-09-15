@@ -396,6 +396,7 @@ def _tool_status(ctx):
                    # 上一次启动的判定结论（运行记录快照，spec §3.4）；没起过就是 None
                    "backend": snap.get("backend"),
                    "max_concurrency": snap.get("max_concurrency"),
+                   "rule": snap.get("rule"),
                    "revision": machine.get("revision"),
                    "size_mb": machine.get("size_mb"),
                    "pid": snap.get("pid")}
@@ -503,7 +504,8 @@ def run(ctx, stack, inv, deps):
                      "pid": (snap or {}).get("pid"),
                      "port": (snap or {}).get("port"),
                      "backend": (snap or {}).get("backend"),
-                     "max_concurrency": (snap or {}).get("max_concurrency")})
+                     "max_concurrency": (snap or {}).get("max_concurrency"),
+                     "rule": (snap or {}).get("rule")})
 
     # ── `down` / `restart` 的 `--dry-run`〔2026-09-02〕──────────────────
     # 此前这两条**在门之前就动手了**：`down` 在 375 行直接 `supervisor.down()`,
@@ -659,7 +661,8 @@ def run(ctx, stack, inv, deps):
     rt = state.get("route")
     return Done(dict({"kind": "svc", "started": inv.target,
                       "pid": started["pid"], "port": port},
-                     **({"backend": rt.backend, "max_concurrency": rt.max_concurrency}
+                     **({"backend": rt.backend, "max_concurrency": rt.max_concurrency,
+                        "rule": rt.rule}
                         if rt is not None else {})))
 
 

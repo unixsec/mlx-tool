@@ -56,6 +56,18 @@ def _tool_status(p):
     return "\n".join(lines)
 
 
+def _concurrency_display(rule, max_concurrency):
+    # type: (object, object) -> str
+    """R2（挂了独立完整 drafter 的 mlx_lm）实际逐请求**串行**处理 ——
+    `max_concurrency` 这个配置值在这条路由下不生效，显示「并发 N」会夸大
+    真实的并发能力（spec §2.4 R2 行）。三处人读显示（`up` 成功行、
+    `status` 的并发列/单服务行）统一改显示「串行」，argv 不受影响
+    （`--decode-concurrency` 等仍按表生成，C1）。"""
+    if rule == "R2":
+        return "串行"
+    return str(max_concurrency) if max_concurrency else "—"
+
+
 def _model_table(models):
     # type: (list) -> list
     """模型段的对齐表。**从用户视角看得懂**：这个 id 是哪个模型、装了没、
@@ -71,7 +83,7 @@ def _model_table(models):
             ("状态", lambda m: m.get("state") or "—"),
             ("端口", lambda m: f":{m['port']}" if m.get("port") else "—"),
             ("后端", lambda m: m.get("backend") or "—"),
-            ("并发", lambda m: str(m["max_concurrency"]) if m.get("max_concurrency") else "—"),
+            ("并发", lambda m: _concurrency_display(m.get("rule"), m.get("max_concurrency"))),
             ("PID", lambda m: str(m["pid"]) if m.get("running") and m.get("pid") else "—"),
             ("内存", lambda m: f"{m['rss_mb']:.0f} MB" if m.get("rss_mb") else "—"),
             ("体积", lambda m: f"{m['size_mb']:.0f} MB" if m.get("size_mb") else "—")]
@@ -97,8 +109,9 @@ def _service_status(p):
     run = p.get("running")
     head = f"{ui._mark(run)} {p.get('service')}   " + (
         "在跑" if run else ("状态不可判定" if run is None else "未运行"))
-    rows = [(k, ui._flat(p.get(k))) for k in ("pid", "port", "backend",
-                                              "max_concurrency", "undeterminable")
+    vals = dict(p, max_concurrency=_concurrency_display(p.get("rule"), p.get("max_concurrency")))
+    rows = [(k, ui._flat(vals.get(k))) for k in ("pid", "port", "backend",
+                                                 "max_concurrency", "undeterminable")
             if p.get(k) is not None]
     return "\n".join([head] + (ui._kv(rows, indent="    ") if rows else []))
 
@@ -137,7 +150,10 @@ def _svc_change(p):
         return f"  · {act}   本来就没在跑"
     if p.get("started") and p.get("backend"):
         # spec §6.5：`✓ qwen38 已启动 · mlx_vlm · 并发 8 · port 8100` —— 判定结论要看得见
-        return (f"  ✓ {act} 已启动 · {p['backend']} · 并发 {p.get('max_concurrency')}"
+        # （R2 挂 drafter 时改显示「串行」，不夸大并发能力，C1）
+        conc = _concurrency_display(p.get("rule"), p.get("max_concurrency"))
+        return (f"  ✓ {act} 已启动 · {p['backend']} · "
+                f"{conc if p.get('rule') == 'R2' else '并发 ' + conc}"
                 f" · port {p.get('port')}")
     verb = "已启动" if p.get("started") else ("已停止" if p.get("stopped") else "")
     tail = "".join(f"   {k} {p[k]}" for k in ("port", "pid") if p.get(k))
