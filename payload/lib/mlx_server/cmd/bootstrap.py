@@ -1,4 +1,4 @@
-"""D · `verify`（按 manifest.tsv 校验产物集合）。`render` 本版未实现，见下。"""
+"""D · `verify`（按 manifest.tsv 校验产物集合）· `keys`（生成缺失密钥）。"""
 import os
 
 from ..result import Done, Refused
@@ -9,6 +9,9 @@ def run(ctx, stack, inv, deps=None):
     tables = deps.get("tables")
     if tables is None:
         return Refused(3, "bootstrap.no_tables")
+
+    if inv.verb == "keys":
+        return _keys(ctx, stack, tables)
 
     if inv.verb == "verify":
         missing, extra = [], []
@@ -32,3 +35,30 @@ def run(ctx, stack, inv, deps=None):
     # 与 `mlx logs` 等其它未实现动词一致。补全的设计（由动词台账生成）
     # 与 `install.sh` 的 I13 调用点一并记在 KNOWN-ISSUES。
     return Refused(2, "cmd.unknown_verb", verb=inv.verb)
+
+
+def _keys(ctx, stack, tables):
+    # type: (object, object, object) -> object
+    """生成缺失的密钥（spec §5.2）。**只输出键名，从不输出值** —— 这条命令的输出会进
+    安装日志、终端回滚与 CI 记录，任何一处留下值都等于明文存盘。
+
+    判据取自 `schema.tsv`（secret == yes ∧ scope == user ∧ level == global），
+    不在这里写键名清单：将来加第三把密钥只改表。
+    """
+    import secrets
+
+    from .. import schema, store
+    defs = schema.keydefs(tables)
+    wanted = sorted(k for k, d in defs.items()
+                    if d.get("secret") == "yes" and d.get("scope") == "user"
+                    and d.get("level") == "global")
+    current = store.load_settings(ctx)
+    missing = [k for k in wanted if not current.get(k)]
+    kept = [k for k in wanted if current.get(k)]
+    if missing:
+        store.commit(ctx, store.SETTINGS,
+                     store.SettingsTx({k: secrets.token_urlsafe(32) for k in missing}), stack)
+    p = store.settings_path(ctx)
+    if os.path.exists(p):
+        os.chmod(p, 0o600)      # 1.0.0 时代以 0644 落盘、且本次无需写入的既有文件
+    return Done({"kind": "keys", "generated": missing, "kept": kept})

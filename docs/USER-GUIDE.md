@@ -1033,6 +1033,23 @@ $ mlx config import --from=bad.json
 
 **前面成功的保持生效**，不回滚。
 
+### 密钥 {#keys}
+
+工具有两把密钥，都存在数据根的 `settings.json`（权限 0600），显示时一律打码为 `****`：
+
+| 键 | 用途 |
+|---|---|
+| `backend.api_key` | 网关、`mlx chat`、`mlx bench` 访问 mlx_vlm 后端时携带；未设置时多模态模型拒绝启动 |
+| `api.token` | 客户端访问网关时携带 |
+
+安装器会自动生成缺失的密钥。手动补：
+
+```bash
+mlx bootstrap keys                           # 只补空值，输出只列键名
+mlx config get --key=api.token --reveal      # 查看原值
+mlx config set api.token --value=<新值>       # 手动换（值会短暂出现在进程列表里）
+```
+
 ### 有些字段改不了
 
 ```

@@ -37,6 +37,7 @@ validate	config	cmd.config		0		0,2,6,64,65	每检查项一行 name<TAB>verdict<T
 show	caps	cmd.caps		0		0,2	每 (type, param) 一行三态 + 采集时间 + 三包指纹	--json	n/a	漂移提示	no	caps.get(<type>,<param>) 类型核对：返回 cap_state 三态 ✅	public	USER-GUIDE.md#show	无
 refresh	caps	cmd.caps		0		0,1,2,3,5,6,9	采集结果差异	--json	无变化 → 合法空数组	逐项 --help 的进度；unknown 项计入报告	yes	caps.get(<type>,<param>) + caps.collected_at()	public	USER-GUIDE.md#refresh	无
 verify	bootstrap	cmd.bootstrap		0		0,2,3,6	每成员一行 path<TAB>verdict	是	n/a	缺失/多余成员的绝对路径	no	tables.manifest() ✅	public	USER-GUIDE.md#verify	无
+keys	bootstrap	cmd.bootstrap		0		0,1,2,6	生成了哪些密钥（只列键名）	--json	全部已存在 → 合法空数组	—	yes	store.load_settings() 中 secret 键的集合 ✅	public	USER-GUIDE.md#keys	无
 info	api	cmd.api		0		0,2	base url + 可用 id 列表 + 诚实陈述	--json	网关未运行 → 仍输出三项 + 确切的下一条命令	—	no	supervisor.snapshot("api") + store.load().records ✅	public	USER-GUIDE.md#info	无
 confirm	internal	cmd.meta		1		0,5				—	no	写不出 —— 确认结果是一次 /dev/tty 交互，不落盘，在 T2 里没有权威存储；@stdout 不合法；效果只经退出码回到 T0，而	internal	USER-GUIDE.md#confirm	无
 trash ls	model	cmd.model.reclaim		0		0,1,2,5,6	条目表	--json	空回收站 → 合法空数组		no	vault.entries()	public	USER-GUIDE.md#trash	

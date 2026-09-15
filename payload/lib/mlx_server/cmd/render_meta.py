@@ -98,6 +98,17 @@ def _chat(p):
     return p.get("reply") or ""
 
 
+def _bootstrap_keys(p):
+    # type: (dict) -> str
+    """`bootstrap keys` 的结论。**只列键名** —— payload 里本来就没有值。"""
+    lines = [f"  ✓ 已生成  {k}" for k in p.get("generated") or []]
+    lines += [f"  · 已存在  {k}" for k in p.get("kept") or []]
+    if not lines:
+        return "  没有需要生成的密钥"
+    lines.append("  查看原值：mlx config get --key=<键名> --reveal")
+    return "\n".join(lines)
+
+
 ui.register({
     "version": _version,
     "caps": _caps,
@@ -105,4 +116,5 @@ ui.register({
     "self": _self_deploy,
     "api": _api,
     "chat": _chat,
+    "keys": _bootstrap_keys,
 })
