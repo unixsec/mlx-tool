@@ -29,6 +29,7 @@ lib/mlx_server/runtime.py	代码	删除
 lib/mlx_server/cli.py	代码	删除
 lib/mlx_server/entry.py	代码	删除
 gateway/__init__.py	代码	删除
+gateway/effort.py	代码	删除
 gateway/routes.py	代码	删除
 gateway/guard.py	代码	删除
 gateway/translate.py	代码	删除
