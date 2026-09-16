@@ -18,7 +18,7 @@ restart		cmd.svc		+	enter_execute	0,1,2,3,4,5,6,7,9,10	每目标一行结论	--j
 status		cmd.svc		?		0,2,3	带目标：该服务一行；不带目标：工具状态+模型行+网关行	--json	不带目标恒非空；带目标无记录→空对象	探测降级说明、Unknown 列的原因	no	supervisor.snapshot(<service>) 的集合 + tables.manifest()	public	USER-GUIDE.md#status	#service
 chat		cmd.chat		1		0,1,2,3,4,5,6	逐字节只含回复正文	否	空回复 → 零字节，且必须 rc≠0	会话 id、元命令回显、中断提示	cond:chat.persist	chat.persist==yes ? sessions.load(<sid>).turns[-1] : @stdout	public	USER-GUIDE.md#chat	#model
 bench		cmd.bench		1		0,1,2,3,4,6	吞吐 + 提示词指纹	--json	n/a	预热说明	no	@stdout 登记：02 §5.4.6 的规则 2 未给 @stdout 的例，本格是三条前提直接求值的结果	public	USER-GUIDE.md#bench	#model
-check		cmd.check		0		0,2,64,65	九项各一行 name<TAB>verdict<TAB>detail，verdict ∈ verdicts.tsv	是 / --json	n/a	每项的测量说明、Unknown 的原因、补集	no	九个 health.* 的返回值集合	public	USER-GUIDE.md#check	无
+check		cmd.check		0		0,2,64,65	十二项各一行 name<TAB>verdict<TAB>detail，verdict ∈ verdicts.tsv	是 / --json	n/a	每项的测量说明、Unknown 的原因、补集	no	十二个 health.* 的返回值集合	public	USER-GUIDE.md#check	无
 version		cmd.meta		0		0,2	版本串	--json	n/a	—	no	caps.collected_at() + 三包指纹	public	USER-GUIDE.md#version	无
 help		cli		0		0,2	help 文本（走 stdout，stderr 必须为空）	否	未知动词→rc 2 且列出可用动词全集	必须为空（与第 39 行 --help 同一契约）	no	tables.verbs() + tables.cli()	public	USER-GUIDE.md#help	无
 install		cmd.self		0	enter_execute	0,1,2,3,5,6,70,71,72,73,74	装到哪+ 版本 + PATH 写入结果	--json	n/a	逐步：解释器版本 → 三根 → 清单校验 → PATH 写入 → mlx version 自检	yes	caps.collected_at()为什么不填 tables.manifest()：install 的实际用途是重装，运行前系统已装好 ⇒	public	USER-GUIDE.md#install	无

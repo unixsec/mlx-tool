@@ -21,7 +21,10 @@ vault.code_root_not_purgeable	代码根不在整根删除授权集合内（{deta
 vault.not_authorized	{path} 不在删除授权面内
 weights.not_found	找不到 {repo} 的权重
 weights.no_fetcher	未注入下载器（{detail}）
-api.honest_no_boundary	同机场景下模型端口本就在回环上无鉴权监听；网关令牌提供零额外阻挡，真正的边界是绑定地址
+api.exposure_note	所有来源都要令牌（本机也不例外）；只有上面列出的网段能连进来，VPN、雷雳网桥等其余接口一律拒绝
+api.plaintext_warning	TLS 未开启：同一网段上的其他设备能看到请求内容与令牌。需要时设 api.tls_cert 与 api.tls_key 后 `mlx restart api`
+status.gateway.not_running	未运行   `mlx up api` 起它
+status.gateway.token_env_unknown	令牌由环境变量设置，当前 shell 未设 MLX_GATEWAY_TOKEN，无法比较是否已变更
 bootstrap.manifest_missing	分发清单缺失：{missing}
 check.failed	有检查项未通过（见上）。每一项的下一步写在它自己那行
 check.undeterminable	有检查项无法判定（见上）。通常是探测工具不可用，不代表那一项坏了
@@ -58,7 +61,7 @@ help.restart	先 down 再 up，等价于两条命令但只写一次
 help.status	不带目标：工具自身状态（三根·版本·PATH·清单）；带目标：那个服务的状态
 help.chat	与一个模型多轮对话（`--prompt=<问题>` 只发一轮）
 help.bench	跑一次基准，输出吞吐与提示词指纹
-help.check	九项健康检查，各项独立求值后聚合
+help.check	十二项健康检查，各项独立求值后聚合
 help.version	版本、两个解释器、依赖三包指纹、caps 采集时间
 help.help	不带参数给速查表；带命令名给单条详解
 help.install	装/重装**工具自身**。首次安装请跑 deployer/install.sh
@@ -82,7 +85,7 @@ help.caps.show	后端能力三态与 venv 三包指纹
 help.caps.refresh	重新采集能力；指纹漂移导致 fail-closed 时用它恢复
 help.bootstrap.render	渲染补全脚本与自启描述文件到指定目录
 help.bootstrap.verify	按分发清单校验安装产物是否齐全
-help.api.info	网关的 base url、可用模型 id、鉴权现状
+help.api.info	网关的访问地址（本机 / Wi-Fi / 有线 / 虚拟机）、放行网段、令牌与 TLS 状态、可用模型 id
 help.internal.confirm	（内部）T0 的 /dev/tty 确认通道
 flag.json	输出机读 JSON（默认输出是给人看的）
 flag.dry_run	只打印将要做什么，不真的做（零外部动作）
@@ -101,7 +104,7 @@ help.up.long	把一个服务起起来。<目标> 是 `mlx model ls` 里的模型
 help.down.long	停一个服务。停一个没在跑的服务返回 0（幂等，不是错误）。\n终止走阶梯：先 TERM 整个进程组、验证端口释放、再删运行记录，顺序不可反。\n若端口上监听的已经是别的进程（pid 被复用），**不动手**，只清理过期记录。
 help.restart.long	先 down 再 up。等价于两条命令，但只写一次。
 help.status.long	不带目标时报工具自身：三根路径、版本、PATH 是否生效、分发清单完整性，\n以及**每个模型的状态**（仓库全名 / 就绪与否 / 端口 / PID / 内存 / 体积）和网关行。\n带目标时只报那一个服务。\n「PATH 生效」那一行是「装完了但 mlx 找不到」这个最常见故障的诊断入口。
-help.check.long	九项健康检查，每项独立求值后聚合。失败项的 detail 给的是**下一步做什么**，\n不是一个裸的 False。退出码：0 全通过 · 64 含无法判定 · 65 含失败，\n而九行主产物在失败时也不会丢 —— 那正是你最需要它的时候。
+help.check.long	十二项健康检查，每项独立求值后聚合。失败项的 detail 给的是**下一步做什么**，\n不是一个裸的 False。退出码：0 全通过 · 64 含无法判定 · 65 含失败，\n而十二行主产物在失败时也不会丢 —— 那正是你最需要它的时候。
 help.version.long	工具版本、系统解释器与 venv 解释器、依赖三包、能力采集时间。排查时先看它。
 help.help.long	不带参数给速查表；带命令名给该命令的详解（本页就是）。
 help.install.long	装 / 重装**工具自身**（不是模型 —— 装模型是 `mlx model install`）。\n首次安装时 mlx 还不在 PATH 上，请跑 `bash <源码树>/deployer/install.sh`；\n本命令的实际用途是重装与升级。它不自己实现部署，只调用部署器。
@@ -119,7 +122,7 @@ help.config.ls.long	列出全部配置键、生效值与来源层。
 help.config.validate.long	逐项校验配置，每项一行。退出码 0 / 64 含告警 / 65 含失败。
 help.caps.show.long	看当前缓存的后端能力：依赖三包、指纹、采集时间。
 help.caps.refresh.long	重新采集后端能力，输出**这次采集改变了什么**（无变化则是空数组）。\n首次使用必须先跑一次 —— 能力从未采集时工具会拒绝启动服务，\n而本命令就是那条拒绝指名的恢复动作。
-help.api.info.long	网关的 base url、可用模型 id 列表，以及关于鉴权边界的诚实陈述。
+help.api.info.long	读网关运行记录：每个放行接口的 OpenAI 与 Anthropic base URL、绑定与 TLS、解释器、令牌来源与是否需要重启、放行网段与排除接口、可用模型 id。
 help.bench.long	对一个在跑的模型做一次基准，输出吞吐与提示词指纹。
 help.chat.long	与一个模型对话。不给 `--prompt` 就进入**多轮模式**：一行一句，`/exit` 或 Ctrl-D 结束。\n每一轮都会存进会话，中途断了不丢；用 `--session=<id>` 接着上次聊。\n**回复正文走 stdout，提示符走 stderr** —— `mlx chat x > out.txt` 存下来的是纯回复。
 help.bootstrap.render.long	渲染补全脚本与自启描述文件到指定目录。
@@ -132,7 +135,7 @@ help.down.example	mlx down api\nmlx down --all        # 停掉全部有运行记
 help.status.example	mlx status            # 工具全局 + 每个模型的状态\nmlx status api        # 只看网关\nmlx status --json     # 给脚本用
 help.model.rm.example	mlx model rm qwen27b             # 只删登记，权重保留\nmlx model rm qwen27b --weights   # 连权重一起回收
 help.model.register.example	mlx model register qwen27b \\n    --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
-help.check.example	mlx check             # 九项逐行\nmlx check --json      # 给脚本用
+help.check.example	mlx check             # 十二项逐行\nmlx check --json      # 给脚本用
 help.install.example	bash <源码目录>/deployer/install.sh                        # 首次\nmlx install                                            # 重装 / 升级
 help.uninstall.example	mlx uninstall         # 会要求键入 yes 确认
 help.config.diff.long	只列出与默认值不同的键 —— 一眼看出你改过什么。
@@ -188,6 +191,9 @@ check.hint.run_dir	运行记录目录不可写 —— 检查数据根权限
 check.hint.tables	share/ 下的表缺失或损坏 —— 重装：`mlx install`
 check.hint.venv	推理 venv 缺失或解释器太旧（要 ≥ 3.10）—— `mlx up` 会起不来新模型。`mlx version` 看当前版本；修：`brew install python@3.13` 后重跑安装器 `bash <源码目录>/deployer/install.sh`（它会用新解释器重建 venv，权重与注册表不动）
 check.hint.weights_root	权重根不可读 —— 检查权限或磁盘挂载
+check.hint.gateway_nets	网关算放行网段失败，正沿用上一份（或只放行本机）—— `mlx api info` 看原因，通常是 networksetup 或 ifconfig 执行失败
+check.hint.gateway_port	网关端口上有别的进程在监听 —— `mlx status` 看网关行；停掉那个进程，或换网关端口后 `mlx restart api`
+check.hint.settings_mode	settings.json 权限宽于 0600，两把密钥可被同机其他用户读取 —— chmod 600 数据根下的 settings.json
 config.not_a_config_key	{key} 不是配置项（scope={scope}）—— 它是工具从磁盘读出来的事实。用 `mlx model info <id>` 看它的值
 svc.draft_not_found	{id} 配了 draft_model={draft}，但没有登记名为 {draft} 的模型。`mlx model ls` 看有哪些；不想用投机解码就 `mlx config unset {id} --key=draft_model`
 svc.draft_weights_missing	{id} 的 drafter「{draft}」权重不在盘上（仓库 {repo}）。先 `mlx model install {draft} --repo={repo}`

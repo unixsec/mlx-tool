@@ -64,23 +64,43 @@ def _api(p):
     # type: (dict) -> str
     run = p.get("running")
     lines = [f"  {ui._RUN.get(run, '·')} 网关   " +
-             ("在跑" if run else "未运行   `mlx up api` 起它")]
-    if p.get("base_url"):
-        lines.append(f"    地址   {p['base_url']}")
-    if p.get("port"):
-        lines.append(f"    端口   {p['port']}" +
-                     (f"   pid {p['pid']}" if p.get("pid") else ""))
+             (f"在跑   pid {p.get('pid')}" if run else "未运行   `mlx up api` 起它")]
+    urls = p.get("urls") or []
+    if urls:
+        w = max(ui._w(u["label"]) for u in urls)
+        lines.append("    地址（OpenAI 兼容 base URL / Anthropic base URL）")
+        lines += [f"      {ui._pad(u['label'], w)}  {u['openai']}   {u['anthropic']}" for u in urls]
+    else:
+        lines.append(f"    地址   {p.get('base_url')}")
+    tls = "开（最高 " + (p.get("tls_max") or "?") + "）" if p.get("tls") else "关"
+    lines.append(f"    绑定   {p.get('bind')}   TLS {tls}")
+    if p.get("interpreter"):
+        lines.append(f"    解释器 {p['interpreter']} {p.get('interpreter_version') or ''}".rstrip())
+    tok = p.get("token") or {}
+    state = {"ok": "与运行中一致", "changed": "已变更，需 `mlx restart api`",
+             "env_unknown": "由环境变量设置，当前 shell 无法比较", None: "—"}.get(tok.get("state"), "—")
+    lines.append(f"    令牌   {'已配置' if tok.get('configured') else '未配置（`mlx bootstrap keys`）'}"
+                 f"   来源 {tok.get('source') or '—'}   {state}")
+    nets = p.get("allowed_nets") or []
+    if nets:
+        lines.append("    放行网段  " + "、".join(
+            n["net"] + (f"%{n['scope']}" if n.get("scope") else "") for n in nets))
+    exc = p.get("excluded_ifaces") or []
+    if exc:
+        lines.append("    排除接口  " + "、".join(f"{e['iface']}（{e['reason']}）" for e in exc))
+    if p.get("nets_source") == "fallback":
+        lines.append(f"    ⚠ 放行网段计算失败，沿用上一份或仅本机：{p.get('nets_error') or '原因未知'}")
     ids = p.get("models")
     if ids is not None:
         lines.append(f"    可用   {'、'.join(ids) if ids else '（无 —— 先 `mlx up <id>` 起模型）'}")
     other = p.get("registered_only")
     if other:
-        # **分两行**：已登记 ≠ 网关转发得到。合成一行会让用户抄到一个
-        # 填进客户端却连不上的 id，而这一屏所有别的指标都是绿的。
+        # **分两行**：已登记 ≠ 网关转发得到
         lines.append(f"    未起   {'、'.join(other)}（已登记，但网关转发不到）")
-    key = p.get("honest_note_key")
-    if key:
-        lines += ["", "  " + ui._text(key)]
+    if p.get("plaintext_warning"):
+        lines += ["", "  ⚠ " + ui._text("api.plaintext_warning")]
+    if p.get("note_key"):
+        lines += ["", "  " + ui._text(p["note_key"])]
     return "\n".join(lines)
 
 

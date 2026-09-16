@@ -104,3 +104,23 @@ def decide(model_id, facts, template, draft, cfg_values, packages, backends, siz
                  key_fp=key_fingerprint(cfg_values.get("backend.api_key")) if needs_key else None,
                  template_note=((template.reason or template.kind)
                                 if template is not None and template.is_unknown() else None))
+
+
+def gateway_key_state(gw_snap, settings, env_token):
+    # type: (object, object, str) -> dict
+    """网关运行记录里的密钥指纹 vs **同一来源**的当前值（spec §5.2）。纯函数。
+
+    `token_source == env` 时只能与当前 shell 的 `MLX_GATEWAY_TOKEN` 比；shell 没设 ⇒ `env_unknown`
+    （说「已变更」是误报：值没变，只是这个 shell 看不到）。读不了设置（`settings is None`）⇒ 不比较。
+    """
+    if not gw_snap or settings is None:
+        return {"token_state": None, "backend_key_changed": False}
+    if gw_snap.get("token_source") == "env":
+        state = ("env_unknown" if not env_token else
+                 "ok" if key_fingerprint(env_token) == gw_snap.get("token_fp") else "changed")
+    else:
+        state = ("ok" if key_fingerprint(settings.get("api.token")) == gw_snap.get("token_fp")
+                 else "changed")
+    return {"token_state": state,
+            "backend_key_changed":
+                gw_snap.get("backend_key_fp") != key_fingerprint(settings.get("backend.api_key"))}

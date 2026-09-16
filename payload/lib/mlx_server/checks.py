@@ -1,6 +1,6 @@
-"""B 层 · 九项健康检查的**生产实现**。
+"""B 层 · 十二项健康检查的**生产实现**。
 
-`cmd.check` 只聚合、不实现任何一项（`02` §4.1）—— 本模块是那九项的落点。
+`cmd.check` 只聚合、不实现任何一项（`02` §4.1）—— 本模块是那十二项的落点。
 每项返回 `Probe[bool]`：`Ok(True)` 通过 · `Ok(False)` 不通过 · `Unknown` 判不出。
 """
 import os
@@ -110,8 +110,48 @@ def caps(ctx):
     return Ok(bool(caps_mod.get(ctx)))
 
 
+def gateway_nets(ctx):
+    """网关的放行网段是解析出来的（`parsed`），不是回落值。网关没在跑 ⇒ 无事可查，通过。"""
+    from . import supervisor
+    try:
+        snap = supervisor.snapshot(ctx, "api")
+    except supervisor.RunRecordUnreadable as e:
+        return Unknown("PARSE_FAILED", str(e)[:120])
+    if not snap or "nets_source" not in snap:
+        return Ok(True)
+    return Ok(snap["nets_source"] == "parsed")
+
+
+def gateway_port(ctx):
+    """网关端口上没有外来监听者（spec D24）。有记录 ⇒ 全部监听者须属网关；无记录 ⇒ 须无人监听。"""
+    from . import supervisor
+    try:
+        snap = supervisor.snapshot(ctx, "api")
+    except supervisor.RunRecordUnreadable as e:
+        return Unknown("PARSE_FAILED", str(e)[:120])
+    if snap:
+        own = supervisor.port_owner(ctx, "api")
+        if own.is_unknown():
+            return Ok(True) if own.kind == "NO_LISTENER" else own
+        return Ok(own.value is True)
+    fl = supervisor.foreign_listeners(ctx, ctx.gateway_port)
+    return fl if fl.is_unknown() else Ok(not fl.value)
+
+
+def settings_mode(ctx):
+    """settings.json 权限不宽于 0600（里面有两把密钥）。文件不存在 ⇒ 通过。"""
+    import stat
+
+    from . import store
+    p = store.settings_path(ctx)
+    if not os.path.exists(p):
+        return Ok(True)
+    return Ok(not (stat.S_IMODE(os.stat(p).st_mode) & 0o077))
+
+
 ALL = {
     "code_root": code_root, "data_root": data_root, "weights_root": weights_root,
     "venv": venv, "tables": tables, "models_file": models_file,
     "run_dir": run_dir, "ports": ports, "caps": caps,
+    "gateway_nets": gateway_nets, "gateway_port": gateway_port, "settings_mode": settings_mode,
 }

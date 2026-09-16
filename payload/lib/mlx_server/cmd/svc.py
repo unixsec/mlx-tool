@@ -456,18 +456,11 @@ def _tool_status(ctx):
     gateway = {"running": _alive("api"),
                "port": gw_snap.get("port"), "pid": gw_snap.get("pid")}
 
-    token_state, backend_key_changed = None, False
-    if gw_snap and _cur is not None:
-        if gw_snap.get("token_source") == "env":
-            env_tok = getattr(ctx, "gateway_token_env", "")
-            token_state = ("env_unknown" if not env_tok else
-                           "ok" if _route.key_fingerprint(env_tok) == gw_snap.get("token_fp")
-                           else "changed")
-        else:
-            token_state = ("ok" if _route.key_fingerprint(_cur.get("api.token"))
-                           == gw_snap.get("token_fp") else "changed")
-        backend_key_changed = gw_snap.get("backend_key_fp") != cur_key_fp
-    gateway.update(token_state=token_state, backend_key_changed=backend_key_changed)
+    ks = _route.gateway_key_state(gw_snap, _cur, getattr(ctx, "gateway_token_env", ""))
+    token_state, backend_key_changed = ks["token_state"], ks["backend_key_changed"]
+    gateway.update(token_state=token_state, backend_key_changed=backend_key_changed,
+                   bind=gw_snap.get("bind"), tls=gw_snap.get("tls"),
+                   allowed_count=len(gw_snap.get("allowed_nets") or []) or None)
     restart_needed = [m["id"] for m in (models or []) if m.get("key_changed")]
     if gateway["running"] and (token_state == "changed" or backend_key_changed):
         restart_needed.append("api")

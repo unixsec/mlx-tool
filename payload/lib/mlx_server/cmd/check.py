@@ -1,4 +1,4 @@
-"""D · 九项健康检查的独立求值 + 聚合。**只聚合，不实现任何一项。**
+"""D · 十二项健康检查的独立求值 + 聚合。**只聚合，不实现任何一项。**
 
 机读输出契约（`R-OBSERVE-24`）：每行 `name<TAB>verdict<TAB>detail`，
 `verdict ∈ verdicts 表`，行数 == 检查项数，**主产物中不含无法判定的塌陷值**。
@@ -7,7 +7,8 @@ from ..result import Aggregate, Done, is_unknown
 
 VERDICTS = ("ok", "failed", "undeterminable")
 ITEMS = ("code_root", "data_root", "weights_root", "venv", "tables",
-         "models_file", "run_dir", "ports", "caps")
+         "models_file", "run_dir", "ports", "caps",
+         "gateway_nets", "gateway_port", "settings_mode")
 
 
 # 每项失败时的**下一步**。检查报告的价值在于它告诉你该做什么，

@@ -101,18 +101,19 @@ def test_l3_journey(cli):
     assert out["models"][0]["modality"] == "text"
     assert "type_evidence" not in out["models"][0], "登记期不再产出类型证据"
 
-    # 4 · 健康检查 —— 九项都要真的求值，不能报「未注入」
+    # 4 · 健康检查 —— 十二项都要真的求值，不能报「未注入」
     rc, out, err = cli("check")
     steps.append(("check", rc))
     rows = dict((r[0], r[1]) for r in (out or {}).get("rows", [])) if out else {}
     if not rows:                                   # check 失败时 payload 走 stderr
         assert "venv" in err, f"check 没给出逐项结果：{err}"
     else:
-        Cardinality.check("check·九项", sorted(rows), sorted(
+        Cardinality.check("check·十二项", sorted(rows), sorted(
             ["code_root", "data_root", "weights_root", "venv", "tables",
-             "models_file", "run_dir", "ports", "caps"]), rel="equal")
+             "models_file", "run_dir", "ports", "caps",
+             "gateway_nets", "gateway_port", "settings_mode"]), rel="equal")
         assert "检查项未注入" not in json.dumps(rows, ensure_ascii=False), (
-            "有检查项没有生产实现 —— cmd.check 只聚合，那九项要在 checks.py 里")
+            "有检查项没有生产实现 —— cmd.check 只聚合，那十二项要在 checks.py 里")
         assert rows["code_root"] == "ok" and rows["tables"] == "ok"
 
     # 5 · 唯一性 —— 同端口再登记一个必须被拒且零落地

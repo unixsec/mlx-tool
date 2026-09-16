@@ -1,29 +1,27 @@
-"""D · `info` —— 只放网关**独有的名词面**（生命周期走统一动词 `up api` / `down api`）。"""
+"""D · `info` —— 只放网关**独有的名词面**（生命周期走统一动词 `up api` / `down api`）。
+
+**读运行记录，不现场重算**（spec §3.4）：放行网段、绑定、TLS、解释器都是网关进程自己
+算出并经门面写进 `run/api.json` 的 —— `api info` 现场再跑一遍 ifconfig，
+算出来的可能与网关正在用的那份不同。
+"""
+import ipaddress
+
 from .. import supervisor
 from ..result import Done
+
+_LABELS = {"loopback": "本机", "wifi": "Wi-Fi", "ethernet": "有线", "vm": "虚拟机共享网络"}
 
 
 def _model_ids(ctx):
     # type: (object) -> tuple
-    """返回 `(可路由的, 已登记但转发不到的)`。
-
-    **两个列表，因为工具里本来就有两个集合**：网关的路由表只收
-    `running == Ok(True) ∧ port_owner == Ok(True)` 的服务，而注册表里
-    躺着全部已登记的模型。此前这里只报后者 —— 用户从「模型」那行抄一个 id
-    填进 Cherry Studio，客户端却连不上，而 `api info` 一直显示网关在跑。
-    `gateway/routes.py` 开头的注释正是为这件事写的：「两个端点各自派生会让
-    『列表里能看见、发过去用不了』」。判据与网关侧同源，不另立一套。
-    """
+    """返回 `(可路由的, 已登记但转发不到的)`。判据与网关路由表同源（`running ∧ port_owner`）。"""
     try:
-        from .. import store, supervisor
+        from .. import store
         from ..result import is_unknown
-    except Exception:                              # noqa: BLE001
-        return ((), ())
-    routable, registered_only = [], []
-    try:
         recs = store.load(ctx, store.MODELS).records
     except Exception:                              # noqa: BLE001
         return ((), ())
+    routable, registered_only = [], []
     for r in recs:
         alive = supervisor.running(ctx, r.id)
         own = supervisor.port_owner(ctx, r.id)
@@ -33,30 +31,68 @@ def _model_ids(ctx):
     return (tuple(sorted(routable)), tuple(sorted(registered_only)))
 
 
+def _urls(snap, port):
+    # type: (dict, int) -> list
+    """每个放行接口一组 base URL。链路本地地址不列（要带 `%接口`，客户端普遍不支持）。"""
+    scheme = "https" if snap.get("tls") else "http"
+    bind = snap.get("bind") or "0.0.0.0"
+    out, seen = [], set()
+    for n in snap.get("allowed_nets") or []:
+        addr = n.get("addr")
+        if not addr or n.get("kind") not in _LABELS:
+            continue
+        ip = ipaddress.ip_address(addr)
+        if ip.is_link_local or addr in seen:
+            continue
+        if bind not in ("0.0.0.0", "::") and addr != bind and not ip.is_loopback:
+            continue                               # 绑定了具体地址 ⇒ 只有它可达
+        seen.add(addr)
+        host = f"[{addr}]" if ip.version == 6 else addr
+        out.append({"label": _LABELS[n["kind"]], "iface": n.get("iface"),
+                    "openai": f"{scheme}://{host}:{port}/v1",
+                    "anthropic": f"{scheme}://{host}:{port}"})
+    order = {"本机": 0, "Wi-Fi": 1, "有线": 2, "虚拟机共享网络": 3}
+    # 本机在前，其后按常用程度；同类里 IPv4 在前（客户端对 IPv6 字面量地址的支持参差不齐）
+    out.sort(key=lambda u: (order[u["label"]], "[" in u["openai"]))
+    return out
+
+
 def run(ctx, stack, inv, deps=None):
-    snap = supervisor.snapshot(ctx, "api")
-    # **报真实绑定地址**。此前写死 127.0.0.1：绑到 0.0.0.0 的网关，
-    # `api info` 依然打印回环地址与那句「边界是绑定地址」的诚实陈述 ——
-    # 工具对自己的暴露面说了假话，而这一屏正是用户判断暴露面的地方。
-    from .. import schema, store
-    _bind = store.load_settings(ctx).get("api.bind") or schema.DEFAULTS["api.bind"]
+    from .. import route, store
     snap = supervisor.snapshot(ctx, "api") or {}
-    bind = snap.get("bind") or _bind
-    base = f"http://{bind}:{ctx.gateway_port}/v1"
-    _routable, _registered_only = _model_ids(ctx)
     running = supervisor.running(ctx, "api")
+    try:
+        settings = store.load_settings(ctx)
+    except Exception:                              # noqa: BLE001
+        settings = None
+    port = snap.get("port") or ctx.gateway_port
+    urls = _urls(snap, port) if snap else []
+    remote = [u for u in urls if u["label"] != "本机"]
+    v4_remote = [u for u in remote if "[" not in u["openai"]]
+    base = ((v4_remote or remote or urls)[0]["openai"] if urls
+            else f"http://127.0.0.1:{ctx.gateway_port}/v1")
+    ks = route.gateway_key_state(snap, settings, getattr(ctx, "gateway_token_env", ""))
+    routable, registered_only = _model_ids(ctx)
     return Done({
-        "base_url": base,
+        "kind": "api",
         "running": None if running.is_unknown() else running.value,
         "undeterminable": running.kind if running.is_unknown() else None,
-        "port": ctx.gateway_port,
-        "pid": (snap or {}).get("pid"),
-        # 诚实陈述（R-API-26）：同机场景下模型端口本就在回环上无鉴权监听，
-        # 网关令牌提供零额外阻挡，真正的边界是绑定地址。
-        "kind": "api",
-        # 附录 A 2829 要求三项：base url + **可用 id 列表** + 诚实陈述。
-        # 「可用」= 网关真的转发得到的那些，与 `/v1/models` 同一判据。
-        "models": list(_routable),
-        "registered_only": list(_registered_only),
-        "honest_note_key": "api.honest_no_boundary",
+        "port": port, "pid": snap.get("pid"),
+        "base_url": base, "urls": urls,
+        "bind": snap.get("bind") or (settings or {}).get("api.bind") or "0.0.0.0",
+        "tls": bool(snap.get("tls")),
+        "interpreter": snap.get("interpreter"),
+        "interpreter_version": snap.get("interpreter_version"),
+        "tls_max": snap.get("tls_max"),
+        "token": {"configured": bool((settings or {}).get("api.token")),
+                  "source": snap.get("token_source"), "state": ks["token_state"]},
+        "allowed_nets": snap.get("allowed_nets") or [],
+        "excluded_ifaces": snap.get("excluded_ifaces") or [],
+        "nets_source": snap.get("nets_source"),
+        "nets_computed_at": snap.get("nets_computed_at"),
+        "nets_error": snap.get("nets_error") or "",
+        # 「可用」= 网关真的转发得到的那些，与 `/v1/models` 同一判据
+        "models": list(routable), "registered_only": list(registered_only),
+        "plaintext_warning": bool(remote) and not snap.get("tls"),
+        "note_key": "api.exposure_note",
     })
