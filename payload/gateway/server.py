@@ -4,6 +4,7 @@
 在 venv 坏掉时**仍能起来** —— 与 T1 「venv 坏了 mlx check 也能跑」同一条哲学。
 流式转发用 `urllib` 的分块读，不需要 httpx。
 """
+import http.client
 import json
 import os
 import socket
@@ -95,7 +96,17 @@ def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None
             return (e.code, json.loads(e.read() or b"{}"))
         except ValueError:
             return (e.code, {})
-    except (urllib.error.URLError, TimeoutError, ValueError):
+    except (OSError, http.client.HTTPException, ValueError):
+        # **按类捕获，不按名字列举**（收尾评审 Critical 3）。此前写的是
+        # `(urllib.error.URLError, TimeoutError, ValueError)`，两处漏：
+        # · `http.client.BadStatusLine` / `IncompleteRead` 是 `HTTPException`，
+        #   **不是** `OSError` —— 后端回一行垃圾状态行，异常穿到工作线程，
+        #   客户端拿到的是零字节而不是本函数契约承诺的 `None` ⇒ 504。
+        #   两个解释器上都实测复现。
+        # · **3.9.6 上 `socket.timeout` 不是 `TimeoutError`**（那个别名 3.10 才有），
+        #   它只是 `OSError` 的子类 ⇒ 600 s 读超时在下限解释器上逃逸，
+        #   而在 venv 的 3.14 上被接住 —— 同一份代码两种行为。
+        # `OSError` 同时盖住这两族（`URLError`、`socket.timeout`、连接重置都在其下）。
         return None
 
 
@@ -126,7 +137,9 @@ def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=
             return (e.code, json.loads(e.read() or b"{}"))
         except ValueError:
             return (e.code, {})
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (OSError, http.client.HTTPException):
+        # `HTTPException` 与 `forward` 同一条理由：`BadStatusLine` 不是 `OSError`，
+        # 实测在两个解释器上都从这里逃逸（读超时与连接重置本已被 `OSError` 接住）。
         return False
 
 
@@ -148,6 +161,56 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.request = tls_context.wrap_socket(self.request, server_side=True)
                 self.request.settimeout(None)
             super().setup()
+
+        def _framing_defect(self):
+            # type: () -> object
+            """头块的**分帧不变式**：解析出来的头必须与线上的字节一致。→ 理由 | `None`。
+
+            请求走私的第九个成员（收尾评审 Critical 2）。前八次修复各自堵住
+            `Content-Length` 的**一种拼法**；这一条不再看那个头长什么样，
+            改判「这次解析本身可不可信」——判不可信就整条拒掉。
+
+            两条判据，都在分帧层，都不枚举拼法：
+
+            ① `self.headers.defects` 非空。头行不匹配 `email.feedparser.headerRE`
+               时（`X-Bad`、`Content-Length : 55` 这类），解析器抛
+               `MissingHeaderBodySeparatorDefect` 并**丢掉其后的全部头**，
+               而 `http.client` 已经把那些字节从 socket 里读走了。
+               `Content-Length` 随之消失 ⇒ `_parse_content_length` 判「无体」⇒
+               声明的体留在 socket 里被当成下一条请求解析。实测：一条请求进、
+               两条响应出。
+
+            ② 任何头值里含换行（obs-fold 续行）。**实测订正裁决的前提**：
+               `X-Fold: a\\r\\n Content-Length: 35` 这一种 `defects` 是**空的**
+               （续行是 RFC 7230 的合法语法，解析器不记缺陷），
+               `Content-Length` 照样被并进上一个头的值里而消失，
+               两个解释器上同样一条请求进、两条响应出 —— 只查 ① 拦不住它。
+               RFC 9110 §5.2 已弃用 obs-fold 并要求非代理接收方拒绝，
+               所以这里按「头值不得跨行」判，仍是分帧层的性质，不是某个头的拼法。
+            """
+            if self.headers.defects:
+                return "malformed header block"
+            for value in self.headers.values():
+                if "\n" in value or "\r" in value:
+                    return "obsolete line folding in header block"
+            return None
+
+        def parse_request(self):
+            """解析请求行与头块，**随即校验分帧不变式**（见 `_framing_defect`）。
+
+            落点选在这里而不是各 `do_*`：它是 `handle_one_request` 上游唯一
+            「头已解析、体尚未被任何人碰过」的点，四个方法共用，加一个方法
+            不会漏掉它。返回 `False` ⇒ `handle_one_request` 直接收工。
+            """
+            if not super().parse_request():
+                return False
+            bad = self._framing_defect()
+            if bad is None:
+                return True
+            # 头块不可信 ⇒ 体的边界也就不可信：这条连接不能再复用
+            self.close_connection = True
+            self._reply(400, {"error": {"message": bad, "type": "invalid_request"}})
+            return False
 
         def log_message(self, fmt, *args):
             """默认实现写 stderr 的非结构化行。换成结构化事件（BC-D-02）。
@@ -226,26 +289,42 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 # 「门与 int() 之间不留缝」的说法已经错过两次，不再拿它当前提。
                 return None, "Content-Length is not parseable as an integer"
 
-        def _read_body(self):
+        def _declared_body_error(self):
+            # type: () -> object
+            """**光看请求头就能定下的拒绝理由** → `(状态, 体)` | `None`。
+
+            `_read_body`（读体前）与 `handle_expect_100`（发 100 Continue 前）
+            共用这一份判据 —— 后者此前只跑 `precheck`，对体积一无所知，
+            于是给一个**已经判定要拒**的体发了 100 Continue，客户端把 2 MB
+            传上来再收 413（RFC 9110 §10.1.1 要求直接给最终状态，
+            而这也正好架空了本计划新加的 `api.max_body_mb` 闸门）。
+            """
             if self.headers.get("Transfer-Encoding") is not None:
                 # 本实现没有分块解码器（复检 Critical 3）：放行「零字节体」等于把没读的
                 # 分块数据留在 socket 里，keep-alive 下会被当成下一条请求解析（请求走私，
                 # 与 413 那条同一形状）。没法安全读完就直接拒绝，不是「当空体处理」。
                 self.close_connection = True
-                return None, (400, {"error": {"message": "chunked transfer encoding is not supported",
-                                              "type": "invalid_request"}})
+                return (400, {"error": {"message": "chunked transfer encoding is not supported",
+                                        "type": "invalid_request"}})
             n, err = self._parse_content_length()
             if err:
                 self.close_connection = True
-                return None, (400, {"error": {"message": "invalid Content-Length",
-                                              "type": "invalid_request"}})
+                return (400, {"error": {"message": "invalid Content-Length",
+                                        "type": "invalid_request"}})
             if n > max_body_bytes:
                 # 声明的体没读、没丢弃 —— keep-alive 下体里的字节会被当成下一条请求解析
                 # （与 `_close_if_body_unread` 同一种请求走私；这条路径没有共享它的判定，
                 # 因为 `Content-Length` 本身就超限，不是「看头就知道有体没读」的情形）
                 self.close_connection = True
-                return None, (413, {"error": {"message": "body too large",
-                                              "type": "invalid_request"}})
+                return (413, {"error": {"message": "body too large",
+                                        "type": "invalid_request"}})
+            return None
+
+        def _read_body(self):
+            err = self._declared_body_error()
+            if err:
+                return None, err
+            n, _err = self._parse_content_length()      # 上面已判过，这里必然合法
             if n == 0:
                 return None, None
             try:
@@ -273,8 +352,12 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
 
         def do_GET(self):        # noqa: N802
             self._close_if_body_unread()
-            st, body = gw.handle("GET", self.path, dict(self.headers),
-                                 peer=self.client_address[0])
+            # **`forward` 必须传**（收尾评审 Critical 1）：`/v1/responses/{id}` 与
+            # `/v1/responses/{id}/input_items` 是扇出端点，`gw.handle` 在
+            # `forward is None` 时直接回 503 `no_upstream` ⇒ 这两个白名单端点
+            # 恒 503。`do_DELETE` 与流式的扇出分支一直传着它，只有这里漏了。
+            st, body = gw.handle("GET", self.path, dict(self.headers), None,
+                                 forward=forward, peer=self.client_address[0])
             self._reply(st, body)
 
         def do_OPTIONS(self):    # noqa: N802
@@ -297,6 +380,13 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             if early:
                 self.close_connection = True
                 self._reply(*early)
+                return False
+            # **体积也要在这里判**（收尾评审 Important 4）：`Content-Length` 此刻
+            # 已经知道了，而 `100 Continue` 的意思是「把体发过来吧」——
+            # 对一个必然回 413 的体发出这句邀请，等于让客户端白传一遍。
+            err = self._declared_body_error()
+            if err:
+                self._reply(*err)        # close_connection 已由 _declared_body_error 置位
                 return False
             return super().handle_expect_100()
 

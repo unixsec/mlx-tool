@@ -278,3 +278,228 @@ def test_stalled_tls_handshake_times_out(payload, sys_py):
     assert got["result"] in ("closed", "ConnectionResetError", "BrokenPipeError"), \
         f"卡在握手中途的连接应该在超时后被服务端放弃：{got}"
     assert got["elapsed"] < 3, f"握手超时应该接近缩短后的 0.5 s，而不是卡到客户端自己的 3 s 超时：{got}"
+
+
+FANOUT = PRE + r"""
+import http.server
+class Backend(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def _ok(self):
+        body = json.dumps({"id": "resp_1", "model": "qwen"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    do_GET = _ok
+    do_DELETE = _ok
+    def log_message(self, *a):
+        pass
+bsrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Backend)
+threading.Thread(target=bsrv.serve_forever, daemon=True).start()
+BPORT = bsrv.server_address[1]
+class R2:
+    def __init__(s, i, p): s.id, s.machine, s.user = i, {"port": p}, {}
+class Res2:
+    records = [R2("qwen", BPORT)]
+facade2 = dict(facade, **{
+    "store.load": lambda c: Res2(),
+    "supervisor.snapshot": lambda c, s: {"model_arg": s,
+                                         "endpoints": ["chat", "responses", "messages"]}})
+g2 = Gateway(None, facade2, token="@TOK@"); g2.refresh_routes()
+srv2 = GatewayServer(("127.0.0.1", 0), make_handler(g2))
+threading.Thread(target=srv2.serve_forever, daemon=True).start()
+port2 = srv2.server_address[1]
+def line(method, path):
+    head = ("%s %s HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+            "Connection: close\r\n\r\n" % (method, path)).encode()
+    return raw_request(port2, head)[0]
+print(json.dumps({"get_by_id": line("GET", "/v1/responses/resp_1"),
+                  "get_input_items": line("GET", "/v1/responses/resp_1/input_items"),
+                  "delete": line("DELETE", "/v1/responses/resp_1")}))
+"""
+
+
+def test_fanout_get_reaches_the_backend_over_real_http(payload, sys_py):
+    """收尾评审 Critical 1：`do_GET` 不传 `forward` ⇒ 两个扇出端点**恒 503**。
+
+    `GET /v1/responses/{id}` 与 `GET /v1/responses/{id}/input_items` 都是 fanout，
+    而 `gw.handle` 在 `forward is None` 时直接回 503 `no_upstream`。
+    `do_DELETE` 与流式的扇出分支一直传着它，只有 `do_GET` 漏了。
+
+    **为什么活到现在**：既有的扇出用例（`test_l2_gateway_endpoints.py`）全都直调
+    `gw.handle(...)` 并**自己注入 forward**，于是它们对「server 层到底传没传」
+    这件事完全不敏感 —— 缺陷正好活在那条缝里。这条用例因此走真 socket、
+    真 `make_handler`、真后端 HTTP 服务器，并把同路径的 DELETE 作为对照
+    （修复前它是通的，GET 不通）。
+    """
+    got = run_floor(payload, sys_py, FANOUT, with_gateway=True, timeout=60, TOK=TOK)
+    assert "200" in got["get_by_id"], f"扇出 GET 没到后端：{got}"
+    assert "200" in got["get_input_items"], f"扇出 GET input_items 没到后端：{got}"
+    assert "200" in got["delete"], f"同路径 DELETE 对照也该通：{got}"
+
+
+FRAMING = PRE + r"""
+srv, port = start()
+SMUG = b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n"
+AUTHL = "Authorization: Bearer @TOK@\r\n"
+def responses(head, body):
+    s = socket.create_connection(("127.0.0.1", port), timeout=3)
+    s.sendall(head + body)
+    s.settimeout(1.5)
+    buf = b""
+    try:
+        while True:
+            c = s.recv(65536)
+            if not c:
+                break
+            buf += c
+    except OSError:
+        pass
+    s.close()
+    return re.findall(r"HTTP/1\.[01] (\d{3})", buf.decode("latin-1"))
+START = "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n" + AUTHL + \
+        "Content-Type: application/json\r\n"
+SHAPES = {
+    "bad_line_no_colon": START + "X-Bad\r\nContent-Length: %d\r\n\r\n" % len(SMUG),
+    "space_before_colon": START + "Content-Length : %d\r\n\r\n" % len(SMUG),
+    "obs_fold_swallow": START + "X-Fold: a\r\n Content-Length: %d\r\n\r\n" % len(SMUG),
+}
+out = {k: responses(v.encode(), SMUG) for k, v in SHAPES.items()}
+out["wellformed"] = responses((START + "Content-Length: 17\r\n\r\n").encode(),
+                              b'{"model":"qwen"}\n')
+print(json.dumps(out))
+"""
+
+
+def test_malformed_header_block_cannot_smuggle_a_second_request(payload, sys_py):
+    """收尾评审 Critical 2 —— 请求走私的**第九个成员**，按分帧层收口。
+
+    三种拼法都让 `Content-Length` 从 `self.headers` 里消失，而 `http.client`
+    已经把那些字节读走了 ⇒ `_parse_content_length` 判「无体」⇒ 声明的体留在
+    socket 里被当成下一条请求解析：**一条请求进、两条响应出**。
+
+    前两种（`X-Bad` 裸行、冒号前带空格）解析器会记
+    `MissingHeaderBodySeparatorDefect`；**第三种 obs-fold 续行不记任何缺陷**
+    （续行是 RFC 7230 的合法语法），两个解释器上都实测复现 —— 所以只查
+    `headers.defects` 拦不住它，必须同时禁掉「头值跨行」。
+
+    良性对照必须一起断言：这道新判据不能把格式正确的请求也打成 400。
+    """
+    got = run_floor(payload, sys_py, FRAMING, with_gateway=True, timeout=60, TOK=TOK)
+    for shape in ("bad_line_no_colon", "space_before_colon", "obs_fold_swallow"):
+        assert got[shape] == ["400"], (
+            f"{shape}：一条请求进、{len(got[shape])} 条响应出 ⇒ 响应错位：{got[shape]}")
+    assert len(got["wellformed"]) == 1 and got["wellformed"][0] != "400", (
+        f"格式正确的请求被新判据误伤：{got['wellformed']}")
+
+
+UPSTREAM = PRE + r"""
+from gateway.server import forward, forward_stream
+bad = socket.socket(); bad.bind(("127.0.0.1", 0)); bad.listen(8)
+BADPORT = bad.getsockname()[1]
+def garbage():
+    while True:
+        try:
+            c, _ = bad.accept()
+        except OSError:
+            return
+        try:
+            c.recv(65536); c.sendall(b"GARBAGE NOT HTTP\r\n\r\n")
+        except OSError:
+            pass
+        finally:
+            c.close()
+threading.Thread(target=garbage, daemon=True).start()
+stall = socket.socket(); stall.bind(("127.0.0.1", 0)); stall.listen(8)
+STALLPORT = stall.getsockname()[1]
+def stalling():
+    while True:
+        try:
+            c, _ = stall.accept()
+        except OSError:
+            return
+        try:
+            c.recv(65536)
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+            time.sleep(20)
+        except OSError:
+            pass
+threading.Thread(target=stalling, daemon=True).start()
+out = {"forward_bad_status": forward(BADPORT, "/v1/chat/completions", {"model": "qwen"}),
+       "forward_read_timeout": forward(STALLPORT, "/v1/chat/completions",
+                                       {"model": "qwen"}, timeout_sec=1),
+       "stream_bad_status": forward_stream(BADPORT, "/v1/chat/completions",
+                                           {"model": "qwen"}, lambda ch: None)}
+class R3:
+    def __init__(s, i, p): s.id, s.machine, s.user = i, {"port": p}, {}
+class Res3:
+    records = [R3("qwen", BADPORT)]
+g3 = Gateway(None, dict(facade, **{"store.load": lambda c: Res3()}), token="@TOK@")
+g3.refresh_routes()
+srv3 = GatewayServer(("127.0.0.1", 0), make_handler(g3))
+threading.Thread(target=srv3.serve_forever, daemon=True).start()
+head = ("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+        "Content-Type: application/json\r\nContent-Length: 17\r\n"
+        "Connection: close\r\n\r\n").encode()
+out["end_to_end"] = raw_request(srv3.server_address[1], head, b'{"model":"qwen"}\n')[0]
+print(json.dumps(out))
+"""
+
+
+def test_upstream_transport_failure_becomes_504_not_zero_bytes(payload, sys_py):
+    """收尾评审 Critical 3：`forward` 的契约是「传输失败 → `None` → 504」，
+    而它的 except 面按**名字**列举，漏了两族：
+
+    · `http.client.BadStatusLine` / `IncompleteRead` 是 `HTTPException`，
+      **不是 `OSError`** ⇒ 后端回一行垃圾状态行时异常穿到工作线程，
+      客户端拿到零字节（实测 `bytes_received: 0`）而不是 504。两个解释器都中。
+    · **3.9.6 上 `socket.timeout` 不是 `TimeoutError`**（那个别名 3.10 才有），
+      于是 600 s 读超时在下限解释器上逃逸、在 venv 的 3.14 上被接住 ——
+      同一份代码两种行为。本用例用 1 s 超时把这一半也钉住。
+
+    `forward_stream` 同样需要 `HTTPException`（读超时与连接重置本已被 `OSError`
+    接住，只有 `BadStatusLine` 会逃）。
+    """
+    got = run_floor(payload, sys_py, UPSTREAM, with_gateway=True, timeout=60, TOK=TOK)
+    assert got["forward_bad_status"] is None, (
+        f"垃圾状态行没被接住（BadStatusLine 不是 OSError）：{got['forward_bad_status']}")
+    assert got["forward_read_timeout"] is None, (
+        f"读超时没被接住（3.9.6 上 socket.timeout 不是 TimeoutError）："
+        f"{got['forward_read_timeout']}")
+    assert got["stream_bad_status"] is False, (
+        f"forward_stream 的 BadStatusLine 逃逸了：{got['stream_bad_status']}")
+    assert "504" in got["end_to_end"], f"端到端应收到 504 而不是零字节：{got['end_to_end']}"
+
+
+EXPECT100_OVERSIZE = PRE + r"""
+srv, port = start(max_body_bytes=64)
+s = socket.create_connection(("127.0.0.1", port), timeout=3)
+s.sendall(("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\n"
+           "Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"
+           "Content-Length: 4096\r\nExpect: 100-continue\r\n\r\n").encode())
+s.settimeout(3)
+buf = b""
+try:
+    while True:
+        chunk = s.recv(256)
+        if not chunk:
+            break
+        buf += chunk
+except socket.timeout:
+    pass
+s.close()
+print(json.dumps({"status_lines": re.findall(r"HTTP/1\.[01] \d{3}", buf.decode("latin-1"))}))
+"""
+
+
+def test_expect_100_not_granted_for_a_body_already_over_the_cap(payload, sys_py):
+    """收尾评审 Important 4：`handle_expect_100` 跑了 `precheck` 却从不看
+    `Content-Length`，尽管此刻它已经知道了 —— 于是对一个**必然回 413** 的体
+    先发 `100 Continue`（实测 64 字节上限下：100 然后 413），等于邀请客户端
+    把注定被拒的几 MB 传上来。RFC 9110 §10.1.1 要的是直接给最终状态。
+    这也正好架空了本计划新加的 `api.max_body_mb` 闸门。
+    """
+    got = run_floor(payload, sys_py, EXPECT100_OVERSIZE, with_gateway=True, TOK=TOK)
+    assert got["status_lines"] == ["HTTP/1.1 413"], (
+        f"超限的体不该先拿到 100 Continue：{got['status_lines']}")
