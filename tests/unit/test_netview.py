@@ -65,11 +65,15 @@ def script(name, body):
     os.chmod(p, 0o755)
     return p
 ok = peers.command_loader({"networksetup": script("ns", "echo HW"), "ifconfig": script("if", "echo IF")})()
+# **两种判定分开两个超时**（账本 A1）：同一个 0.5 s 既要判「rc≠0」又要判「超时」，
+# 机器一忙，`exit 1` 的桩也会跟着超时，两条判定的区分就此消失（本会话观测三次，
+# 实得 rc 桩也报 TimeoutExpired）。改成：rc 桩给**宽松**超时（只验 rc≠0 这条路径，
+# 它立刻返回，宽超时不会让用例变慢），slow 桩用远大于其超时的 sleep 配**紧**超时。
 errs = {}
-for name, body in (("rc", "exit 1"), ("slow", "sleep 5")):
+for name, body, timeout in (("rc", "exit 1", 30.0), ("slow", "sleep 30", 0.5)):
     bins = {"networksetup": script(name, body), "ifconfig": script("if2", "echo IF")}
     try:
-        peers.command_loader(bins, timeout_sec=0.5)()
+        peers.command_loader(bins, timeout_sec=timeout)()
         errs[name] = "no error"
     except Exception as exc:
         errs[name] = type(exc).__name__
@@ -174,6 +178,10 @@ def on_change(snap):
         # 有 _deliver_lock 时，t2 送达前必须等这次调用返回、释放锁 —— 超时是
         # **预期**（不是这条用例的失败）；没有那把锁的旧代码里，t2 会在超时
         # 前就送达并置位这个事件。
+        # **这一处的超时是判据本身，不是 A2 说的那种**：有 `_deliver_lock` 时
+        # t2 在本次调用返回前送不出去，所以**超时到期才是正确行为**；
+        # 没有那把锁的旧代码里 t2 会抢在到期前置位这个事件，顺序随之翻转。
+        # 去掉它会让**修好的**代码在这里永久阻塞，故保留（已报控制器）。
         evt.wait(timeout=2.0)
         delivered.append(tag)
         return True
@@ -187,7 +195,10 @@ v.refresh()
 v.tick()
 t2 = bg.get("t2")
 if t2 is not None:
-    t2.join(timeout=5.0)
+    # **不带超时**（账本 A2）：下面要断言「这个线程跑完了」，而带超时的 join
+    # 在机器慢时与真死锁不可区分 —— 截止交给外层 run_floor(timeout=30)，
+    # 超时即挂起并留下证据，而不是变成一条关于并发语义的假结论。
+    t2.join()
 print(json.dumps({"delivered": delivered, "t2_alive": bool(t2 and t2.is_alive())}))
 """
 
@@ -233,7 +244,9 @@ class Probe:
         self._n[name] = self._n.get(name, 0) + 1
         if self._n[name] == 2 and name == "A":
             a_paused.set()
-            b_checked.wait(5.0)
+            # 不带超时（账本 A2）：B 必定会置位它；置不了就是真挂起，
+            # 该让外层 run_floor(timeout=30) 判死并留证据
+            b_checked.wait()
         elif self._n[name] == 2 and name == "B":
             b_checked.set()
         return out
@@ -243,11 +256,12 @@ def run(name):
     res[name] = v.classify("10.14.0.7")
 ta = threading.Thread(target=run, args=("A",), name="A")
 ta.start()
-a_paused.wait(5.0)
+# 三处握手都不带超时（账本 A2）—— 见上面 b_checked.wait() 的理由
+a_paused.wait()
 tb = threading.Thread(target=run, args=("B",), name="B")
 tb.start()
-tb.join(10.0)
-ta.join(10.0)
+tb.join()
+ta.join()
 print(json.dumps({"loader_calls": len(calls), "res": res,
                   "b_checked": b_checked.is_set(), "alive": ta.is_alive() or tb.is_alive()}))
 """

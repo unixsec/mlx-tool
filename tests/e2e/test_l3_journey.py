@@ -723,6 +723,14 @@ def test_l3_model_install_does_not_claim_success_without_downloading(cli):
 
     这是「报成功但没产生效果」最直白的一种。附录 A 给 `model install`
     登记的码含 3（外部依赖不可用），正是为这种情形准备的。
+
+    **已知偶发（账本 A4，不要当成回归）**：本用例走的是真实的 `model install`
+    路径，途中会去 huggingface 查仓库元数据（`runtime._repo_bytes`）。
+    机器离线或那次请求超时的时候，失败**原因**会变成网络错误而不是
+    「没有下载器」，最后那条 `assert "hf" in err or "下载器" in err` 因此可能变红。
+    看到这一条红，先确认网络，再看是不是真的改坏了 `weights.download`；
+    此处**有意不重新设计**（加桩就等于不再跑真实路径，而跑真实路径正是
+    这条 L3 的全部价值）—— 收尾评审已就此裁决，只留这段记录给下一个读者。
     """
     rc, out, err = cli("model", "install", "mlx-community/NoSuchModel-999B",
                        "--type=text", "--port=8299", human=True)

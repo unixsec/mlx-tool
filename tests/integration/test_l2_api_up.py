@@ -181,6 +181,7 @@ import json, os
 from mlx_server import backendarg, runtime
 from mlx_server.cmd.svc import Invocation, run
 from mlx_server.ctx import Ctx
+from mlx_server.result import Ok
 # **`root_code` 是真的产品 payload**（不是 WORLD 的空 tempdir）——
 # `gateway_interpreter` 探测子进程要 `import gateway.app, gateway.server`，
 # 那个包只存在于这里；这也是 build_deps 生产实现里 venv_py 真正会被
@@ -193,6 +194,10 @@ with open(os.path.join("@DATA@", "settings.json"), "w") as fh:
     fh.write(json.dumps({"api.token": "T" * 43}))
 deps = runtime.build_deps(ctx)          # **真实装配点**，不是手写字典
 deps["backendarg_spec"] = backendarg.spec
+# **外来监听者检查要打桩**（账本 A3）：不桩它，这条用例会对**真机的 8340 端口**
+# 发一次没打桩的 `lsof` —— 串行跑时极少撞上，并行化立刻暴露；而且它测的是
+# 解释器接线，与端口上有没有别人无关。
+deps["foreign_listeners"] = lambda port: Ok([])
 spawned = []
 deps["spawn"] = lambda spec, cwd: (spawned.append(list(spec.argv)),
                                    {"pid": 999999, "pgid": 999999, "started_at": "t"})[1]
