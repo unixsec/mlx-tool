@@ -3,13 +3,56 @@
 两条都跑在**真 HTTP** 上（`make_handler` + 真 socket）：头是 server 层写的，
 只断言 `Gateway.handle` 的状态码看不见它们；分帧问题只在 keep-alive 连接上出现。
 """
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cardinality import Cardinality  # noqa: E402
 from floor import run_floor  # noqa: E402
 
 TOK = "t" * 43
+
+# ── `Content-Length` 矩阵：**唯一一份定义** ──────────────────────────────────
+# 复检 Minor（fix round 4）：矩阵此前在 PROG 里由一份 `CL_VALUES` × `METHOD_TARGETS`
+# 铺开，而 PROG **外**的断言另抄一份枚举（`REJECT_CL_CASES` / `ACCEPT_CL_CASES` /
+# `CL_METHODS`），只检查自己名单里的格子。往 PROG 里加一种拼法、忘了同步外面的名单
+# ⇒ 那一格照样被造出来、发出去，却从不被看：不报错、不 skip，静默失去覆盖。
+# （`unicode_digit` 正是这么漏掉的 —— fix round 4 的 RED 第一步就是把它只加进 PROG，
+# 整个用例照样全绿。）
+# 现在值表与方法表只在这里写一次：PROG 用 `@CL_TABLE@` 拿同一份字面量，断言用
+# `Cardinality.check(..., rel="equal")` 核对「回传的格子集合 == 值 × 方法的笛卡尔积」
+# —— 多一格少一格都会响。**加一种拼法 = 在 `CL_VALUES` 里加一行，仅此一处。**
+CTRL_BODY = '{"pad":"x"}'   # 真实、格式合法但缺 `model` 字段的小体，给「应当被正常处理」的两格用
+CL_VALUES = {
+    "empty": [""], "negative": ["-1"], "nonnumeric": ["abc"],
+    "plus_prefixed": ["+5"], "whitespace_padded": [" 5 "],
+    # 复检 Important（fix round 4）：`str.isdigit()` 对 U+00B2 这类 Unicode 数字字符为真，
+    # 而 `int()` 解析不了它 —— 门放行、`int()` 抛 `ValueError`，handler 线程当场死掉，
+    # 客户端**一条响应都收不到**（不是 400）。这个值按 latin-1 发成单字节 `\xb2`。
+    "unicode_digit": ["²"],
+    # 首值特意选 "0"：旧版 `_close_if_body_unread` 只看第一个 Content-Length 值，
+    # `"0".lstrip("0")` 是空串（假），会误判成"没有体"而不关连接——这正是复检点名
+    # 的那个洞；新的严格解析看的是"重复且不一致"，不管哪个值排第一都要拒
+    "dup_differing": ["0", "1000"],
+    "dup_identical": [str(len(CTRL_BODY))] * 2,
+    "valid_control": [str(len(CTRL_BODY))],
+}
+# 只列「应当被当作合法体正常处理」的 case；**拒绝集是从 `CL_VALUES` 减出来的**，
+# 不再单列一份名单 —— 单列就会有忘了同步的那一天
+CL_ACCEPT_CASES = ("dup_identical", "valid_control")
+# 每个方法自带能给出干净、确定的单条响应的目标路径 / 固定头（与既有 smuggle_* 用例同
+# 一套目标）；`Content-Length` 头由 PROG 里的循环按 case 拼在后面。`__TOK__` 由 PROG
+# 替换成真令牌（PROG 自己的 `@TOK@` 由 `run_floor` 替换，两层替换互不依赖先后）
+CL_METHOD_TARGETS = {
+    "GET": ["/v1/models", "Authorization: Bearer __TOK__\r\n"],
+    "OPTIONS": ["/v1/chat/completions", ""],
+    "POST": ["/v1/chat/completions",
+             "Authorization: Bearer __TOK__\r\nContent-Type: application/json\r\n"],
+}
+CL_TABLE = json.dumps({"body": CTRL_BODY, "values": CL_VALUES,
+                       "accept": list(CL_ACCEPT_CASES), "methods": CL_METHOD_TARGETS})
+CL_CELLS = {f"{m}:{c}" for m in CL_METHOD_TARGETS for c in CL_VALUES}
 
 PROG = r'''
 import http.client, json, re, socket, threading
@@ -134,40 +177,24 @@ out["smuggle_post_chunked"] = raw(
     b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"
     b"Transfer-Encoding: chunked\r\n",
     b"%x\r\n" % len(inner) + inner + b"\r\n0\r\n\r\n")
-# 复检 Important（同一类缺陷第六、第七次复发）：`Content-Length` 解析要接住整整
-# 一类畸形拼法，且**每一个读它的调用点**都要接住——不是一个值一个值、一个方法
-# 一个方法地补丁。CTRL_BODY 是一个真实、格式合法但缺 `model` 字段的小体（给
-# 「应该被正常处理」的两个 control case 用，只对 POST 有意义——GET/DELETE/OPTIONS
-# 本来就不读体，声明了非零长度就该关连接，不管那个长度写得对不对）；其余 case
-# 声明的长度本身就非法，实际发送的字节固定用 `inner`（一条完整的 `GET /healthz`）
-# ——如果没被拒绝/没被关连接，又没被整条读走，剩下的字节会被当成下一条 keep-alive
-# 请求解析。矩阵按「值 × 方法」铺开，同一份 case 定义，不为方法另开一份表。
-CTRL_BODY = b'{"pad":"x"}'
-cl_len = str(len(CTRL_BODY)).encode().decode()
-CL_VALUES = {
-    "empty": [""], "negative": ["-1"], "nonnumeric": ["abc"],
-    "plus_prefixed": ["+5"], "whitespace_padded": [" 5 "],
-    # 首值特意选 "0"：旧版 `_close_if_body_unread` 只看第一个 Content-Length 值，
-    # `"0".lstrip("0")` 是空串（假），会误判成"没有体"而不关连接——这正是复检点名
-    # 的那个洞；新的严格解析看的是"重复且不一致"，不管哪个值排第一都要拒
-    "dup_differing": ["0", "1000"],
-    "dup_identical": [cl_len, cl_len],
-    "valid_control": [cl_len],
-}
-CL_ACCEPT_CASES = ("dup_identical", "valid_control")
-# 每个方法自带能给出干净、确定的单条响应的目标路径/固定头（与既有 smuggle_* 用例
-# 同一套目标）；`Content-Length` 头由下面的循环按 case 拼接在后面
-METHOD_TARGETS = {
-    "GET": ("/v1/models", b"Authorization: Bearer @TOK@\r\n"),
-    "OPTIONS": ("/v1/chat/completions", b""),
-    "POST": ("/v1/chat/completions",
-             b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"),
-}
+# 复检 Important（同一类缺陷第六、第七次复发）：`Content-Length` 解析要接住整整一类
+# 畸形拼法，且**每一个读它的调用点**都要接住——不是一个值一个值、一个方法一个方法地
+# 补丁。矩阵按「值 × 方法」铺开，值表 / 方法表来自 PROG **外**那一份唯一定义
+# （`@CL_TABLE@`），PROG 外的断言核对的就是同一份表铺出来的格子集合，这里不另抄枚举。
+# 「应当被正常处理」的两格发 CTRL_BODY（合法小体）；其余 case 声明的长度本身就非法，
+# 实际发送的字节固定用 `inner`（一条完整的 `GET /healthz`）——如果没被拒绝 / 没被关
+# 连接，又没被整条读走，剩下的字节会被当成下一条 keep-alive 请求解析。
+_T = json.loads(r"""@CL_TABLE@""")
+CTRL_BODY = _T["body"].encode("latin-1")
 cl_matrix = {}
-for _method, (_target, _base_headers) in METHOD_TARGETS.items():
-    for _case, _values in CL_VALUES.items():
-        _hdrs = _base_headers + b"".join(b"Content-Length: %s\r\n" % v.encode() for v in _values)
-        _body = CTRL_BODY if _case in CL_ACCEPT_CASES else inner
+for _method, (_target, _base) in _T["methods"].items():
+    _base_headers = _base.replace("__TOK__", "@TOK@").encode("latin-1")
+    for _case, _values in _T["values"].items():
+        # 逐字节按 latin-1 发：非 ASCII 的 Unicode 数字字符（U+00B2）必须落成单字节
+        # `\xb2`，`http.client.parse_headers` 才会把它解回 '²'（utf-8 会发两字节）
+        _hdrs = _base_headers + b"".join(b"Content-Length: %s\r\n" % v.encode("latin-1")
+                                         for v in _values)
+        _body = CTRL_BODY if _case in _T["accept"] else inner
         cl_matrix["%s:%s" % (_method, _case)] = raw(_method, _target, _hdrs, _body)
 out["cl_matrix"] = cl_matrix
 print(json.dumps(out))
@@ -188,7 +215,8 @@ def _cors(resp):
 
 
 def test_cors_response_headers_exact_and_never_credentials(payload, sys_py):
-    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60,
+                    CL_TABLE=CL_TABLE, TOK=TOK)
     pre, unauth, sse = got["preflight"], got["unauth"], got["sse"]
     assert pre["status"] == 204, pre
     assert _cors(pre) == PREFLIGHT_CORS, f"预检的 Access-Control-* 头集合与 spec 不一致：{_cors(pre)}"
@@ -203,7 +231,8 @@ def test_cors_response_headers_exact_and_never_credentials(payload, sys_py):
 
 
 def test_options_with_body_does_not_smuggle_a_second_request(payload, sys_py):
-    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60,
+                    CL_TABLE=CL_TABLE, TOK=TOK)
     for case in ("smuggle_cl", "smuggle_cl_preflight", "smuggle_te"):
         r = got[case]
         assert len(r["status_lines"]) == 1, \
@@ -213,7 +242,8 @@ def test_options_with_body_does_not_smuggle_a_second_request(payload, sys_py):
 
 def test_delete_and_get_with_body_do_not_smuggle_a_second_request(payload, sys_py):
     """Critical 1 复检：`do_DELETE`/`do_GET` 与 `do_OPTIONS` 同一处坑，同一个修法。"""
-    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60,
+                    CL_TABLE=CL_TABLE, TOK=TOK)
     for case in ("smuggle_delete_cl", "smuggle_get_cl"):
         r = got[case]
         assert len(r["status_lines"]) == 1, \
@@ -223,7 +253,8 @@ def test_delete_and_get_with_body_do_not_smuggle_a_second_request(payload, sys_p
 
 def test_413_closes_connection_and_does_not_smuggle_a_second_request(payload, sys_py):
     """裁决 1：413（超过 `max_body_bytes`）没读体，也不能让 keep-alive 复用这条连接。"""
-    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60,
+                    CL_TABLE=CL_TABLE, TOK=TOK)
     r = got["smuggle_413"]
     assert r["status_lines"] == ["HTTP/1.1 413"], \
         f"超限请求体应恰好回一条 413，收到 {r['status_lines']}"
@@ -240,7 +271,8 @@ def test_post_chunked_is_rejected_and_does_not_smuggle_a_second_request(payload,
     也会碰巧全部成立。改看 `raw`：没被解析成第二条请求的唯一证据是响应里完全不出现
     stdlib 那句「Bad request syntax」。
     """
-    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60,
+                    CL_TABLE=CL_TABLE, TOK=TOK)
     r = got["smuggle_post_chunked"]
     assert r["status_lines"] == ["HTTP/1.1 400"], \
         f"分块编码的 POST 应恰好回一条 400，收到 {r['status_lines']}"
@@ -249,36 +281,43 @@ def test_post_chunked_is_rejected_and_does_not_smuggle_a_second_request(payload,
         f"分块编码没读走的字节被当成了下一条请求解析：{r['raw']!r}"
 
 
-REJECT_CL_CASES = ("empty", "negative", "nonnumeric", "plus_prefixed",
-                   "whitespace_padded", "dup_differing")
-ACCEPT_CL_CASES = ("dup_identical", "valid_control")
-CL_METHODS = ("GET", "OPTIONS", "POST")
-
-
 def test_content_length_parsed_strictly_across_the_whole_class(payload, sys_py):
     """复检 Important（同一类缺陷第六、第七次复发）：严格解析 `Content-Length`
     是这个 handler 里**唯一**的判据，`_read_body`（POST 读体）与
     `_close_if_body_unread`（GET/DELETE/OPTIONS 判断要不要关连接）必须共用它——
     矩阵按「值 × 方法」铺开，不是给某一个方法单开一张表。
 
+    矩阵的定义（`CL_VALUES` × `CL_METHOD_TARGETS`）只有模块顶上那一份：PROG 按它
+    铺格子，这里按它断言。**格子集合先用 `Cardinality` 核对成相等**，所以往
+    `CL_VALUES` 加一行（或往 `CL_METHOD_TARGETS` 加一个方法）不可能"造出来却没人看"。
+
     三条不变式对矩阵里的**每一格**都成立：
-    1. 恰好一条状态行（没有把没读走的字节当成了下一条 keep-alive 请求解析）；
+    1. 恰好一条状态行（没有把没读走的字节当成了下一条 keep-alive 请求解析；
+       **也是 `unicode_digit` 那类缺陷唯一会响的一条**——handler 线程死在 `int()` 上时
+       连接照样被关、`raw` 里也没有「Bad request syntax」，只有"一条响应都没有"能看见）；
     2. 响应原文里不出现 stdlib 的「Bad request syntax」（同一份证据，防 Critical 3
        那种"看 status_lines/closed 两条表面断言也会碰巧全绿"的假阴性）；
-    3. 关不关连接：畸形值（`REJECT_CL_CASES`）在任何方法上都必须关；"重复但一致"
-       与"单值合法"（`ACCEPT_CL_CASES`）只在 POST 上不关（体被正常读走处理）——
-       GET/OPTIONS/DELETE 本来就不读体，声明了非零长度（哪怕值写得完全合法）
-       就该关，这不是误杀，是这两个方法本来就有的行为。
+    3. 关不关连接：畸形值（`CL_VALUES` 里不在 `CL_ACCEPT_CASES` 的那些）在任何方法上
+       都必须关；"重复但一致"与"单值合法"（`CL_ACCEPT_CASES`）只在 POST 上不关（体被
+       正常读走处理）——GET/OPTIONS/DELETE 本来就不读体，声明了非零长度（哪怕值写得
+       完全合法）就该关，这不是误杀，是这两个方法本来就有的行为。
     """
-    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60,
+                    CL_TABLE=CL_TABLE, TOK=TOK)
     matrix = got["cl_matrix"]
-    for method in CL_METHODS:
-        for case in REJECT_CL_CASES + ACCEPT_CL_CASES:
-            r = matrix[f"{method}:{case}"]
-            assert len(r["status_lines"]) == 1, \
-                f"{method}:{case}：应当恰好一条状态行，收到 {r['status_lines']}"
-            assert "Bad request syntax" not in r["raw"], \
-                f"{method}:{case}：没读走的字节被当成了下一条请求解析：{r['raw']!r}"
-            should_close = case in REJECT_CL_CASES or method != "POST"
-            assert r["closed"] is should_close, \
-                f"{method}:{case}：期望 closed={should_close}，收到 {r['closed']}"
+    # 守卫的守卫：回传的格子集合必须**恰好**等于「值 × 方法」的笛卡尔积。少一格
+    # （PROG 没铺出来）或多一格都会在这里响，不会再出现"加了拼法却静默没测"。
+    Cardinality.require_nonempty("cl_matrix 期望格", CL_CELLS,
+                                 "值表或方法表为空 ⇒ 下面的逐格断言空真")
+    Cardinality.check("cl_matrix 实得格 ↔ 值 × 方法", list(matrix), sorted(CL_CELLS),
+                      rel="equal")
+    for key in sorted(CL_CELLS):
+        method, case = key.split(":")
+        r = matrix[key]
+        assert len(r["status_lines"]) == 1, \
+            f"{key}：应当恰好一条状态行，收到 {r['status_lines']}"
+        assert "Bad request syntax" not in r["raw"], \
+            f"{key}：没读走的字节被当成了下一条请求解析：{r['raw']!r}"
+        should_close = case not in CL_ACCEPT_CASES or method != "POST"
+        assert r["closed"] is should_close, \
+            f"{key}：期望 closed={should_close}，收到 {r['closed']}"

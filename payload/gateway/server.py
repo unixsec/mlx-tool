@@ -183,8 +183,9 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             逐个补丁具体的坏值——先补 `int()` 直抛异常、再补负数、再补
             `Transfer-Encoding`——每一次都只堵住了送到眼前的那一个畸形样本，对
             下一种拼法、对另一个调用点都保持沉默。这里改成一次性接住整个类，且
-            只有这一个函数认得这个头：不是纯数字（`str.isdigit`——拒绝空值、负号、
-            `+` 前缀、内部空白、任何非数字字符）→ 非法；重复出现但取值不完全
+            只有这一个函数认得这个头：不是纯 ASCII 数字（`isascii() and isdigit()`，
+            等价于 `[0-9]+`——拒绝空值、负号、`+` 前缀、内部空白、任何非数字字符，
+            以及 `int()` 吃不下的 Unicode 数字字符）→ 非法；重复出现但取值不完全
             一致 → 非法；没有该头 → `(0, None)`（无体）。
             """
             values = self.headers.get_all("Content-Length") or []
@@ -192,8 +193,13 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 return 0, None
             if len(set(values)) > 1:
                 return None, "Content-Length values disagree"
-            if not values[0].isdigit():
-                return None, "Content-Length is not a bare digit string"
+            # **ASCII 数字**，等价于 `[0-9]+`：光 `str.isdigit()` 不够 —— 它对 U+00B2
+            # （上标 2）这类 Unicode 数字字符也为真，而 `int()` 解析不了它们。门放行、
+            # 紧接着 `int()` 抛 `ValueError` ⇒ handler 线程当场死掉，客户端连 400 都
+            # 收不到，**一条响应都没有**（复检 Important，fix round 4）。判据的要求是
+            # 「这道门放行的每一个值，`int()` 都一定吃得下」：门与 `int()` 之间不留缝。
+            if not (values[0].isascii() and values[0].isdigit()):
+                return None, "Content-Length is not a bare ASCII digit string"
             return int(values[0]), None
 
         def _read_body(self):
