@@ -21,6 +21,7 @@ from .app import log_event
 
 DEFAULT_MAX_BODY_MB = 256          # `api.max_body_mb` 出厂值（spec D22：多图与长上下文请求体）
 _HANDSHAKE_SEC = 10.0
+_MAX_CL_DIGITS = 20                # `Content-Length` 最长位数，见 `_parse_content_length`
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -183,24 +184,43 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             逐个补丁具体的坏值——先补 `int()` 直抛异常、再补负数、再补
             `Transfer-Encoding`——每一次都只堵住了送到眼前的那一个畸形样本，对
             下一种拼法、对另一个调用点都保持沉默。这里改成一次性接住整个类，且
-            只有这一个函数认得这个头：不是纯 ASCII 数字（`isascii() and isdigit()`，
-            等价于 `[0-9]+`——拒绝空值、负号、`+` 前缀、内部空白、任何非数字字符，
-            以及 `int()` 吃不下的 Unicode 数字字符）→ 非法；重复出现但取值不完全
-            一致 → 非法；没有该头 → `(0, None)`（无体）。
+            只有这一个函数认得这个头：不是「≤ 20 位的纯 ASCII 数字」（`[0-9]{1,20}`
+            ——拒绝空值、负号、`+` 前缀、内部空白、任何非数字字符、`int()` 吃不下的
+            Unicode 数字字符，以及长到 `int()` 拒绝解析 / 解析起来是二次方开销的
+            数字串）→ 非法；重复出现但取值不完全一致 → 非法；没有该头 → `(0, None)`
+            （无体）。
+
+            `int()` 另外还兜一层 `try/except ValueError`（round 5）：**故意与上面的门
+            重复**。「门放行的值 `int()` 一定吃得下」这个说法已经错过两次（`'²'`、
+            超长数字串），所以这段代码不再依赖它恰好为真——真值判断归门，兜底归
+            `except`，两者都指向同一个 `(None, 错误)` 返回。
             """
             values = self.headers.get_all("Content-Length") or []
             if not values:
                 return 0, None
             if len(set(values)) > 1:
                 return None, "Content-Length values disagree"
-            # **ASCII 数字**，等价于 `[0-9]+`：光 `str.isdigit()` 不够 —— 它对 U+00B2
-            # （上标 2）这类 Unicode 数字字符也为真，而 `int()` 解析不了它们。门放行、
-            # 紧接着 `int()` 抛 `ValueError` ⇒ handler 线程当场死掉，客户端连 400 都
-            # 收不到，**一条响应都没有**（复检 Important，fix round 4）。判据的要求是
-            # 「这道门放行的每一个值，`int()` 都一定吃得下」：门与 `int()` 之间不留缝。
-            if not (values[0].isascii() and values[0].isdigit()):
-                return None, "Content-Length is not a bare ASCII digit string"
-            return int(values[0]), None
+            value = values[0]
+            # **≤ 20 位的 ASCII 数字**，等价于 `[0-9]{1,20}`。两条都不能少：
+            # · 只查 `str.isdigit()` 不够 —— 它对 U+00B2（上标 2）这类 Unicode 数字字符
+            #   也为真，而 `int()` 解析不了（复检 Important，round 4）。
+            # · 只查「是 ASCII 数字」还不够 —— 长度无界的数字串照样是 `int()` 吃不下的：
+            #   CPython 自 3.11（及 3.9.14+/3.10.7+ 的 CVE-2020-10735 回移）对 int(str)
+            #   设了 4300 位上限，`int("9"*5000)` 抛同一个 `ValueError`；而在**没有**该
+            #   上限的解释器（本仓库的下限 3.9.6 正是）上，它变成这条上限本来要防的
+            #   二次方 CPU 开销——单条 64 KB 头行约 65000 位，实测一次 int() 就 14 ms
+            #   （复检 Important，round 5）。两族解释器各有一种坏结局，长度上限同时关掉。
+            # 这两种坏值都在 `do_GET`/`do_OPTIONS` 上**先于鉴权**可达（`_close_if_body_unread`
+            # 在 `gw.handle` 之前），未鉴权的客户端一条超长头就能触发。
+            # 20 位覆盖到 10^20 字节，远超任何真实请求体（uint64 上限也才 20 位）。
+            if len(value) > _MAX_CL_DIGITS or not (value.isascii() and value.isdigit()):
+                return None, "Content-Length is not a bare ASCII digit string within 20 digits"
+            try:
+                return int(value), None
+            except ValueError:
+                # 上面的门已经排除了这条路径——**仍然兜住**：见 docstring，这个
+                # 「门与 int() 之间不留缝」的说法已经错过两次，不再拿它当前提。
+                return None, "Content-Length is not parseable as an integer"
 
         def _read_body(self):
             if self.headers.get("Transfer-Encoding") is not None:
