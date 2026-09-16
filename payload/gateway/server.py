@@ -168,6 +168,31 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             if raw:
                 self.wfile.write(raw)
 
+        def _parse_content_length(self):
+            # type: () -> object
+            """严格解析 `Content-Length`：**只接受一段裸数字**（`str.isdigit`），
+            拒绝空值、负号、`+` 前缀、内部空白、任何非数字字符；重复出现时**必须
+            全部一致**才放行，否则一律 `None`（非法）。
+
+            复检 Important（同一类缺陷第六次复发）：此前逐个补丁具体的坏值——先补
+            `int()` 直抛异常、再补负数、再补 `Transfer-Encoding`，每一次都只堵住
+            了送到眼前的那一个畸形样本，对下一种拼法保持沉默。`empty` 用「不在
+            `(None, "")` 里才 int()」的写法把空值特例成 0（当无体处理，实际字节
+            没被丢弃，keep-alive 下被当成下一条请求解析）；重复的 `Content-Length`
+            头此前从没处理过，`self.headers.get()` 只取第一个值（`email.message.
+            Message.get` 语义），声明值与实际字节不一致时同一形状的走私就成立。
+            这里改成一次性接住整个类：不是纯数字（含空、含符号、含空白）→ 非法；
+            重复但取值不完全一致 → 非法；没有 `Content-Length` 头 → 0（无体）。
+            """
+            values = self.headers.get_all("Content-Length") or []
+            if not values:
+                return 0
+            if len(set(values)) > 1:
+                return None
+            if not values[0].isdigit():
+                return None
+            return int(values[0])
+
         def _read_body(self):
             if self.headers.get("Transfer-Encoding") is not None:
                 # 本实现没有分块解码器（复检 Critical 3）：放行「零字节体」等于把没读的
@@ -176,18 +201,8 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.close_connection = True
                 return None, (400, {"error": {"message": "chunked transfer encoding is not supported",
                                               "type": "invalid_request"}})
-            raw_cl = self.headers.get("Content-Length")
-            try:
-                n = int(raw_cl) if raw_cl not in (None, "") else 0
-            except ValueError:
-                # 复检 Critical 1：非数字 `Content-Length`（比如 "abc"）此前让 `int()` 直接
-                # 抛出，客户端什么都收不到，异常只落进 `handle_error` 的一行 warn
-                self.close_connection = True
-                return None, (400, {"error": {"message": "invalid Content-Length",
-                                              "type": "invalid_request"}})
-            if n < 0:
-                # 复检 Critical 1：负数 `Content-Length` 既不 `> max_body_bytes` 也不 `== 0`，
-                # 会落进 `self.rfile.read(n)`——`n` 为负时 `read` 不设上限地读到 EOF 为止
+            n = self._parse_content_length()
+            if n is None:
                 self.close_connection = True
                 return None, (400, {"error": {"message": "invalid Content-Length",
                                               "type": "invalid_request"}})

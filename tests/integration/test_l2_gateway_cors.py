@@ -134,6 +134,28 @@ out["smuggle_post_chunked"] = raw(
     b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"
     b"Transfer-Encoding: chunked\r\n",
     b"%x\r\n" % len(inner) + inner + b"\r\n0\r\n\r\n")
+# 复检 Important（第六次同一类缺陷）：`Content-Length` 解析要接住整整一类畸形拼法，
+# 不是一个一个值地补丁。CTRL_BODY 是一个真实、格式合法但缺 `model` 字段的小体
+# （给「应该被正常处理」的两个 control case 用）；其余 case 声明的长度本身就非法，
+# 实际发送的字节固定用 `inner`（一条完整的 `GET /healthz`）——如果没被拒绝、
+# 又没被整条读走，剩下的字节会被当成下一条 keep-alive 请求解析。
+CTRL_BODY = b'{"pad":"x"}'
+def cl_headers(*values):
+    auth = b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"
+    return auth + b"".join(b"Content-Length: %s\r\n" % v.encode() for v in values)
+cl_len = str(len(CTRL_BODY)).encode().decode()
+cl_cases = {
+    "empty": (cl_headers(""), inner),
+    "negative": (cl_headers("-1"), inner),
+    "nonnumeric": (cl_headers("abc"), inner),
+    "plus_prefixed": (cl_headers("+5"), inner),
+    "whitespace_padded": (cl_headers(" 5 "), inner),
+    "dup_differing": (cl_headers("5", "1000"), inner),
+    "dup_identical": (cl_headers(cl_len, cl_len), CTRL_BODY),
+    "valid_control": (cl_headers(cl_len), CTRL_BODY),
+}
+out["cl_class"] = {name: raw("POST", "/v1/chat/completions", hdrs, body)
+                   for name, (hdrs, body) in cl_cases.items()}
 print(json.dumps(out))
 '''
 
@@ -211,3 +233,32 @@ def test_post_chunked_is_rejected_and_does_not_smuggle_a_second_request(payload,
     assert r["closed"], "分块编码的 POST 被拒后连接应被关闭"
     assert "Bad request syntax" not in r["raw"], \
         f"分块编码没读走的字节被当成了下一条请求解析：{r['raw']!r}"
+
+
+REJECT_CL_CASES = ("empty", "negative", "nonnumeric", "plus_prefixed",
+                   "whitespace_padded", "dup_differing")
+ACCEPT_CL_CASES = ("dup_identical", "valid_control")
+
+
+def test_content_length_parsed_strictly_across_the_whole_class(payload, sys_py):
+    """复检 Important（第六次同一类缺陷）：严格解析 `Content-Length`，不是一个值一个值地补丁。
+
+    拒绝集合：空值、负数、非数字、`+` 前缀、内部有空白、重复且不一致——每一种都必须
+    恰好回一条 400 并关连接，且没有把没读走的字节（一条完整的 `GET /healthz`）当成
+    下一条 keep-alive 请求解析。放行集合：重复但完全一致的头、正常单值——必须走完
+    正常处理（不因为「重复」或「完全合法」被误杀），也不该被关连接。
+    """
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    cls = got["cl_class"]
+    for case in REJECT_CL_CASES:
+        r = cls[case]
+        assert r["status_lines"] == ["HTTP/1.1 400"], \
+            f"{case}：畸形 Content-Length 应恰好回一条 400，收到 {r['status_lines']}"
+        assert r["closed"], f"{case}：畸形 Content-Length 被拒后连接应被关闭"
+        assert "Bad request syntax" not in r["raw"], \
+            f"{case}：没读走的字节被当成了下一条请求解析：{r['raw']!r}"
+    for case in ACCEPT_CL_CASES:
+        r = cls[case]
+        assert r["status_lines"] == ["HTTP/1.1 400"], \
+            f"{case}：应正常处理（缺 model 的诊断性 400），收到 {r['status_lines']}"
+        assert not r["closed"], f"{case}：不该被当成畸形 Content-Length 误杀连接"
