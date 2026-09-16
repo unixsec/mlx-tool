@@ -13,7 +13,7 @@ from mlx_server import store, supervisor  # noqa: E402
 
 from . import peers  # noqa: E402
 from .app import Gateway, log_event  # noqa: E402
-from .server import serve  # noqa: E402
+from .server import DEFAULT_MAX_BODY_MB, serve, tls_context  # noqa: E402
 
 
 def make_reporter(facade, ctx, pid=None):
@@ -77,7 +77,27 @@ def main(argv):
                          allow_cidrs=os.environ.get("MLX_GATEWAY_ALLOW_CIDRS", ""),
                          on_change=make_reporter(facade, c))
     gw = Gateway(c, facade, bind_addr=bind, token=token, backend_key=backend_key, nets=nets)
-    serve(gw, host=bind, port=c.gateway_port)
+
+    # 进程配置全部来自 `backendarg.spec("api")` 设的环境变量（spec §4.8）；缺失或非法用出厂值并记日志
+    try:
+        max_body_mb = int(os.environ.get("MLX_GATEWAY_MAX_BODY_MB") or DEFAULT_MAX_BODY_MB)
+    except ValueError:
+        log_event("error", "bad_env", key="MLX_GATEWAY_MAX_BODY_MB")
+        max_body_mb = DEFAULT_MAX_BODY_MB
+    cert = os.environ.get("MLX_GATEWAY_TLS_CERT") or ""
+    key = os.environ.get("MLX_GATEWAY_TLS_KEY") or ""
+    tls = None
+    if cert or key:
+        if not (cert and key):
+            log_event("error", "tls_incomplete", detail="证书与私钥必须同时配置")
+            return 6
+        try:
+            tls = tls_context(cert, key)
+        except ValueError as exc:
+            log_event("error", "tls_unusable", detail=str(exc)[:200])
+            return 6
+    serve(gw, host=bind, port=c.gateway_port,
+          max_body_bytes=max_body_mb * 1024 * 1024, tls_context=tls)
     return 0
 
 

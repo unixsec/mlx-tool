@@ -5,6 +5,9 @@
 流式转发用 `urllib` 的分块读，不需要 httpx。
 """
 import json
+import os
+import socket
+import ssl
 import threading
 import urllib.error
 import urllib.request
@@ -15,7 +18,53 @@ from mlx_server.wire import SseDecoder
 from . import guard, translate
 from .app import log_event
 
-_MAX_BODY = 8 * 1024 * 1024          # 8 MB：拒绝超大体，防内存打爆
+DEFAULT_MAX_BODY_MB = 256          # `api.max_body_mb` 出厂值（spec D22：多图与长上下文请求体）
+_HANDSHAKE_SEC = 10.0
+
+
+class GatewayServer(ThreadingHTTPServer):
+    """双栈、每连接一线程。
+
+    `allow_reuse_address` **保持 True**（2026-09-15 实测）：关掉它，处理过请求的网关关闭后
+    立刻在同端口重绑会 `errno 48`，`mlx restart api` 必然失败。它带来的「与别人的
+    `127.0.0.1:P` 共存」由 `mlx up api` 执行段的外来监听者检查拦截（spec D24）。
+    """
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, server_address, handler):
+        if ":" in server_address[0]:
+            self.address_family = socket.AF_INET6
+        super().__init__(server_address, handler)
+
+    def server_bind(self):
+        if self.address_family == socket.AF_INET6:
+            # `::` 同时接 IPv4（对端地址显示为 ::ffff:a.b.c.d，来源分类会还原）
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+    def handle_error(self, request, client_address):
+        # 握手失败、客户端中途断开都会到这里；默认实现往 stderr 打整段栈
+        log_event("warn", "connection_error",
+                  peer=str(client_address[0]) if client_address else "")
+
+
+def tls_context(cert_path, key_path):
+    # type: (str, str) -> object
+    """服务端 TLS 上下文。最低 TLS 1.2（spec D15）；系统 python 的 LibreSSL 2.8.3 最高也只到 1.2。"""
+    for p in (cert_path, key_path):
+        if not p or not os.access(p, os.R_OK):
+            raise ValueError(f"TLS 文件不可读：{p}")
+    if os.stat(key_path).st_mode & 0o077:
+        raise ValueError(f"私钥权限宽于 0600：{key_path}")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        ctx.load_cert_chain(cert_path, key_path)
+    except (ssl.SSLError, OSError) as exc:
+        raise ValueError(f"证书或私钥无法加载：{exc}") from exc
+    return ctx
 
 
 def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None, method="POST"):
@@ -67,7 +116,7 @@ def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=
         return False
 
 
-def make_handler(gw):
+def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_context=None):
     """把 `Gateway` 包成 handler。**所有判定都在 `Gateway.handle` 里**，
 
     本层只做 HTTP 的搬运：读体、写头、写体。
@@ -76,6 +125,15 @@ def make_handler(gw):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "mlx_server-gateway"
+
+        def setup(self):
+            if tls_context is not None:
+                # **握手在本连接的工作线程里做**：放在 accept 线程里，一个只连不发的明文连接
+                # 就能让网关停止接受新连接
+                self.request.settimeout(_HANDSHAKE_SEC)
+                self.request = tls_context.wrap_socket(self.request, server_side=True)
+                self.request.settimeout(None)
+            super().setup()
 
         def log_message(self, fmt, *args):
             """默认实现写 stderr 的非结构化行。换成结构化事件（BC-D-02）。"""
@@ -99,7 +157,11 @@ def make_handler(gw):
 
         def _read_body(self):
             n = int(self.headers.get("Content-Length") or 0)
-            if n > _MAX_BODY:
+            if n > max_body_bytes:
+                # 声明的体没读、没丢弃 —— keep-alive 下体里的字节会被当成下一条请求解析
+                # （与 `_close_if_body_unread` 同一种请求走私；这条路径没有共享它的判定，
+                # 因为 `Content-Length` 本身就超限，不是「看头就知道有体没读」的情形）
+                self.close_connection = True
                 return None, (413, {"error": {"message": "body too large",
                                               "type": "invalid_request"}})
             if n == 0:
@@ -137,6 +199,11 @@ def make_handler(gw):
             self._reply(st, body)
 
         def do_POST(self):       # noqa: N802
+            _peer_class, early = gw.precheck("POST", self.path, dict(self.headers),
+                                             self.client_address[0])
+            if early:
+                self.close_connection = True       # 请求体没读，这条连接不能再复用
+                return self._reply(*early)
             body, err = self._read_body()
             if err:
                 return self._reply(*err)
@@ -207,29 +274,35 @@ def make_handler(gw):
     return Handler
 
 
-def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0):
-    """起服务器 + 后台路由刷新。**阻塞** —— 调用方是 `gw.app` 的 `__main__`。"""
-    httpd = ThreadingHTTPServer((host, port), make_handler(gw))
-    httpd.daemon_threads = True
+def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0,
+          max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_context=None):
+    """起服务器 + 后台路由与网段刷新。**阻塞** —— 调用方是 `gateway.__main__`。"""
+    httpd = GatewayServer((host, port), make_handler(gw, max_body_bytes, tls_context))
 
     stop = threading.Event()
 
     def refresher():
         while not stop.wait(refresh_sec):
+            # 两次调用**分开 try**：`store.load` 持续失败不该饿死网段重算，
+            # `tick()` 失败也不该被记成 `route_refresh_failed`（两者的失败原因、
+            # 影响面都不一样，合在一个 except 里，日志会分不清是哪一半坏了）
             try:
                 gw.refresh_routes()
-                if gw.nets is not None:
-                    gw.nets.tick()
             except Exception as e:                      # noqa: BLE001
                 # 刷新失败**不能让网关死** —— 路由表转 stale，请求仍按旧表转发
                 log_event("error", "route_refresh_failed", detail=str(e)[:200])
+            try:
+                if gw.nets is not None:
+                    gw.nets.tick()
+            except Exception as e:                      # noqa: BLE001
+                log_event("error", "nets_refresh_failed", detail=str(e)[:200])
 
     if gw.nets is not None:
         gw.nets.refresh()
     gw.refresh_routes()
     t = threading.Thread(target=refresher, daemon=True)
     t.start()
-    log_event("info", "listening", host=host, port=port,
+    log_event("info", "listening", host=host, port=port, tls=tls_context is not None,
               routes=gw.view.route_keys())
     try:
         httpd.serve_forever()

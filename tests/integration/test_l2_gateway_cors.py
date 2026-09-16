@@ -56,6 +56,9 @@ g = Gateway(None, facade, token="@TOK@")
 g.refresh_routes()
 g.view._routes["qwen"] = {"port": serve(Up)}
 gw_port = serve(make_handler(g))
+# 小体上限的独立实例：413 测试用不着真发 256 MB —— 声明一个超过这个小上限的
+# Content-Length 就够复现「体没读、没关连接 ⇒ 体里的字节被当下一条请求解析」
+gw_port_413 = serve(make_handler(g, max_body_bytes=64))
 
 
 def call(method, path, headers, body=None):
@@ -68,9 +71,9 @@ def call(method, path, headers, body=None):
     return out
 
 
-def raw(method, target, extra_headers, body):
+def raw(method, target, extra_headers, body, port=None):
     # 真 socket：发一条带体的请求，读到服务端关连接（或 3 s 无数据）为止
-    s = socket.create_connection(("127.0.0.1", gw_port), timeout=3)
+    s = socket.create_connection(("127.0.0.1", port or gw_port), timeout=3)
     s.sendall(("%s %s HTTP/1.1\r\nHost: x\r\n" % (method, target)).encode() + extra_headers
               + b"\r\n" + body)
     buf, closed = b"", False
@@ -114,6 +117,13 @@ out["smuggle_delete_cl"] = raw(
 out["smuggle_get_cl"] = raw(
     "GET", "/v1/models",
     b"Authorization: Bearer @TOK@\r\nContent-Length: %d\r\n" % len(inner), inner)
+# 裁决 1：413（体超过 `max_body_bytes`）也要关连接。声明的 Content-Length（1000）
+# 超过 gw_port_413 的 64 字节上限，实际只发一个 inner 请求的字节数 —— 服务端不读体，
+# 直接 413；若它没关连接，这些字节会被当成同一条 keep-alive 连接上的下一条请求解析。
+out["smuggle_413"] = raw(
+    "POST", "/v1/chat/completions",
+    b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n",
+    inner, port=gw_port_413)
 print(json.dumps(out))
 '''
 
@@ -163,3 +173,12 @@ def test_delete_and_get_with_body_do_not_smuggle_a_second_request(payload, sys_p
         assert len(r["status_lines"]) == 1, \
             f"{case}：带体的请求回了 {r['status_lines']} —— 体被当成了下一条请求"
         assert r["closed"], f"{case}：带体的请求回完没有关连接"
+
+
+def test_413_closes_connection_and_does_not_smuggle_a_second_request(payload, sys_py):
+    """裁决 1：413（超过 `max_body_bytes`）没读体，也不能让 keep-alive 复用这条连接。"""
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    r = got["smuggle_413"]
+    assert r["status_lines"] == ["HTTP/1.1 413"], \
+        f"超限请求体应恰好回一条 413，收到 {r['status_lines']}"
+    assert r["closed"], "413 之后连接应被关闭，否则内嵌的第二条请求会被当作下一条请求解析"

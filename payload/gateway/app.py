@@ -94,6 +94,28 @@ class Gateway:
         ip = peers.normalize_peer(peer)
         return "LOOPBACK" if ip is not None and ip.is_loopback else None
 
+    def precheck(self, method, path, headers, peer):
+        # type: (str, str, dict, str) -> tuple
+        """**来源分类 → 预检短路 → 鉴权 → Content-Type**。→ `(peer_class, 回复 | None)`。
+
+        server 层在**读请求体之前**调它：未鉴权、来源不被放行的请求不值得读最多 256 MB 的请求体，
+        也不该从「413 还是 403」里探知网关的存在。`prepare` 复用同一份实现。
+        """
+        headers = {k.lower(): v for k, v in (headers or {}).items()}
+        path, _ = endpoints.normalize(path)
+        peer_class = self.classify(peer)
+        blocked = guard.peer_guard(peer_class)
+        if blocked:
+            log_event("warn", "peer_denied", addr=str(peer))
+            return peer_class, blocked
+        for check in (lambda: guard.preflight(method, headers),
+                      lambda: guard.auth_guard(path, headers, self._token),
+                      lambda: guard.content_type_guard(method, headers)):
+            out = check()
+            if out:
+                return peer_class, out
+        return peer_class, None
+
     def prepare(self, path, headers=None, body=None, method="POST", peer="127.0.0.1"):
         """请求预处理的**唯一实现**（非流式 `handle` 与 server 层流式路径共用）。
 
@@ -102,17 +124,9 @@ class Gateway:
         """
         headers = {k.lower(): v for k, v in (headers or {}).items()}
         path, query = endpoints.normalize(path)
-        peer_class = self.classify(peer)
-        blocked = guard.peer_guard(peer_class)
-        if blocked:
-            log_event("warn", "peer_denied", addr=str(peer))
-            return ("reply", blocked)
-        for check in (lambda: guard.preflight(method, headers),
-                      lambda: guard.auth_guard(path, headers, self._token),
-                      lambda: guard.content_type_guard(method, headers)):
-            out = check()
-            if out:
-                return ("reply", out)
+        peer_class, early = self.precheck(method, path, headers, peer)
+        if early:
+            return ("reply", early)
 
         hit = endpoints.match(method, path)
         if hit is None:
