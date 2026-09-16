@@ -1,0 +1,201 @@
+{
+ "mlx_lm_chat_nonstream": {
+  "choices": [
+   {
+    "finish_reason": "tool_calls",
+    "index": 0,
+    "logprobs": {
+     "content": [
+      {
+       "id": 1001,
+       "logprob": -0.25
+      }
+     ]
+    },
+    "message": {
+     "content": "你好，世界",
+     "reasoning": "先想一想。",
+     "role": "assistant",
+     "tool_calls": [
+      {
+       "function": {
+        "arguments": "{\"city\": \"北京\"}",
+        "name": "get_weather"
+       },
+       "id": "call_w",
+       "type": "function"
+      },
+      {
+       "function": {
+        "arguments": "{}",
+        "name": "get_time"
+       },
+       "id": "call_t",
+       "type": "function"
+      }
+     ]
+    }
+   }
+  ],
+  "created": 1757900000,
+  "id": "chatcmpl-lm",
+  "model": "BACKEND-ARG",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_lm",
+  "usage": {
+   "completion_tokens": 34,
+   "prompt_tokens": 12,
+   "prompt_tokens_details": {
+    "cached_tokens": 5
+   },
+   "total_tokens": 46
+  }
+ },
+ "mlx_lm_chat_stream": ": keepalive 256/1024\n\ndata: {\"id\": \"chatcmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion.chunk\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": null, \"delta\": {\"role\": \"assistant\", \"reasoning\": \"\\u5148\\u60f3\"}}]}\n\ndata: {\"id\": \"chatcmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion.chunk\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": null, \"delta\": {\"role\": \"assistant\", \"reasoning\": \"\\u4e00\\u60f3\\u3002\"}}]}\n\ndata: {\"id\": \"chatcmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion.chunk\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": null, \"logprobs\": {\"content\": [{\"id\": 1001, \"logprob\": -0.25}]}, \"delta\": {\"role\": \"assistant\", \"content\": \"\\u4f60\\u597d\"}}]}\n\ndata: {\"id\": \"chatcmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion.chunk\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": null, \"delta\": {\"role\": \"assistant\", \"content\": \"\\uff0c\\u4e16\\u754c\"}}]}\n\ndata: {\"id\": \"chatcmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion.chunk\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": null, \"delta\": {\"role\": \"assistant\", \"tool_calls\": [{\"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\": \\\"\\u5317\\u4eac\\\"}\"}, \"type\": \"function\", \"id\": \"call_w\", \"index\": 0}]}}]}\n\ndata: {\"id\": \"chatcmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion.chunk\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"delta\": {\"role\": \"assistant\", \"tool_calls\": [{\"function\": {\"name\": \"get_time\", \"arguments\": \"{}\"}, \"type\": \"function\", \"id\": \"call_t\", \"index\": 1}]}}]}\n\ndata: {\"id\": \"chatcmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [], \"usage\": {\"prompt_tokens\": 12, \"completion_tokens\": 34, \"total_tokens\": 46, \"prompt_tokens_details\": {\"cached_tokens\": 5}}}\n\ndata: [DONE]\n\n",
+ "mlx_lm_completion_stream": "data: {\"id\": \"cmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"text_completion\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": null, \"text\": \"Once\"}]}\n\ndata: {\"id\": \"cmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"text_completion\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": null, \"text\": \" upon\"}]}\n\ndata: {\"id\": \"cmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"text_completion\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [{\"index\": 0, \"finish_reason\": \"length\", \"text\": \" a time\"}]}\n\ndata: {\"id\": \"cmpl-lm\", \"system_fingerprint\": \"fp_lm\", \"object\": \"chat.completion\", \"model\": \"BACKEND-ARG\", \"created\": 1757900000, \"choices\": [], \"usage\": {\"prompt_tokens\": 3, \"completion_tokens\": 4, \"total_tokens\": 7}}\n\ndata: [DONE]\n\n",
+ "mlx_vlm_chat_nonstream": {
+  "choices": [
+   {
+    "finish_reason": "tool_calls",
+    "index": 0,
+    "logprobs": null,
+    "message": {
+     "content": "你好，世界",
+     "name": null,
+     "reasoning": "先想一想。",
+     "reasoning_content": "先想一想。",
+     "role": "assistant",
+     "tool_call_id": null,
+     "tool_calls": [
+      {
+       "function": {
+        "arguments": "{\"city\": \"北京\"}",
+        "name": "get_weather"
+       },
+       "id": "call_w",
+       "index": 0,
+       "type": "function"
+      },
+      {
+       "function": {
+        "arguments": "{}",
+        "name": "get_time"
+       },
+       "id": "call_t",
+       "index": 1,
+       "type": "function"
+      }
+     ]
+    }
+   }
+  ],
+  "created": 1757900000,
+  "id": "chatcmpl-vlm",
+  "model": "BACKEND-ARG",
+  "object": "chat.completion",
+  "timings": null,
+  "usage": {
+   "completion_tokens": 34,
+   "prompt_tokens": 12,
+   "prompt_tokens_details": {
+    "cached_tokens": 5
+   },
+   "total_tokens": 46
+  }
+ },
+ "mlx_vlm_chat_stream_error": "data: {\"id\":\"chatcmpl-vlm3\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"role\":\"assistant\",\"content\":\"半句\",\"reasoning_content\":null,\"reasoning\":null,\"tool_calls\":null,\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: {\"error\": \"open /Users/alex/lab/models/mlx/hub/x/config.json failed\"}\n\n",
+ "mlx_vlm_chat_stream_length": "data: {\"id\":\"chatcmpl-vlm2\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"role\":\"assistant\",\"content\":\"很长的回答\",\"reasoning_content\":null,\"reasoning\":null,\"tool_calls\":null,\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: {\"id\":\"chatcmpl-vlm2\",\"object\":\"chat.completion.chunk\",\"created\":1789472958,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":\"length\",\"delta\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":null,\"reasoning\":null,\"tool_calls\":null,\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: [DONE]\n\n",
+ "mlx_vlm_chat_stream_tools": "data: {\"id\":\"chatcmpl-vlm\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":\"先想\",\"reasoning\":\"先想\",\"tool_calls\":null,\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: {\"id\":\"chatcmpl-vlm\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":\"一想。\",\"reasoning\":\"一想。\",\"tool_calls\":null,\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: {\"id\":\"chatcmpl-vlm\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"role\":\"assistant\",\"content\":\"你好\",\"reasoning_content\":null,\"reasoning\":null,\"tool_calls\":null,\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: {\"id\":\"chatcmpl-vlm\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":null,\"delta\":{\"role\":\"assistant\",\"content\":\"，世界\",\"reasoning_content\":null,\"reasoning\":null,\"tool_calls\":null,\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: {\"id\":\"chatcmpl-vlm\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\",\"delta\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":null,\"reasoning\":null,\"tool_calls\":[{\"type\":\"function\",\"index\":0,\"id\":\"call_w\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"北京\\\"}\"}},{\"type\":\"function\",\"index\":1,\"id\":\"call_t\",\"function\":{\"name\":\"get_time\",\"arguments\":\"{}\"}}],\"tool_call_id\":null,\"name\":null},\"logprobs\":null}],\"usage\":null,\"timings\":{\"predicted_per_second\":20.0}}\n\ndata: {\"id\":\"chatcmpl-vlm\",\"object\":\"chat.completion.chunk\",\"created\":1757900000,\"model\":\"BACKEND-ARG\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":34,\"total_tokens\":46,\"prompt_tokens_details\":{\"cached_tokens\":5}},\"timings\":null}\n\ndata: [DONE]\n\n",
+ "mlx_vlm_messages_nonstream": {
+  "content": [
+   {
+    "signature": "",
+    "thinking": "先想一想。",
+    "type": "thinking"
+   },
+   {
+    "text": "你好，世界",
+    "type": "text"
+   },
+   {
+    "id": "call_w",
+    "input": {
+     "city": "北京"
+    },
+    "name": "get_weather",
+    "type": "tool_use"
+   }
+  ],
+  "id": "msg_a1",
+  "model": "BACKEND-ARG",
+  "role": "assistant",
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 5,
+   "input_tokens": 7,
+   "output_tokens": 34
+  }
+ },
+ "mlx_vlm_messages_stream": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_a1\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"BACKEND-ARG\", \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 7, \"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 5, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"先想\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"一想。\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"你好\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"，世界\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 1}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 2, \"content_block\": {\"type\": \"tool_use\", \"id\": \"call_w\", \"name\": \"get_weather\", \"input\": {}}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 2, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"{\\\"city\\\": \\\"北京\\\"}\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 2}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"tool_use\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 34}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+ "mlx_vlm_messages_stream_error": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_a1\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"BACKEND-ARG\", \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 7, \"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 5, \"output_tokens\": 1}}}\n\nevent: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"api_error\", \"message\": \"open /Users/alex/lab/models/mlx/hub/x/config.json failed\"}}\n\n",
+ "mlx_vlm_responses_completed": {
+  "created_at": 1757900000,
+  "error": null,
+  "id": "resp_1",
+  "instructions": null,
+  "max_output_tokens": 64,
+  "model": "BACKEND-ARG",
+  "object": "response",
+  "output": [
+   {
+    "id": "rs_1",
+    "summary": [
+     {
+      "text": "先想一想。",
+      "type": "summary_text"
+     }
+    ],
+    "type": "reasoning"
+   },
+   {
+    "content": [
+     {
+      "annotations": [],
+      "text": "你好，世界",
+      "type": "output_text"
+     }
+    ],
+    "id": "msg_1",
+    "reasoning": "先想一想。",
+    "role": "assistant",
+    "status": "completed",
+    "type": "message"
+   }
+  ],
+  "output_text": "你好，世界",
+  "previous_response_id": null,
+  "status": "completed",
+  "store": true,
+  "temperature": null,
+  "top_p": null,
+  "truncation": "disabled",
+  "usage": {
+   "input_tokens": 12,
+   "input_tokens_details": {
+    "cached_tokens": 5
+   },
+   "output_tokens": 34,
+   "total_tokens": 46
+  },
+  "user": null
+ },
+ "mlx_vlm_responses_stream": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1757900000,\"status\":\"in_progress\",\"error\":null,\"instructions\":null,\"max_output_tokens\":64,\"model\":\"BACKEND-ARG\",\"output\":[],\"output_text\":\"\",\"temperature\":null,\"top_p\":null,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":0,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":0,\"total_tokens\":0},\"user\":null,\"previous_response_id\":null,\"store\":true}}\n\nevent: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1757900000,\"status\":\"in_progress\",\"error\":null,\"instructions\":null,\"max_output_tokens\":64,\"model\":\"BACKEND-ARG\",\"output\":[],\"output_text\":\"\",\"temperature\":null,\"top_p\":null,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":0,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":0,\"total_tokens\":0},\"user\":null,\"previous_response_id\":null,\"store\":true}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\nevent: response.reasoning_text.delta\ndata: {\"type\": \"response.reasoning_text.delta\", \"response_id\": \"resp_1\", \"item_id\": \"rs_1\", \"output_index\": 0, \"content_index\": 0, \"delta\": \"\\u5148\\u60f3\", \"timings\": {\"predicted_per_second\": 20.0}}\n\nevent: response.reasoning_text.delta\ndata: {\"type\": \"response.reasoning_text.delta\", \"response_id\": \"resp_1\", \"item_id\": \"rs_1\", \"output_index\": 0, \"content_index\": 0, \"delta\": \"\\u4e00\\u60f3\\u3002\", \"timings\": {\"predicted_per_second\": 20.0}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"你好\",\"timings\":{\"predicted_per_second\":20.0}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"，世界\",\"timings\":{\"predicted_per_second\":20.0}}\n\nevent: response.reasoning_text.done\ndata: {\"type\": \"response.reasoning_text.done\", \"response_id\": \"resp_1\", \"item_id\": \"rs_1\", \"output_index\": 0, \"content_index\": 0, \"text\": \"\\u5148\\u60f3\\u4e00\\u60f3\\u3002\"}\n\nevent: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"text\":\"你好，世界\",\"timings\":{\"predicted_per_second\":20.0}}\n\nevent: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"你好，世界\",\"annotations\":[]}}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"你好，世界\",\"annotations\":[]}],\"reasoning\":\"先想一想。\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1757900000,\"status\":\"completed\",\"error\":null,\"instructions\":null,\"max_output_tokens\":64,\"model\":\"BACKEND-ARG\",\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"先想一想。\"}]},{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"你好，世界\",\"annotations\":[]}],\"reasoning\":\"先想一想。\"}],\"output_text\":\"你好，世界\",\"temperature\":null,\"top_p\":null,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":12,\"input_tokens_details\":{\"cached_tokens\":5},\"output_tokens\":34,\"total_tokens\":46},\"user\":null,\"previous_response_id\":null,\"store\":true}}\n\n",
+ "model": "BACKEND-ARG",
+ "versions": {
+  "mlx_lm": "0.31.3",
+  "mlx_vlm": "0.6.17"
+ }
+}
