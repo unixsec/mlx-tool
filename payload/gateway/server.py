@@ -150,8 +150,12 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             super().setup()
 
         def log_message(self, fmt, *args):
-            """默认实现写 stderr 的非结构化行。换成结构化事件（BC-D-02）。"""
-            log_event("info", "http", line=fmt % args)
+            """默认实现写 stderr 的非结构化行。换成结构化事件（BC-D-02）。
+
+            带 `peer`（spec §9.2 acceptance #9 要求 `http` 事件里能看到对端地址）——
+            基类的 `address_string()` 前缀被这个覆盖丢掉了，之前这条事件里没有对端。
+            """
+            log_event("info", "http", line=fmt % args, peer=self.client_address[0])
 
         def _reply(self, status, body, preflight=False):
             raw = b"" if body is None else json.dumps(body, ensure_ascii=False).encode()

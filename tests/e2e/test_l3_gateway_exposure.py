@@ -64,19 +64,39 @@ def product(tmp_path, repo):
 
 
 def _lan_ipv4(payload, sys_py):
+    """真实 `networksetup`/`ifconfig` 抓取上跑一遍放行网段计算。
+
+    除了给出一个可用于 REMOTE 触发的 LAN IPv4，**同一次抓取**还核对排除规则
+    命中了这台机器真实的 VPN 与雷雳接口——夹具（`tests/fixtures/net/ifconfig.txt`）
+    能证明规则对着冻结文本正确，证不了规则对着*这台机器现在的真实输出*也对；
+    删掉 `compute_nets` 里的 `utun` 排除，这条走真实抓取的 L3 是唯一能抓到的地方。
+    """
     got = run_floor(payload, sys_py, """
         import json
         from gateway import peers
         from mlx_server.ctx import DEFAULT_BINS
         hw, ifc = peers.command_loader(DEFAULT_BINS)()
         n = peers.compute_nets(peers.parse_hardware_ports(hw), peers.parse_ifconfig(ifc))
-        print(json.dumps([a["addr"] for a in n["allowed"]
+        print(json.dumps({
+            "allowed_v4": [a["addr"] for a in n["allowed"]
                           if a["kind"] in ("wifi", "ethernet", "vm") and a["addr"]
-                          and ":" not in a["addr"]]))
+                          and ":" not in a["addr"]],
+            "allowed_addrs": [a["addr"] for a in n["allowed"] if a["addr"]],
+            "excluded_ifaces": [e["iface"] for e in n["excluded"]],
+        }))
     """, with_gateway=True)
-    assert got, ("本机没有 Wi-Fi / 有线 / 虚拟机网桥上的 IPv4 地址 —— REMOTE 来源无法真实触发。"
-                 "spec §8.2 要求此时失败而不是跳过：连上 Wi-Fi 或启动 Parallels 后重跑")
-    return got[0]
+    allowed_v4 = got["allowed_v4"]
+    assert allowed_v4, ("本机没有 Wi-Fi / 有线 / 虚拟机网桥上的 IPv4 地址 —— REMOTE 来源无法真实触发。"
+                       "spec §8.2 要求此时失败而不是跳过：连上 Wi-Fi 或启动 Parallels 后重跑")
+    # VPN（utun4，10.14.0.2）绝不能落进放行网段——按默认路由判定会误放行 VPN 对端，
+    # 这正是 `peers.py` 排除表要挡的那一种。host 状态变了（VPN 掉线）要失败，不是跳过。
+    assert "10.14.0.2" not in got["allowed_addrs"], (
+        f"VPN 地址 10.14.0.2 出现在放行网段：utun 排除规则没有命中真实 ifconfig 输出——"
+        f"{got['allowed_addrs']}")
+    assert any(iface.startswith("utun") for iface in got["excluded_ifaces"]), (
+        f"真实抓取的排除列表里没有任何 utun* 接口（VPN 应在线才能触发这条）："
+        f"{got['excluded_ifaces']}")
+    return allowed_v4[0]
 
 
 def _http(host, port, method, path, token=None, body=None, source=None, tls_ctx=None):
@@ -170,6 +190,29 @@ def test_remote_peer_record_checks_and_no_key_leak(product, payload, sys_py):
                 leaked.append(str(p))
     Cardinality.require_nonempty("被扫描的文件", scanned, "一个文件都没扫到 ⇒ 空真")
     assert "api.log" in scanned and "api.json" in scanned, "泄漏扫描没覆盖网关日志与运行记录"
+
+    # 上面这一遍是网关**还活着**时扫的（`api.json` 之所以只能在这时扫：
+    # `mlx down api` 会删掉运行记录，晚一步它就不在盘上了）。但 `api.log` 是子进程的
+    # stdout/stderr，stdout 重定向到文件后是块缓冲（8 KB）——本轮请求量远不到 8 KB，
+    # 进程活着时 `info`（含每条 http 访问行）大概率还压在缓冲区里没落盘，这一遍在
+    # `api.log` 上「没扫到泄漏」证明不了任何东西。`mlx down api` 用 `killpg` 等到
+    # 进程真的退出才返回；停掉之后重读一遍 `api.log`，才是扫的终态内容。
+    down_r = mlx("down", "api")
+    assert down_r.returncode == 0, down_r.stdout + down_r.stderr
+    api_log_bytes = (product["data"] / "logs" / "api.log").read_bytes()
+    assert api_log_bytes, "api.log 是空文件——缓冲区没落盘，泄漏扫描没有实际扫过任何访问日志内容"
+    if any(n.encode() in api_log_bytes for n in needles):
+        leaked.append(str(product["data"] / "logs" / "api.log") + "（进程退出后重读）")
+    events = []
+    for line in api_log_bytes.decode(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    assert any(e.get("event") == "http" for e in events), (
+        f"api.log 里没有任何一条可解析的 http 事件——落盘内容没有覆盖到访问日志：{events!r}")
     Cardinality.check("含密钥的文件", leaked, rel="empty")
 
 
@@ -226,5 +269,8 @@ def test_tls_transport_env_token_and_loopback_bind(product, payload, sys_py):
     assert mlx("config", "set", "api.bind", "--value=127.0.0.1").returncode == 0
     assert mlx("restart", "api").returncode == 0
     assert _http("127.0.0.1", port, "GET", "/v1/models", token=tok)[0] == 200
-    with pytest.raises(OSError):
+    # `ConnectionRefusedError`（而不是宽泛的 `OSError`）：`socket.timeout`/`EHOSTUNREACH`
+    # 也是 `OSError` 的子类——Wi-Fi 掉线时连接会超时或不可达，那种失败会让这条断言
+    # 以错误的理由通过，把「网口坏了」误证成「回环收紧生效了」。
+    with pytest.raises(ConnectionRefusedError):
         socket.create_connection((lan, port), 2)
