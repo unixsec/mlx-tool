@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import ssl
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -45,9 +46,21 @@ class GatewayServer(ThreadingHTTPServer):
         super().server_bind()
 
     def handle_error(self, request, client_address):
-        # 握手失败、客户端中途断开都会到这里；默认实现往 stderr 打整段栈
-        log_event("warn", "connection_error",
-                  peer=str(client_address[0]) if client_address else "")
+        """握手失败、客户端中途断开、handler 里任何未捕获异常都会到这里
+        （`ThreadingMixIn.process_request_thread` 是唯一的兜底）。
+
+        **必须带异常类型与消息**（复检 Important 4）：此前只记了对端地址，
+        一条裸的 `connection_error` 分不清是对端正常掉线还是 handler 自己的 bug——
+        默认实现好歹会把整段栈打到 stderr，这里换掉默认实现却把信息也换没了。
+        `OSError`（含 `ConnectionResetError`/`BrokenPipeError`/`socket.timeout`）与
+        `ssl.SSLError` 是对端行为造成的预期噪音，记 `warn`；其余一律 `error`。
+        """
+        exc_type, exc, _tb = sys.exc_info()
+        name = exc_type.__name__ if exc_type else ""
+        noisy = exc_type is not None and issubclass(exc_type, (OSError, ssl.SSLError))
+        log_event("warn" if noisy else "error", "connection_error",
+                  peer=str(client_address[0]) if client_address else "",
+                  exc_type=name, detail=str(exc)[:200] if exc else "")
 
 
 def tls_context(cert_path, key_path):
@@ -156,7 +169,28 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.wfile.write(raw)
 
         def _read_body(self):
-            n = int(self.headers.get("Content-Length") or 0)
+            if self.headers.get("Transfer-Encoding") is not None:
+                # 本实现没有分块解码器（复检 Critical 3）：放行「零字节体」等于把没读的
+                # 分块数据留在 socket 里，keep-alive 下会被当成下一条请求解析（请求走私，
+                # 与 413 那条同一形状）。没法安全读完就直接拒绝，不是「当空体处理」。
+                self.close_connection = True
+                return None, (400, {"error": {"message": "chunked transfer encoding is not supported",
+                                              "type": "invalid_request"}})
+            raw_cl = self.headers.get("Content-Length")
+            try:
+                n = int(raw_cl) if raw_cl not in (None, "") else 0
+            except ValueError:
+                # 复检 Critical 1：非数字 `Content-Length`（比如 "abc"）此前让 `int()` 直接
+                # 抛出，客户端什么都收不到，异常只落进 `handle_error` 的一行 warn
+                self.close_connection = True
+                return None, (400, {"error": {"message": "invalid Content-Length",
+                                              "type": "invalid_request"}})
+            if n < 0:
+                # 复检 Critical 1：负数 `Content-Length` 既不 `> max_body_bytes` 也不 `== 0`，
+                # 会落进 `self.rfile.read(n)`——`n` 为负时 `read` 不设上限地读到 EOF 为止
+                self.close_connection = True
+                return None, (400, {"error": {"message": "invalid Content-Length",
+                                              "type": "invalid_request"}})
             if n > max_body_bytes:
                 # 声明的体没读、没丢弃 —— keep-alive 下体里的字节会被当成下一条请求解析
                 # （与 `_close_if_body_unread` 同一种请求走私；这条路径没有共享它的判定，
@@ -198,9 +232,20 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                                  forward=forward, peer=self.client_address[0])
             self._reply(st, body)
 
+        def handle_expect_100(self):
+            """默认实现在这里直接回 100 Continue，等于邀请未鉴权 / 被拒来源的客户端把体发过来
+            （复检 Minor 6）。先跑 `precheck`：不通过就直接回绝，不发 100 Continue。"""
+            _peer_class, _path, _query, _hit, early = gw.precheck(
+                self.command, self.path, dict(self.headers), self.client_address[0])
+            if early:
+                self.close_connection = True
+                self._reply(*early)
+                return False
+            return super().handle_expect_100()
+
         def do_POST(self):       # noqa: N802
-            _peer_class, early = gw.precheck("POST", self.path, dict(self.headers),
-                                             self.client_address[0])
+            _peer_class, _path, _query, _hit, early = gw.precheck(
+                "POST", self.path, dict(self.headers), self.client_address[0])
             if early:
                 self.close_connection = True       # 请求体没读，这条连接不能再复用
                 return self._reply(*early)

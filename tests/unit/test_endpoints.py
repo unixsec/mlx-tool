@@ -11,6 +11,8 @@ from gateway import endpoints as E
 paths = ["/chat/completions", "/v1/chat/completions/", "/models", "/healthz",
          "/v1/responses/resp_1/input_items?limit=2&order=asc", "/"]
 norm = {p: list(E.normalize(p)) for p in paths}
+# Important 5 复检：normalize 幂等——对已规范化过的路径再调一次不能再变
+idem = all(E.normalize(E.normalize(p)[0])[0] == E.normalize(p)[0] for p in paths)
 pairs = [("POST", "/v1/chat/completions"), ("GET", "/v1/chat/completions"),
          ("POST", "/v1/completions"), ("POST", "/v1/responses"),
          ("POST", "/v1/responses/input_tokens"), ("GET", "/v1/responses/resp_1"),
@@ -34,7 +36,7 @@ fan = {"404_200": run([(0, 404), (0.05, 200)]), "200_404": run([(0.05, 200), (0,
        "all404": run([(0, 404), (0, 404)]), "500_404": run([(0, 500), (0, 404)]),
        "none_404": run([(0, None), (0, 404)]), "400_404": run([(0, 400), (0, 404)]),
        "slow": run([(3, 200), (0, 404)], timeout=0.5), "parallel": run([(1, 404), (1, 200)])}
-print(json.dumps({"norm": norm, "match": match, "fan": fan,
+print(json.dumps({"norm": norm, "idem": idem, "match": match, "fan": fan,
                   "empty": list(E.fanout([], timeout_sec=1)),
                   "legacy": list(E.endpoints_of({"model_arg": "x"})),
                   "explicit": list(E.endpoints_of({"endpoints": ["chat", "responses"]})),
@@ -54,7 +56,8 @@ def test_normalize_match_and_fanout(payload, sys_py):
         "/models": ["/v1/models", ""], "/healthz": ["/healthz", ""],
         "/v1/responses/resp_1/input_items?limit=2&order=asc":
             ["/v1/responses/resp_1/input_items", "limit=2&order=asc"],
-        "/": ["/v1/", ""]}
+        "/": ["/v1", ""]}
+    assert got["idem"] is True, "normalize 对已规范化过的路径再调一次结果必须不变"
     B, F = "body", "fanout"
     assert got["match"] == {
         "POST /v1/chat/completions": ["chat", B], "GET /v1/chat/completions": None,

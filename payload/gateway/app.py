@@ -96,42 +96,50 @@ class Gateway:
 
     def precheck(self, method, path, headers, peer):
         # type: (str, str, dict, str) -> tuple
-        """**来源分类 → 预检短路 → 鉴权 → Content-Type**。→ `(peer_class, 回复 | None)`。
+        """**来源分类 → 预检短路 → 鉴权 → Content-Type → 路径规范化与白名单**。
 
-        server 层在**读请求体之前**调它：未鉴权、来源不被放行的请求不值得读最多 256 MB 的请求体，
-        也不该从「413 还是 403」里探知网关的存在。`prepare` 复用同一份实现。
+        → `(peer_class, 规范化路径, 查询串, endpoints.match 命中 | None, 回复 | None)`。
+
+        server 层在**读请求体之前**调它：未鉴权、来源不被放行、方法+路径不在白名单里
+        （比如 `/healthz` 只挂 GET，`POST /healthz` 在这里就该 404）的请求都不值得读最多
+        256 MB 的请求体——白名单判定也搬进来了，否则 `do_POST` 得先读完体才知道该 404
+        （复检 Critical 2）。`prepare` 复用同一份实现，直接消费它给出的 `hit`，
+        不再自己另调一遍 `endpoints.match`。
+
+        **只接收原始路径**（不接受已规范化过的路径）：`normalize` 在整条链路上只在这里
+        调一次（复检 Important 5）——两个调用方（server 层直调、`prepare` 内部）现在喂给它
+        的都是请求行上的原始路径，不会有「一个调用方喂已规范化路径、另一个喂原始路径」
+        这种形状分歧。
         """
         headers = {k.lower(): v for k, v in (headers or {}).items()}
-        path, _ = endpoints.normalize(path)
+        path, query = endpoints.normalize(path)
         peer_class = self.classify(peer)
         blocked = guard.peer_guard(peer_class)
         if blocked:
             log_event("warn", "peer_denied", addr=str(peer))
-            return peer_class, blocked
+            return peer_class, path, query, None, blocked
         for check in (lambda: guard.preflight(method, headers),
                       lambda: guard.auth_guard(path, headers, self._token),
                       lambda: guard.content_type_guard(method, headers)):
             out = check()
             if out:
-                return peer_class, out
-        return peer_class, None
+                return peer_class, path, query, None, out
+        hit = endpoints.match(method, path)
+        if hit is None:
+            return peer_class, path, query, None, translate.build_error(
+                404, "endpoint_not_supported", f"{method} {path} is not served by this gateway")
+        return peer_class, path, query, hit, None
 
     def prepare(self, path, headers=None, body=None, method="POST", peer="127.0.0.1"):
         """请求预处理的**唯一实现**（非流式 `handle` 与 server 层流式路径共用）。
 
         顺序固定（spec §4.2）：**来源分类 → 预检短路 → 鉴权 → Content-Type → 路径规范化与白名单
-        → 路由（body.model 或扇出）→ 目标 `endpoints` 包含性**。
+        → 路由（body.model 或扇出）→ 目标 `endpoints` 包含性**。前一半（到白名单为止）全在
+        `precheck` 里，这里只消费它的结果。
         """
-        headers = {k.lower(): v for k, v in (headers or {}).items()}
-        path, query = endpoints.normalize(path)
-        peer_class, early = self.precheck(method, path, headers, peer)
+        peer_class, path, query, hit, early = self.precheck(method, path, headers, peer)
         if early:
             return ("reply", early)
-
-        hit = endpoints.match(method, path)
-        if hit is None:
-            return ("reply", translate.build_error(
-                404, "endpoint_not_supported", f"{method} {path} is not served by this gateway"))
         family, how = hit
         if how == "local":
             return ("reply", self.healthz() if path == "/healthz"

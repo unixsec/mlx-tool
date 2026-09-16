@@ -38,11 +38,17 @@ _COMPILED = tuple((m, re.compile(p + r"\Z"), fam, how) for m, p, fam, how in RUL
 
 def normalize(raw_path):
     # type: (str) -> tuple
-    """→ `(规范化路径, 查询串)`。不带 `/v1` 的补上（`/healthz` 除外）；首尾斜杠归一。"""
+    """→ `(规范化路径, 查询串)`。不带 `/v1` 的补上（`/healthz` 除外）；首尾斜杠归一。
+
+    **幂等**：`normalize(normalize(p)[0])[0] == normalize(p)[0]`（复检 Important 5）——
+    `precheck` 在请求链上被调不止一次，有的调用点喂给它的是已经规范化过的路径，
+    重复规范化不能再改变结果。此前根路径 `"/"` 规范化成带尾斜杠的 `"/v1/"`，
+    第二次规范化又把尾斜杠去掉变成 `"/v1"`，两次结果不同。
+    """
     path, _, query = (raw_path or "/").partition("?")
     path = "/" + path.strip("/")
     if path != "/healthz" and path != "/v1" and not path.startswith("/v1/"):
-        path = "/v1" + (path if path != "/" else "/")
+        path = "/v1" + (path if path != "/" else "")
     return path, query
 
 

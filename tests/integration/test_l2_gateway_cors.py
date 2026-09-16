@@ -87,8 +87,9 @@ def raw(method, target, extra_headers, body, port=None):
     except socket.timeout:
         pass
     s.close()
-    return {"status_lines": re.findall(r"HTTP/1\.[01] \d{3}", buf.decode("latin-1")),
-            "closed": closed}
+    text = buf.decode("latin-1")
+    return {"status_lines": re.findall(r"HTTP/1\.[01] \d{3}", text),
+            "closed": closed, "raw": text}
 
 
 out = {
@@ -124,6 +125,15 @@ out["smuggle_413"] = raw(
     "POST", "/v1/chat/completions",
     b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n",
     inner, port=gw_port_413)
+# 裁决 Critical 3：`do_POST` 只看 `Content-Length`，`Transfer-Encoding: chunked` 声明
+# 的体此前当空体放行（读 0 字节）——分块编码的字节留在 socket 里，被当成同一条
+# keep-alive 连接上的下一条请求解析。这个仓库没有分块解码器，唯一安全的做法是
+# 直接拒绝，不是当空体处理。
+out["smuggle_post_chunked"] = raw(
+    "POST", "/v1/chat/completions",
+    b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"
+    b"Transfer-Encoding: chunked\r\n",
+    b"%x\r\n" % len(inner) + inner + b"\r\n0\r\n\r\n")
 print(json.dumps(out))
 '''
 
@@ -182,3 +192,22 @@ def test_413_closes_connection_and_does_not_smuggle_a_second_request(payload, sy
     assert r["status_lines"] == ["HTTP/1.1 413"], \
         f"超限请求体应恰好回一条 413，收到 {r['status_lines']}"
     assert r["closed"], "413 之后连接应被关闭，否则内嵌的第二条请求会被当作下一条请求解析"
+
+
+def test_post_chunked_is_rejected_and_does_not_smuggle_a_second_request(payload, sys_py):
+    """裁决 Critical 3：分块编码的 POST 体没有解码器可读，必须整条拒绝并关连接，
+    而不是当空体放行——当空体放行会把分块字节留给下一条 keep-alive 请求解析。
+
+    **`status_lines`/`closed` 不够**：分块数据没被读走时，留下的字节以十六进制长度行
+    开头，stdlib 把它当 HTTP/0.9 请求处理——那条路径的错误响应**不带状态行**（只有
+    body），单看 `status_lines == 1` 和 `closed` 两条断言即使裸词汇上不作为(bug 没修)
+    也会碰巧全部成立。改看 `raw`：没被解析成第二条请求的唯一证据是响应里完全不出现
+    stdlib 那句「Bad request syntax」。
+    """
+    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
+    r = got["smuggle_post_chunked"]
+    assert r["status_lines"] == ["HTTP/1.1 400"], \
+        f"分块编码的 POST 应恰好回一条 400，收到 {r['status_lines']}"
+    assert r["closed"], "分块编码的 POST 被拒后连接应被关闭"
+    assert "Bad request syntax" not in r["raw"], \
+        f"分块编码没读走的字节被当成了下一条请求解析：{r['raw']!r}"
