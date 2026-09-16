@@ -246,12 +246,22 @@ def test_tls_transport_env_token_and_loopback_bind(product, payload, sys_py):
     key.chmod(0o644)
     r = mlx("restart", "api")
     assert r.returncode == 6 and "0600" in (r.stdout + r.stderr), r.stdout + r.stderr
+    # **校验拒绝不得先把正在跑的服务毁掉**（收尾评审 Critical 5）—— 在真网关进程上验。
+    # `restart` 的校验段整段排在 `supervisor.down()` 之前，所以这条 rc 6 之后网关
+    # **仍在跑**，而且跑的还是它启动时加载的那份 TLS 配置。
+    # 此前的顺序（先 down 再校验）会让这里的网关已经死了、运行记录也没了，
+    # 用户拿到的是一句「拒绝」加一个停掉的服务；本用例当时正是**依赖**那个缺陷
+    # ——下面那句原本是 `up api`，靠的就是「前面那次 restart 已经把它停了」。
+    assert _http("127.0.0.1", port, "GET", "/v1/models", token=tok, tls_ctx=tls_ctx)[0] == 200, \
+        "restart 的校验拒绝把正在跑的网关一起停掉了"
     key.chmod(0o600)
     for k in ("api.tls_cert", "api.tls_key"):
         assert mlx("config", "unset", k).returncode == 0
 
     assert mlx("config", "set", "api.max_body_mb", "--value=1").returncode == 0
-    assert mlx("up", "api").returncode == 0
+    # 网关还在跑（见上），所以要让新配置生效必须 `restart`：`up` 会命中
+    # `already_running` 而 rc 0，屏幕上看着成功，跑的却还是旧配置的老进程。
+    assert mlx("restart", "api").returncode == 0
     status = _headers_only_status("127.0.0.1", port, tok, 2 * 1024 * 1024)
     assert status == 413, "1 MB 上限下声明 2 MB 体的请求应立即 413（只发头，不发体）"
     assert mlx("config", "unset", "api.max_body_mb").returncode == 0

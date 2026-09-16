@@ -51,6 +51,11 @@ def _tool_status(p):
                    + (f" · 放行网段 {gw['allowed_count']}" if gw.get("allowed_count") else "")
                    if run
                    else ui._text("status.gateway.not_running"))]
+        if gw.get("record_error"):
+            # 记录读不出来时 `running` 是 None（不可判定），上面那行会落到
+            # 「未运行」的中性点上 —— 必须补一句说清楚这不是「没在跑」
+            lines.append("     └ " + ui._text("status.gateway.record_unreadable",
+                                              detail=gw["record_error"]))
         # 只在网关真的在跑时才提示令牌轮换检测的局限——记录还在但进程已停时
         # `token_state` 可能仍是 `env_unknown`，这时打印它是误导（进程都没在跑，
         # 「无法比较是否已变更」这句话没有意义）。

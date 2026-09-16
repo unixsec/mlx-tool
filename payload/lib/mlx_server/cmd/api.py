@@ -7,7 +7,7 @@
 import ipaddress
 
 from .. import supervisor
-from ..result import Done
+from ..result import Done, Unknown
 
 _LABELS = {"loopback": "本机", "wifi": "Wi-Fi", "ethernet": "有线", "vm": "虚拟机共享网络"}
 
@@ -59,8 +59,21 @@ def _urls(snap, port):
 
 def run(ctx, stack, inv, deps=None):
     from .. import route, store
-    snap = supervisor.snapshot(ctx, "api") or {}
-    running = supervisor.running(ctx, "api")
+    # **一份写坏的 `run/api.json` 不得把整屏变成一行拒绝**（收尾评审 Important 7）。
+    # `snapshot` 对「存在但解析不了」是抛的，裸调会经 `entry` 的边界映射变成
+    # `Refused(6)`，`mlx api info` 什么都不打印 —— 而 `verbs.tsv` 第 41 行的契约是
+    # rc ∈ {0,2} 且「网关未运行 → 仍输出三项 + 确切的下一条命令」。
+    # 更糟的是那条兜底文案让用户去跑 `mlx status`，而它读的是同一份坏文件，
+    # 在修好之前同样什么都不打印 —— 把人支回刚刚失败的那条命令上。
+    record_error = None
+    try:
+        snap = supervisor.snapshot(ctx, "api") or {}
+        running = supervisor.running(ctx, "api")
+    except supervisor.RunRecordUnreadable as exc:
+        # 「读不出」不是「没在跑」：`running` 报 `Unknown`，渲染层会显示成
+        # 「状态不可判定」，不是一个会让人放心的「未运行」。
+        snap, record_error = {}, str(exc)
+        running = Unknown("PARSE_FAILED", str(exc)[:120])
     settings_error = None
     try:
         settings = store.load_settings(ctx)
@@ -96,6 +109,7 @@ def run(ctx, stack, inv, deps=None):
         "token": {"configured": None if settings is None else bool(settings.get("api.token")),
                   "source": snap.get("token_source"), "state": ks["token_state"]},
         "settings_error": settings_error,
+        "record_error": record_error,
         "allowed_nets": snap.get("allowed_nets") or [],
         "excluded_ifaces": snap.get("excluded_ifaces") or [],
         "nets_source": snap.get("nets_source"),

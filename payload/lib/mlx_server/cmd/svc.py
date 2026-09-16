@@ -86,21 +86,30 @@ def _fit_verdict(ctx, target, deps, cfg):
 
 def _collect(ctx, stack, deps, verb, targets, args=None, dry_run=False):
     # type: (object, object, dict, str, object, dict, bool) -> tuple
-    """逐目标跑一遍，收集**带文案参数**的结论。返回 `(results, worst_rc)`。
+    """逐目标跑一遍，收集**带文案参数**的结论。
+    返回 `(results, worst_rc, committed, failed_codes)`。
 
     两条批量路径（显式多目标 与 `--all`）共用它。此前各写一份几乎相同的循环，
     于是给结论补 `args` 时只补了一处 —— `mlx down --all` 的失败行仍旧渲染成
     笼统的「失败」，而显式多目标那条已经能打出「进程所有权不可证（PS_FAILED）」。
     同一逻辑两份实现必然漂移，这是本轮第三次遇到同一形态。
     """
-    results, worst = {}, 0
+    results, worst, committed, failed_codes = {}, 0, [], []
     for t in targets:
         one = run(ctx, stack, Invocation(verb, t, args=args, dry_run=dry_run), deps)
         results[t] = getattr(one, "payload", None) or {
             "rc": one.rc, "key": getattr(one, "msg_key", None),
             "args": dict(getattr(one, "args", {}) or {})}
         worst = max(worst, one.rc)
-    return results, worst
+        # **`committed` 只有 `Failed` 有**（`Done` / `Refused` 都没有这个属性），
+        # 所以它同时是「这个目标到底有没有落地东西」的判据 —— 汇总层据此决定
+        # 自己该是 `Refused`（零资源）还是 `Failed`（有资源要收敛），
+        # 而不是无条件包成 `Failed` 再凭空编一份 committed。
+        c = getattr(one, "committed", None)
+        if c is not None:
+            failed_codes.append(one.rc)
+            committed += list(c)
+    return results, worst, committed, failed_codes
 
 
 def _v_target(state, inv, deps):
@@ -452,8 +461,20 @@ def _tool_status(ctx):
     else:
         models_error = None
 
-    gw_snap = supervisor.snapshot(ctx, "api") or {}
-    gateway = {"running": _alive("api"),
+    # **一份写坏的 `run/api.json` 不得让整屏消失**（收尾评审 Important 7）。
+    # `snapshot` 对「存在但解析不了」是**抛**的（与「没在跑」处置相反），
+    # 而这里和 `_alive("api")`（内部同样调 snapshot）都是裸调 ⇒ 异常一路冒到
+    # `entry` 的边界映射变成 `Refused(6)`，`mlx status` 一个字都不打印，
+    # 而 `verbs.tsv` 第 4 行给 status 的契约是 rc ∈ {0,2,3} 且「不带目标恒非空」。
+    # 上面的模型循环早就这样降级了，`checks.gateway_nets` / `gateway_port` 也是；
+    # 本计划新增的三个网关读点只有那两个接了这个模式。
+    gw_error = None
+    try:
+        gw_snap = supervisor.snapshot(ctx, "api") or {}
+        gw_running = _alive("api")
+    except supervisor.RunRecordUnreadable as exc:
+        gw_snap, gw_running, gw_error = {}, None, str(exc)
+    gateway = {"running": gw_running, "record_error": gw_error,
                "port": gw_snap.get("port"), "pid": gw_snap.get("pid")}
 
     ks = _route.gateway_key_state(gw_snap, _cur, getattr(ctx, "gateway_token_env", ""))
@@ -495,19 +516,33 @@ def run(ctx, stack, inv, deps):
     # **多目标**：附录 A「每个目标一行结论」。与 `--all` 共用同一种汇总形状 ——
     # 两者的差别只在目标域从哪来，结论的形态必须一致。
     if len(getattr(inv, "targets", ()) or ()) > 1 and inv.verb in ("up", "down", "restart"):
-        results, worst = _collect(ctx, stack, deps, inv.verb, inv.targets,
-                                  args=inv.args, dry_run=inv.dry_run)
+        results, worst, committed, failed_codes = _collect(
+            ctx, stack, deps, inv.verb, inv.targets,
+            args=inv.args, dry_run=inv.dry_run)
         if worst == 0:
             return Done({"kind": "svc", "targets": list(inv.targets), "results": results})
-        return Failed(worst if worst in (1, 3, 4, 10) else 1,
-                      "svc.some_targets_failed",
-                      [f"run/{t}.json" for t in inv.targets], results=results)
+        if not failed_codes:
+            # 每个非零子结论都是 `Refused` ⇒ **零资源已创建** ⇒ 汇总也必须是
+            # `Refused`（收尾评审 Critical 6）。此前无条件包成 `Failed`，并把
+            # committed 写成 `[f"run/{t}.json" for t in inv.targets]` —— 于是
+            # `mlx up nosuch1 nosuch2 --dry-run` 让用户去收敛两个从来没存在过的
+            # 文件，而 `run/` 是空的；`--dry-run` 更不可能落地任何东西。
+            # 同时保住了 `worst`：旧写法的 `else 1` 把 rc 6（model.not_found）
+            # 塌成 rc 1，「模型不存在」这个最有用的结论被丢掉。
+            # 各子结论都由 `Refused` 构造 ⇒ `worst` 必 ∈ Refused 的码集。
+            return Refused(worst, "svc.some_targets_failed", results=results)
+        # 有目标真的落地了东西 ⇒ `Failed`，`committed` **逐字取自子结论**。
+        # `worst` 可能是某个 `Refused` 的码（如 6），那不在 Failed 的码集里 ——
+        # 这时退到真正失败过的那些目标里的最差码，不凭空造一个。
+        return Failed(worst if worst in (1, 3, 4, 10) else max(failed_codes),
+                      "svc.some_targets_failed", committed, results=results)
 
     if (inv.args or {}).get("all") and inv.verb in ("status", "down"):
         # `--all` 的目标域 = **run/ 里有记录的全部服务**，不是注册表里的全部模型
         # （没起过的服务没有运行记录，也就无从停止）
         services = supervisor.services_with_record(ctx)
-        results, worst = _collect(ctx, stack, deps, inv.verb, services)
+        results, worst, _committed, _failed_codes = _collect(
+            ctx, stack, deps, inv.verb, services)
         if worst == 0:
             return Done({"kind": "svc", "targets": services, "results": results})
         # 有服务没停下来 ⇒ Failed 并**逐个指名**，调用方（卸载器）据此拒绝动盘
@@ -560,21 +595,41 @@ def run(ctx, stack, inv, deps):
     if inv.verb == "down":
         return supervisor.down(ctx, inv.target)
 
-    if inv.verb == "restart":
-        out = supervisor.down(ctx, inv.target)
-        if out.rc not in (0,):
-            return out
-        inv = Invocation("up", inv.target, dry_run=inv.dry_run)
-
     if inv.verb not in ("up", "restart"):
         return Refused(2, "cmd.unknown_verb", verb=inv.verb)
 
     state = {"ctx": ctx}
     # ── 校验段：**按 VALIDATE_STEPS 逐项 dispatch**，顺序即数据（BCR-R-27）──
+    #
+    # **`restart` 的停止动作排在整个校验段之后**（收尾评审 Critical 5）。
+    # 此前是「先 `supervisor.down()` 再校验」，于是校验段的每一条拒绝都把用户
+    # 留在「服务已经被停了、命令却报拒绝」的状态里，而拒绝文案读起来像是
+    # 什么都没发生。本计划给 api 路径新增的五条拒绝（`api.token_missing` /
+    # `api.tls_incomplete` / `api.tls_unreadable` / `api.tls_key_permissive` /
+    # `api.tls_unusable`）每一条都是这个形态 —— 实测：没配 `api.token` 时
+    # `mlx restart api` 回 rc 6、网关已死、`run/api.json` 也没了，
+    # 而那条文案写的是「没有它网关不启动」。
+    # 挪动是安全的：校验段整段**只读**（`_api_checks` 的 docstring 逐字说明
+    # 它只读文件系统 + 一次本地 TLS 加载，dry-run 同样会拒、零资源创建），
+    # 所以先校验不改变任何判定结果，只改变「拒绝时服务还在不在跑」。
+    # 传的是**原始 `inv`**（verb 仍是 restart）—— `_v_target` 的文案参数
+    # `cmd=inv.verb` 要说真话。
     for step in VALIDATE_STEPS:
         refusal = VALIDATORS[step](state, inv, deps)
         if refusal is not None:
             return refusal
+
+    if inv.verb == "restart":
+        # 校验全过了才动手停。到这一行为止零资源创建、零外部效应。
+        out = supervisor.down(ctx, inv.target)
+        if out.rc not in (0,):
+            return out
+        # **`args` 必须带过去**（收尾评审 Important 8）：此前这里重造
+        # `Invocation("up", inv.target, dry_run=inv.dry_run)`，把 `inv.args`
+        # 整个丢掉，而 `cli.tsv:32` 把 `--ignore-fitness` 登记给了 `up,restart`
+        # ⇒ 那个 flag 在 restart 上是死的，执行段的容量闸门照样 `fit.over`，
+        # 而 `fit.over` 的文案还让用户去加他已经加过的这个 flag。
+        inv = Invocation("up", inv.target, args=inv.args, dry_run=inv.dry_run)
     spec = state["spec"]
 
     # `--dry-run` 在 stage_split **之前**返回 —— 这是 BCR-4-08 的答案（格 1）：

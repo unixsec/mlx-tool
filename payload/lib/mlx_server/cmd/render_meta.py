@@ -66,6 +66,11 @@ def _api(p):
     lines = [f"  {ui._RUN.get(run, '·')} 网关   " +
              (f"在跑   pid {p.get('pid')}" if run
               else ui._text("status.gateway.not_running"))]
+    if p.get("record_error"):
+        # 运行记录读不出来 ⇒ 下面每一行都只是「已知的部分」，要先说清楚，
+        # 否则一屏默认值看起来像事实（Important 7）
+        lines.append("    ⚠ " + ui._text("api.record_unreadable",
+                                         detail=p["record_error"]))
     urls = p.get("urls") or []
     if urls:
         w = max(ui._w(u["label"]) for u in urls)

@@ -165,3 +165,51 @@ def test_api_info_status_and_checks(payload, sys_py):
     assert got["port_foreign_no_record"] == ["O", False], "网关没在跑而端口被占 ⇒ 不通过"
     assert got["items"][-3:] == ["gateway_nets", "gateway_port", "settings_mode"]
     assert len(got["items"]) == 12
+
+
+CORRUPT_RECORD = WORLD + r"""
+from mlx_server import ui
+from mlx_server.cmd import api as api_cmd, render_meta, render_svc  # noqa: F401
+from mlx_server.cmd.svc import _tool_status
+from mlx_server.tables import TablesView
+TV = TablesView(SHARE)
+put_settings({"api.token": "@TOK@"})
+os.makedirs(os.path.join(DATA, "run"), exist_ok=True)
+with open(os.path.join(DATA, "run", "api.json"), "w") as fh:
+    fh.write("{NOT JSON")               # 存在但解析不了 ⇒ snapshot 抛
+res = {}
+for name, fn in (("status", lambda: _tool_status(ctx)),
+                 ("api_info", lambda: api_cmd.run(ctx, None, None, {}))):
+    try:
+        o = fn()
+        res[name] = {"rc": o.rc, "text": ui.human(o.payload, TV)}
+    except Exception as exc:
+        res[name] = {"raised": type(exc).__name__}
+print(json.dumps(res, ensure_ascii=False))
+"""
+
+
+def test_corrupt_run_record_does_not_blank_status_or_api_info(payload, sys_py):
+    """收尾评审 Important 7：一份写坏的 `run/api.json` 把整屏变成一行拒绝。
+
+    `supervisor.snapshot` 对「存在但解析不了」是**抛**的（与「没在跑」处置相反），
+    而 `cmd/svc.py` 的网关行与 `cmd/api.py` 都是裸调 ⇒ 异常经 `entry` 的边界映射
+    变成 `Refused(6)`，两条命令一个字都不打印。这违反 `verbs.tsv` 两条契约：
+    status（第 4 行）rc ∈ {0,2,3} 且「不带目标恒非空」；
+    `api info`（第 41 行）rc ∈ {0,2} 且「网关未运行 → 仍输出三项」。
+    更糟的是兜底文案让用户去跑 `mlx status` —— 它读同一份坏文件，同样什么都不打印，
+    把人支回刚刚失败的那条命令上。
+
+    同一模块里模型那个循环早就这样降级了，`checks.gateway_nets` /
+    `gateway_port` 也是 —— 本计划新增的三个网关读点只有那两个接了这个模式。
+    """
+    got = run_floor(payload, sys_py, CORRUPT_RECORD, with_gateway=True, timeout=60, TOK=TOK)
+    for name in ("status", "api_info"):
+        assert "raised" not in got[name], (
+            f"{name} 因为一份坏运行记录整个崩了：{got[name]}")
+        assert got[name]["rc"] == 0, f"{name} 的 rc 超出登记码集：{got[name]}"
+        assert got[name]["text"].strip(), f"{name} 打印了个空屏：{got[name]}"
+        assert "读不出来" in got[name]["text"], (
+            f"{name} 没告诉用户运行记录读不出来（这不等于「没在跑」）：\n{got[name]['text']}")
+    assert "工具状态" in got["status"]["text"], got["status"]["text"]
+    assert "地址" in got["api_info"]["text"], got["api_info"]["text"]
