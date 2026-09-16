@@ -56,6 +56,43 @@ r["kept"] = {k: kept.get(k) for k in keep}
 r["stripped"] = sorted(E.strip_loading({"model": "m", "adapters": "a", "adapter_path": "b",
                                         "draft_model": "c", "messages": []}))
 r["legacy_lm_style"] = run({"enable_thinking": False}, "chat", LEGACY)["body"]
+import copy
+# completions 目前与 chat 共用同一分支（family 只区分 responses/messages）——
+# 一旦有人为 completions 单开分支，这条必须先变红
+r["completions_high_vlm"] = run({"reasoning_effort": "high"}, "completions", VLM)["body"]
+# DISABLED 三个字符串成员：disabled / false / "0"，_truthy 与 reasoning_effort 判定都直接查它
+r["switch_disabled_variants"] = {
+    "top_false_str": E.parse_switch({"enable_thinking": "false"}),
+    "top_zero_str": E.parse_switch({"enable_thinking": "0"}),
+    "top_disabled_str": E.parse_switch({"enable_thinking": "disabled"}),
+    "reasoning_effort_false": E.parse_switch({"reasoning_effort": "false"}),
+    "reasoning_effort_zero": E.parse_switch({"reasoning_effort": "0"}),
+    "reasoning_effort_disabled": E.parse_switch({"reasoning_effort": "disabled"}),
+    "nested_reasoning_effort_zero": E.parse_switch({"reasoning": {"effort": "0"}}),
+}
+# _THINKING_TYPE["enabled"] 独立断言（此前只经 auto/adaptive 命中，enabled 从未被直接调用）
+r["thinking_enabled"] = E.parse_switch({"thinking": {"type": "enabled"}})
+# 完全未表达开关 ⇒ None，直接调用，不经 normalize 间接验证
+r["switch_absent"] = E.parse_switch({"foo": "bar"})
+# responses/messages 分支：effort 为禁用值时原样放行（开关由后端原生处理），此前双向都未断言
+r["responses_effort_off"] = run({"reasoning": {"effort": "off", "summary": "s"}}, "responses", VLM)["body"]
+r["messages_effort_off"] = run({"reasoning_effort": "off"}, "messages", VLM)["body"]
+# normalize / strip_loading 不得修改入参（含嵌套结构）——T5/T6 复用同一约定
+mutate_body = {"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "low", "keep": 1},
+               "reasoning": {"effort": "high", "summary": "x"}, "enable_thinking": True,
+               "reasoning_effort": "low", "thinking": {"type": "enabled"},
+               "adapters": "a", "model": "m"}
+before_normalize = copy.deepcopy(mutate_body)
+E.normalize(mutate_body, "chat", VLM)
+r["no_mutate_normalize"] = mutate_body == before_normalize
+mutate_resp = {"reasoning": {"effort": "high", "summary": "x"}}
+before_resp = copy.deepcopy(mutate_resp)
+E.normalize(mutate_resp, "responses", VLM)
+r["no_mutate_responses"] = mutate_resp == before_resp
+mutate_strip = {"model": "m", "adapters": "a", "adapter_path": "b", "draft_model": "c", "messages": []}
+before_strip = copy.deepcopy(mutate_strip)
+E.strip_loading(mutate_strip)
+r["no_mutate_strip"] = mutate_strip == before_strip
 print(json.dumps(r, ensure_ascii=False, sort_keys=True))
 """
 
@@ -100,3 +137,19 @@ def test_effort_normalization(payload, sys_py):
         "只移除已归一的键，chat_template_kwargs 的其他键原样保留"
     assert got["stripped"] == ["messages", "model"]
     assert got["legacy_lm_style"] == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert got["completions_high_vlm"] == {"reasoning_effort": "xhigh"}, \
+        "completions 目前与 chat 同分支，effort 映射同样生效；未来分叉必须先经这条变红"
+    assert got["switch_disabled_variants"] == {
+        "top_false_str": False, "top_zero_str": False, "top_disabled_str": False,
+        "reasoning_effort_false": False, "reasoning_effort_zero": False,
+        "reasoning_effort_disabled": False, "nested_reasoning_effort_zero": False,
+    }, "DISABLED 的 disabled / false / \"0\" 三个字符串成员必须都能关闭思考"
+    assert got["thinking_enabled"] is True, "_THINKING_TYPE['enabled'] 必须映射为 True"
+    assert got["switch_absent"] is None, "完全未表达开关 ⇒ None，不得与显式 False 混淆"
+    assert got["responses_effort_off"] == {"reasoning": {"effort": "off", "summary": "s"}}, \
+        "responses 分支对禁用值原样放行，开关留给后端原生处理"
+    assert got["messages_effort_off"] == {"reasoning_effort": "off"}, \
+        "messages 分支对禁用值原样放行，开关留给后端原生处理"
+    assert got["no_mutate_normalize"] is True, "normalize 不得修改入参（含嵌套 dict）"
+    assert got["no_mutate_responses"] is True, "responses/messages 分支同样不得修改入参"
+    assert got["no_mutate_strip"] is True, "strip_loading 不得修改入参"
