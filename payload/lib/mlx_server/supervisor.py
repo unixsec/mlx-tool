@@ -114,21 +114,38 @@ def port_owner(ctx, service, lsof_path=None, ps_path=None):
     监听 pid == 记录 pid **或** `pgid_of(监听 pid) == 记录 pgid`。
     **不是**对二元组 `(pid, pgid)` 做集合成员测试 —— launcher/worker 型后端上
     监听的是 worker，其 pid 既 != 记录 pid 也 != 记录 pgid。
+
+    端口上有多个监听 pid 时**每一个**都要满足（spec D24）。
     """
     lsof_path, ps_path = _bin(ctx, "lsof", lsof_path), _bin(ctx, "ps", ps_path)
     snap = snapshot(ctx, service)
     if snap is None:
         return Unknown("NO_LISTENER")
-    lp = probe.listener_pid(snap["port"], lsof_path)
+    lp = probe.listener_pids(snap["port"], lsof_path)
     if is_unknown(lp):
         return Unknown(lp.kind, lp.reason)
-    pid = lp.value
-    if pid == snap["pid"]:
-        return Ok(True)
-    pg = probe.pgid_of(pid, ps_path)
-    if is_unknown(pg):
-        return Unknown(pg.kind, pg.reason)
-    return Ok(pg.value == snap.get("pgid"))
+    # **全部**监听者都得是本服务（spec D24）：有一个不是，端口就不归它独占
+    for pid in lp.value:
+        if pid == snap["pid"]:
+            continue
+        pg = probe.pgid_of(pid, ps_path)
+        if is_unknown(pg):
+            return Unknown(pg.kind, pg.reason)
+        if pg.value != snap.get("pgid"):
+            return Ok(False)
+    return Ok(True)
+
+
+def foreign_listeners(ctx, port, lsof_path=None):
+    # type: (object, int, str) -> object
+    """端口上现有的监听 pid。无人监听 ⇒ `Ok([])`；探测失败 ⇒ `Unknown`（**不当作无人**）。
+
+    `up api` 在 spawn 之前调它（此刻网关尚未启动，任何监听者都是外来的）。
+    """
+    lp = probe.listener_pids(port, _bin(ctx, "lsof", lsof_path))
+    if is_unknown(lp):
+        return Ok([]) if lp.kind == "NO_LISTENER" else lp
+    return lp
 
 
 def may_kill(ctx, service, ps_path=None, lsof_path=None):
@@ -186,8 +203,8 @@ def materialize(ctx, spec, nonce, target=None, draft_target=None):
     return AliasDir(d)
 
 
-def write_record(ctx, spec, pid, pgid, port, started_at, nonce):
-    # type: (object, object, int, int, int, str, str) -> None
+def write_record(ctx, spec, pid, pgid, port, started_at, nonce, extra=None):
+    # type: (object, object, int, int, int, str, str, object) -> None
     """`run/<service>.json` 的**唯一写点**。ServiceId 只从 `spec.service` 取（裁决 R4-1）。"""
     os.makedirs(_run_dir(ctx), exist_ok=True)
     rec = {"pid": pid, "pgid": pgid, "port": port, "started_at": started_at,
@@ -214,6 +231,8 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce):
                     "backend_key_fp": key_fingerprint(env.get("MLX_BACKEND_API_KEY")),
                     "token_source": ("env" if (spec.sources or {}).get("api.token") == "cli"
                                      else "config")})
+    if extra:
+        rec.update(extra)          # 调用方判定的启动事实（api：绑定、TLS、解释器）
     from . import atomic
     # **0600**：运行记录含密钥指纹与后端信息（spec §3.4）
     with atomic.replace(_record_path(ctx, spec.service), mode=0o600) as fh:

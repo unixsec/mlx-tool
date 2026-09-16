@@ -246,10 +246,31 @@ def _size_mb(rec, path):
     return None if is_unknown(s) else round(s.value / (1024 * 1024), 1)
 
 
+def _api_checks(cfg):
+    # type: (object) -> object
+    """api 目标的校验（spec §4.1）。**只读文件系统**，所以留在校验段（dry-run 同样会拒）。"""
+    import os
+    import stat
+    v = cfg.values
+    if not v.get("api.token"):
+        return Refused(6, "api.token_missing")
+    cert, key = v.get("api.tls_cert") or "", v.get("api.tls_key") or ""
+    if bool(cert) != bool(key):
+        return Refused(6, "api.tls_incomplete")
+    if cert:
+        for p in (cert, key):
+            if not os.access(p, os.R_OK):
+                return Refused(6, "api.tls_unreadable", path=p)
+        mode = stat.S_IMODE(os.stat(key).st_mode)
+        if mode & 0o077:
+            return Refused(6, "api.tls_key_permissive", path=key, mode=oct(mode))
+    return None
+
+
 def _v_backend(state, inv, deps):
     """校验段步 5 · 后端判定（spec §2.3–§2.4）。**采证在这里，裁决在 `route`**。"""
     if inv.target == "api":
-        return None
+        return _api_checks(state["cfg"])
     from .. import caps, route, templates
     ctx, cfg, tv = state["ctx"], state["cfg"], state["tables"]
     attach = [r["model_type"] for r in tv.drafters()]
@@ -608,6 +629,33 @@ def run(ctx, stack, inv, deps):
         if verdict.value == fitness.OVER and not (inv.args or {}).get("ignore_fitness"):
             return Refused(6, "fit.over", id=inv.target)
 
+    api_extra = None
+    if inv.target == "api":
+        # ── 端口上的外来监听者（spec D24）──
+        # 此刻网关确知没在跑（上面 `already` 已判），端口上的任何监听者都是别人的。
+        # 放在执行段而非校验段：它要调 lsof，而 dry-run 的外部命令计数必须为 0（DE-T-018）。
+        foreign = deps.get("foreign_listeners")
+        if foreign is not None:
+            fl = foreign(spec_port(spec))
+            if is_unknown(fl):
+                return Refused(9, "ports.probe_undeterminable", port=spec_port(spec), kind=fl.kind)
+            if fl.value:
+                return Refused(7, "ports.foreign_listener", port=spec_port(spec),
+                               pids=",".join(str(p) for p in fl.value))
+        # ── 网关解释器（spec D20）──
+        pick = deps.get("gateway_interpreter")
+        if pick is not None:
+            from .. import backendarg
+            interp = pick()
+            spec = backendarg.with_interpreter(spec, interp["path"])
+            v = state["cfg"].values
+            api_extra = {"bind": v.get("api.bind") or "0.0.0.0",
+                         "tls": bool(v.get("api.tls_cert")),
+                         "interpreter": interp["path"],
+                         "interpreter_source": interp["source"],
+                         "interpreter_version": interp["version"],
+                         "tls_max": interp["tls_max"]}
+
     spawn = deps.get("spawn")
     if spawn is None:
         return Failed(1, "svc.no_spawner", [],
@@ -626,7 +674,7 @@ def run(ctx, stack, inv, deps):
                       service=spec.service)
     port = spec_port(spec)
     supervisor.write_record(ctx, spec, started["pid"], started["pgid"],
-                            port, started["started_at"], nonce)
+                            port, started["started_at"], nonce, extra=api_extra)
 
     # **就绪等待**（T3 第 1 行）。没有这一步时，spawn 成功就报 Done ——
     # 而进程可能在三秒后因端口被占而退出，用户拿到 rc=0 和「started」，
@@ -659,11 +707,18 @@ def run(ctx, stack, inv, deps):
             return Failed(rc, key, [f"run/{spec.service}.json"],
                           service=spec.service, port=port, detail=detail)
     rt = state.get("route")
+    extra_pay = {}
+    if rt is not None:
+        # **`rule` 保留**：brief 给的替换代码在这里漏了它 —— `render_svc._svc_change`
+        # 的 R2「串行」判据读的正是这个字段（`p.get("rule") == "R2"`），漏掉它会让
+        # 真实（非 --dry-run）`mlx up <R2 模型>` 的成功行显示「并发 N」而不是「串行」，
+        # 与 dry-run 路径（`pay["route"] = state["route"].to_dict()`）不一致。
+        extra_pay = {"backend": rt.backend, "max_concurrency": rt.max_concurrency,
+                    "rule": rt.rule}
+    elif api_extra:
+        extra_pay = {k: api_extra[k] for k in ("bind", "tls", "interpreter")}
     return Done(dict({"kind": "svc", "started": inv.target,
-                      "pid": started["pid"], "port": port},
-                     **({"backend": rt.backend, "max_concurrency": rt.max_concurrency,
-                        "rule": rt.rule}
-                        if rt is not None else {})))
+                      "pid": started["pid"], "port": port}, **extra_pay))
 
 
 def spec_port(spec):

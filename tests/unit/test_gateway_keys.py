@@ -59,8 +59,12 @@ from mlx_server.cmd.svc import Invocation, run
 deps = {"backendarg_spec": backendarg.spec}
 put_settings({"api.token": "T" * 43})
 a = run(ctx, None, Invocation("up", "api", dry_run=True), deps).payload["env"]
+cert, key = os.path.join(DATA, "c.pem"), os.path.join(DATA, "k.pem")
+for p in (cert, key):
+    open(p, "w").write("x")
+os.chmod(key, 0o600)
 put_settings({"api.token": "T" * 43, "api.bind": "::", "api.allow_cidrs": "192.168.2.0/24",
-              "api.tls_cert": "/c.pem", "api.tls_key": "/k.pem", "api.max_body_mb": 16})
+              "api.tls_cert": cert, "api.tls_key": key, "api.max_body_mb": 16})
 b = run(ctx, None, Invocation("up", "api", dry_run=True), deps).payload["env"]
 put_settings({"api.token": "T" * 43, "api.bind": "localhost"})
 c = run(ctx, None, Invocation("up", "api", dry_run=True), deps)
@@ -69,5 +73,7 @@ print(json.dumps({"a": a, "b": b, "c": [c.rc, c.msg_key]}))
     keys = ("MLX_GATEWAY_BIND", "MLX_GATEWAY_ALLOW_CIDRS", "MLX_GATEWAY_TLS_CERT",
             "MLX_GATEWAY_TLS_KEY", "MLX_GATEWAY_MAX_BODY_MB")
     assert tuple(got["a"][k] for k in keys) == ("0.0.0.0", "", "", "", "256")
-    assert tuple(got["b"][k] for k in keys) == ("::", "192.168.2.0/24", "/c.pem", "/k.pem", "16")
+    b = tuple(got["b"][k] for k in keys)
+    assert (b[0], b[1], b[4]) == ("::", "192.168.2.0/24", "16")
+    assert b[2].endswith("/c.pem") and b[3].endswith("/k.pem")
     assert got["c"] == [6, "config.invalid"], "api.bind 值域非法应在校验段拒绝"

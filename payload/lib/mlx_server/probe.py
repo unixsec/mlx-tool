@@ -17,13 +17,16 @@ def _run(argv, timeout_sec):
         return False
 
 
-def listener_pid(port, lsof_path="/usr/sbin/lsof", timeout_sec=5):
+def listener_pids(port, lsof_path="/usr/sbin/lsof", timeout_sec=5):
     # type: (int, str, int) -> object
-    """端口上的监听进程 pid。
+    """端口上**全部**监听进程的 pid（任意地址：`0.0.0.0`、`127.0.0.1`、`::`）。
+
+    此前只取第一个（spec §0.7-9）：`0.0.0.0:P` 与 `127.0.0.1:P` 可以分属两个进程同时监听，
+    而回环连接落到后者 —— 只看第一个 pid 会把「端口上还有别人」判成「是我们的」。
 
     三态（T-26 同族）：
-      rc=0            → Ok(pid)
-      rc≠0 ∧ stderr空 → Unknown("NO_LISTENER")   **确知无人监听**，可采用该端口
+      rc=0            → Ok([pid, ...])
+      rc≠0 ∧ stderr空 → Unknown("NO_LISTENER")   **确知无人监听**
       rc≠0 ∧ stderr非空 → Unknown("PS_FAILED")   lsof 自身失败，**不得当作无人监听**
     """
     r = _run([lsof_path, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], timeout_sec)
@@ -32,10 +35,13 @@ def listener_pid(port, lsof_path="/usr/sbin/lsof", timeout_sec=5):
     if r is False:
         return Unknown("TOOL_UNAVAILABLE")
     if r.returncode == 0 and r.stdout.strip():
-        first = r.stdout.strip().splitlines()[0].strip()
-        if not first.isdigit():
-            return Unknown("PARSE_FAILED", first[:40])
-        return Ok(int(first))
+        pids = []
+        for line in r.stdout.split():
+            if not line.isdigit():
+                return Unknown("PARSE_FAILED", line[:40])
+            if int(line) not in pids:
+                pids.append(int(line))
+        return Ok(pids)
     if not r.stderr.strip():
         return Unknown("NO_LISTENER")
     return Unknown("PS_FAILED", r.stderr.strip()[:80])

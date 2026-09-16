@@ -121,3 +121,16 @@ def spec(service, cfg, route):
         model_arg=service, self_id_expected=service,
         sources=dict(cfg.sources), route=route, secret_env=secret,
     )
+
+
+def with_interpreter(spec, path):
+    # type: (object, str) -> object
+    """同一份规格，只把 `argv[0]` 换成执行段判定出的解释器（spec D20）。
+
+    argv 仍只有本模块产出（INV-02）：判定要跑子进程，只能发生在执行段，
+    所以校验段产出的规格用系统 python 占位，执行段经这里替换。
+    """
+    return LaunchSpec(service=spec.service, argv=(path,) + tuple(spec.argv[1:]), env=spec.env,
+                      cwd_rel=spec.cwd_rel, model_arg=spec.model_arg,
+                      self_id_expected=spec.self_id_expected, sources=spec.sources,
+                      route=spec.route, secret_env=spec.secret_env)

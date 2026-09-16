@@ -127,6 +127,8 @@ def test_l2_gateway_skips_venv_drift(payload, sys_py):
     """
     got = _floor(payload, sys_py, PRE + "\n@@\n" + '''
         C.share_root = "@SHARE@"
+        with open(os.path.join(C.root_data, "settings.json"), "w") as fh:
+            fh.write(json.dumps({"api.token": "T" * 43}))
         from mlx_server.cmd.svc import run
         from mlx_server.result import Unknown
         calls = []

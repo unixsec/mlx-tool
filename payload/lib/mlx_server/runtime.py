@@ -326,6 +326,7 @@ def confirm(expect, prompt=None):
 def build_deps(ctx):
     # type: (object) -> dict
     """**生产 deps 的唯一装配点**。测试不用它，测试注自己的桩。"""
+    from . import supervisor
     venv_py = os.path.join(getattr(ctx, "venv", ""), "bin", "python3")
     venv_py = venv_py if os.path.exists(venv_py) else None
     venv_bin = os.path.join(getattr(ctx, "venv", ""), "bin")
@@ -361,6 +362,9 @@ def build_deps(ctx):
         # `ports.conflict_check` 的契约逐字是「在其所属命令的真实运行模式下
         # **必然执行**（不得因降级模式恒空跑）」，而它恰恰恒空跑了。
         "ports_conflict": lambda target: _ports_conflict(ctx),
+        # `up api` 执行段首：端口上的外来监听者（spec D24）与网关解释器（D20）
+        "foreign_listeners": lambda port: supervisor.foreign_listeners(ctx, port),
+        "gateway_interpreter": lambda: gateway_interpreter(ctx, venv_py),
         # `chat` 的多轮读取源与输出。**提示走 stderr、回复走 stdout** ——
         # 台账给 chat 的主产物是「逐字节只含回复正文」，把「你 > 」混进去
         # 会让 `mlx chat x > out.txt` 的文件里夹着提示符。
@@ -541,6 +545,34 @@ def _ports_conflict(ctx):
     except Exception:                              # noqa: BLE001
         return None                                # 读不到注册表不是端口冲突
     return ports.conflict_check(ctx, recs)
+
+
+_GATEWAY_PROBE = (
+    "import json, ssl, sys\n"
+    "import gateway.app, gateway.server\n"
+    "print(json.dumps({'version': sys.version.split()[0],\n"
+    "                  'tls_max': 'TLSv1.3' if getattr(ssl, 'HAS_TLSv1_3', False) else 'TLSv1.2'}))\n")
+
+
+def gateway_interpreter(ctx, venv_python=None, timeout_sec=10.0):
+    # type: (object, object, float) -> dict
+    """网关用哪个解释器（spec D20）：venv 的 python3 **真的能 import 网关**就用它（TLS 1.3 可用），
+    否则系统 `/usr/bin/python3`（LibreSSL，最高 TLS 1.2）。venv 坏了网关照样起得来。"""
+    env = {"PATH": "/usr/bin:/bin",
+           "PYTHONPATH": os.pathsep.join([ctx.root_code, os.path.join(ctx.root_code, "lib")])}
+    for path, source in ((venv_python, "venv"), ("/usr/bin/python3", "system")):
+        if not path or not os.access(path, os.X_OK):
+            continue
+        try:
+            r = subprocess.run([path, "-c", _GATEWAY_PROBE], capture_output=True,  # noqa: S603
+                               text=True, timeout=timeout_sec, env=env, check=False)
+            info = json.loads(r.stdout.strip().splitlines()[-1]) if r.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+            info = None
+        if info:
+            return {"path": path, "source": source, "version": info["version"],
+                    "tls_max": info["tls_max"]}
+    return {"path": "/usr/bin/python3", "source": "fallback", "version": "", "tls_max": ""}
 
 
 def wait_ready(ctx, spec, port, log_path=None, timeout_sec=20, poll_sec=0.25):

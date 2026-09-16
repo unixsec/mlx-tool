@@ -457,12 +457,13 @@ def test_l3_up_reports_failure_when_port_is_taken(cli, tmp_path):
     而进程三秒后因 `Address already in use` 退出，下一条 `mlx status` 说「未运行」。
     这是 v6 那 18 条「报成功但没产生效果」的形态在 v7 的复现。
 
-    第一次修还修错了：就绪判据用 `probe.listener_pid`（端口上有没有人），
-    而占着端口的正是那个无关进程 ⇒ 照样判为就绪。
-    判据必须是 `port_owner`（**监听者是不是我们记录的 pid/pgid**）——
-    那正是设计里 port_owner 存在的理由。
+    Task 8 之后：`up api` 在**执行段首**先查端口上的外来监听者（spec D24）——
+    这是回环地址（`127.0.0.1`）上的一个真实占用者，`up api` 必须在 spawn 之前
+    就看到它并拒绝（rc 7 `ports.foreign_listener`），而不是等 spawn 之后
+    因「起来后立刻退出」才发现（那是 Task 8 之前的过渡态，rc 10）。
 
-    错误实现能否通过：spawn 完就 Done ⇒ rc=0 ⇒ 本用例红。
+    错误实现能否通过：不查外来监听者、spawn 完就 Done ⇒ rc=0 ⇒ 本用例红；
+    仍走「spawn 后才发现端口被占」这条旧路径 ⇒ rc 10 而非 7 ⇒ 本用例红。
     """
     import socket
 
@@ -472,13 +473,13 @@ def test_l3_up_reports_failure_when_port_is_taken(cli, tmp_path):
 
     holder = socket.socket()
     holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    holder.bind(("0.0.0.0", gw_port))
+    holder.bind(("127.0.0.1", gw_port))
     holder.listen(1)
     try:
         rc, out, err = cli("up", "api", human=True)
         assert rc != 0, (
             f"端口被占却报成功（rc={rc}）—— 报成功但没产生效果\nstdout={out}")
-        assert rc == 10, f"应为 rc 10（起来后立刻退出），实得 {rc}"
+        assert rc == 7, f"应为 rc 7（外来监听者，spec D24），实得 {rc}"
         assert "端口" in err, f"失败原因里没提端口：{err}"
         assert "已启动" not in str(out), f"stdout 仍在报已启动：{out}"
     finally:

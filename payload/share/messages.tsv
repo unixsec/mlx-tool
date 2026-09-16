@@ -204,3 +204,8 @@ chat.model_not_found	没有名为「{id}」的模型。已登记：{known}\nchat
 bench.model_not_found	没有名为「{id}」的模型。已登记：{known}\nbench 的第一个参数是模型 id：mlx bench {known_first}
 svc.loading_notice	{backend} 启动即加载权重（约 {gb} GB），加载完成才开始监听 —— 最多等 {sec} 秒
 svc.still_loading_hint	等了 {sec} 秒仍未监听。这个后端加载完权重才开始监听，可能只是还没加载完：稍后跑 `mlx status {service}` 看它是否已在跑
+api.token_missing	网关令牌 api.token 是空的 —— 所有来源（含本机）都要令牌，没有它网关不启动。生成：`mlx bootstrap keys`
+api.tls_incomplete	TLS 只配了证书或私钥中的一个。两个都设：`mlx config set api.tls_cert --value=<证书>` 与 `mlx config set api.tls_key --value=<私钥>`；不用 TLS 就都清掉：`mlx config unset api.tls_cert` 与 `mlx config unset api.tls_key`
+api.tls_unreadable	TLS 文件读不到：{path}
+api.tls_key_permissive	私钥 {path} 的权限是 {mode}，宽于 0600，同机其他用户能读到它。修：chmod 600 {path}
+ports.foreign_listener	端口 {port} 上已有别的进程在监听（pid {pids}）。网关与它共用端口时，发给本机的请求可能落到对方手里 —— 先停掉它，或换网关端口
