@@ -68,6 +68,17 @@ out["gw_stopped_text"] = ui.human(tool_stopped)
 supervisor.running = lambda c, s, ps_path=None: Ok(True)
 api_record()
 sp = os.path.join(DATA, "settings.json")
+# Important 3：settings.json 损坏（非法 JSON）时，令牌行不能撒谎说
+# 「未配置」——此前这里吞了一切异常，`token.configured` 塌成 False，
+# 而网关其实带着令牌好好跑着；还把用户支去一条在同一份坏文件上会
+# 一样读不出来的命令（`mlx bootstrap keys`）。
+with open(sp, "w") as fh:
+    fh.write("{not json")
+p_corrupt = api_cmd.run(ctx, None, None, {}).payload
+out["corrupt_settings"] = {"configured": p_corrupt["token"]["configured"],
+                           "has_error": bool(p_corrupt.get("settings_error"))}
+out["corrupt_settings_text"] = ui.human(p_corrupt, TV)
+put_settings({"api.token": "@TOK@", "backend.api_key": "@KEY@"})
 os.chmod(sp, 0o644); out["mode_wide"] = checks.settings_mode(ctx).value
 os.chmod(sp, 0o600); out["mode_ok"] = checks.settings_mode(ctx).value
 def stub(name, body):
@@ -76,12 +87,12 @@ def stub(name, body):
         fh.write("#!/bin/bash\n" + body + "\n")
     os.chmod(path, 0o755)
     return path
-def port_check(lsof_body, record=True):
+def port_check(lsof_body, record=True, ps_body="echo 4242"):
     rec_path = os.path.join(DATA, "run", "api.json")
     if not record and os.path.exists(rec_path):
         os.remove(rec_path)
     c = Ctx(_ROOT, DATA, WEIGHTS, VENV, 8340, (8100, 8199), None,
-            bins={"lsof": stub("lsof", lsof_body), "ps": stub("ps", "echo 4242"),
+            bins={"lsof": stub("lsof", lsof_body), "ps": stub("ps", ps_body),
                   "pgrep": "/usr/bin/pgrep", "vm_stat": "/usr/bin/vm_stat",
                   "networksetup": "/usr/sbin/networksetup", "ifconfig": "/sbin/ifconfig"},
             share_root=SHARE)
@@ -89,6 +100,13 @@ def port_check(lsof_body, record=True):
     return ["U", r.kind] if r.is_unknown() else ["O", r.value]
 import importlib
 importlib.reload(supervisor)      # 撤掉上面对 running / port_owner 的替身，端口检查走真实判定
+# Important 1：`gateway_port` 有记录时的分支（生产实际路径：`mlx check` 时网关在跑）——
+# 此前两个用例都 record=False，这条分支从未被真的求值过。
+out["port_foreign_with_record"] = port_check(
+    "echo 9999", record=True,
+    ps_body='if [ "$4" = "9999" ]; then echo 7777; else echo 4242; fi')
+out["port_no_listener_with_record"] = port_check("exit 1", record=True)
+out["port_probe_failed_with_record"] = port_check('echo boom 1>&2; exit 1', record=True)
 out["port_free"] = port_check("exit 1", record=False)
 out["port_foreign_no_record"] = port_check("echo 5555", record=False)
 from mlx_server.cmd import check
@@ -113,12 +131,19 @@ def test_api_info_status_and_checks(payload, sys_py):
     assert (plain["bind"], plain["tls"], plain["plaintext_warning"]) == ("0.0.0.0", False, True)
     assert plain["token"] == {"configured": True, "source": "config", "state": "ok"}
     assert plain["nets_source"] == "parsed" and plain["models"] == []
-    for s in ("Wi-Fi", "虚拟机共享网络", "utun4", "Thunderbolt Bridge", "TLS 未开启", "所有来源都要令牌"):
+    for s in ("Wi-Fi", "虚拟机共享网络", "utun4", "Thunderbolt Bridge", "TLS 未开启",
+              "所有来源都要令牌", "TLS 关"):
         assert s in got["plain_text"], f"api info 缺「{s}」：\n{got['plain_text']}"
     assert TOK not in got["plain_text"] and KEY not in got["plain_text"]
 
     url, warn, text = got["tls"]
     assert url.startswith("https://") and warn is False and "TLSv1.3" in text
+    assert "TLS 开" in text, f"tls=True 时 api info 该显示「TLS 开」：\n{text}"
+
+    assert got["corrupt_settings"] == {"configured": None, "has_error": True}, got["corrupt_settings"]
+    assert "读不出设置" in got["corrupt_settings_text"], got["corrupt_settings_text"]
+    assert "未配置" not in got["corrupt_settings_text"], (
+        f"settings.json 读不出时不该撒谎说「未配置」：\n{got['corrupt_settings_text']}")
 
     assert got["check_fallback"] is False and got["check_parsed"] is True
     assert got["gw"] == {"bind": "0.0.0.0", "tls": False, "allowed_count": 8, "token_state": "ok"}
@@ -129,6 +154,13 @@ def test_api_info_status_and_checks(payload, sys_py):
         f"网关没在跑时不该打印令牌轮换提示：\n{got['gw_stopped_text']}")
     assert "未运行" in got["gw_stopped_text"]
     assert got["mode_wide"] is False and got["mode_ok"] is True
+    assert got["port_foreign_with_record"] == ["O", False], (
+        "记录在但监听者不是本服务（pid、pgid 都对不上）⇒ 不通过")
+    assert got["port_no_listener_with_record"] == ["O", True], (
+        "记录在但此刻确知无人监听（进程静默退出，记录是陈旧的）⇒ 通过——"
+        "这不是「外来监听者占用端口」要防的情形，是刻意的 Unknown 折叠")
+    assert got["port_probe_failed_with_record"] == ["U", "PS_FAILED"], (
+        "lsof 探测本身硬失败要穿透成 Unknown，不得塌成通过或失败")
     assert got["port_free"] == ["O", True]
     assert got["port_foreign_no_record"] == ["O", False], "网关没在跑而端口被占 ⇒ 不通过"
     assert got["items"][-3:] == ["gateway_nets", "gateway_port", "settings_mode"]

@@ -61,9 +61,16 @@ def run(ctx, stack, inv, deps=None):
     from .. import route, store
     snap = supervisor.snapshot(ctx, "api") or {}
     running = supervisor.running(ctx, "api")
+    settings_error = None
     try:
         settings = store.load_settings(ctx)
-    except Exception:                              # noqa: BLE001
+    except store.StoreParseError as e:
+        # **窄捕获**：此前这里吞了一切异常，settings.json 手滑写坏后
+        # `token.configured` 塌成 False——网关明明带着令牌好好跑着，
+        # 这一屏却说「未配置」，还指去 `mlx bootstrap keys`（那条命令
+        # 在同一份坏文件上会一样读不出来，把用户支到死路上）。
+        # 读不出的原因**要说出来**，不是静默假装「没配」。
+        settings_error = str(e)
         settings = None
     port = snap.get("port") or ctx.gateway_port
     urls = _urls(snap, port) if snap else []
@@ -84,8 +91,11 @@ def run(ctx, stack, inv, deps=None):
         "interpreter": snap.get("interpreter"),
         "interpreter_version": snap.get("interpreter_version"),
         "tls_max": snap.get("tls_max"),
-        "token": {"configured": bool((settings or {}).get("api.token")),
+        # `settings is None`（读不出）时 `configured` 是**未知**，不是 False——
+        # 「没配」与「读不出所以不知道」是两件事，渲染层要能分辨（见 render_meta._api）。
+        "token": {"configured": None if settings is None else bool(settings.get("api.token")),
                   "source": snap.get("token_source"), "state": ks["token_state"]},
+        "settings_error": settings_error,
         "allowed_nets": snap.get("allowed_nets") or [],
         "excluded_ifaces": snap.get("excluded_ifaces") or [],
         "nets_source": snap.get("nets_source"),

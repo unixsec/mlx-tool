@@ -173,6 +173,26 @@ def test_d4_validators_match_steps_exactly(payload: Path, sys_py: str):
     assert got["steps"].index("ports.conflict_check") < got["steps"].index("backendarg.spec")
 
 
+def test_check_items_match_checks_all_exactly(payload: Path, sys_py: str):
+    """`set(cmd.check.ITEMS) == set(checks.ALL)`（**相等**，不是子集）。
+
+    两份都是手写元组/字典——`cmd.check.run()` 只按 `ITEMS` 逐项去 `deps["checks"]`
+    （生产装配是 `checks.ALL`）取实现去跑。往 `checks.ALL` 加第 13 项却忘了
+    同步 `ITEMS`：新检查项永远不会被求值，`mlx check` 却不报任何错——
+    `cmd.check.run()` 对它一无所知。反过来往 `ITEMS` 加一项却忘了在
+    `checks.ALL` 里实现：那一项每次都报「检查项未注入」，`test_message_keys_used_are_all_declared`
+    一类的表守卫也抓不到（它不是文案键缺失，是实现缺失）。
+    """
+    got = _floor(payload, sys_py, """
+        import json
+        from mlx_server import checks
+        from mlx_server.cmd import check
+        print(json.dumps({"items": list(check.ITEMS), "all": sorted(checks.ALL)}))
+    """)
+    Cardinality.check("cmd.check.ITEMS↔checks.ALL", sorted(got["items"]),
+                      got["all"], rel="equal")
+
+
 def test_d4_ports_conflict_wins_over_spec(payload: Path, sys_py: str):
     """`BCR-R-27` 的实际后果：端口冲突必须在 spec 之前被判出 ⇒ rc 7 而非 5。
 
@@ -380,6 +400,44 @@ def test_message_keys_used_are_all_declared(payload: Path):
         used |= set(re.findall(r'msg_key\s*=\s*"([a-z][a-z_.]+)"', src))
     Cardinality.require_nonempty("代码里的文案键", used, "一个都没解析到 ⇒ 空真")
     Cardinality.check("用了但未登记的文案键", sorted(used - declared), rel="empty")
+
+
+def test_ui_text_keys_are_all_declared(payload: Path):
+    """**代码里 `ui._text(<字面量键>, ...)` 的每个键都必须在 `messages.tsv` 里**。
+
+    `test_message_keys_used_are_all_declared` 只解析 `Refused/Failed/Aggregate/msg_key=`——
+    `ui._text` 走的是另一条查表路径（`ui.py::_text`），且它**查不到时不抛异常**，
+    回落到调用点自己传的 `fallback`（没传就回落成裸 key）。后果：删掉
+    `messages.tsv` 里的一行，`ui._text` 悄悄改用调用点写死的 fallback 文案，
+    整套测试照样绿——表里的文案与调用点字面量就此可以独立漂移，没人报错
+    （实例：`render_svc.py` 的网关行曾经这样，`render_meta.py` 的 `api info`
+    屏对同一句话另抄了一份纯字面量，三处各说各话）。
+
+    只收字面量键（`ast.Constant` 字符串）：动态键（`ui._text(r["key"], ...)`
+    这类）跳过——那类走的是运行期兜底，与 `test_message_keys_used_are_all_declared`
+    对 `Refused/Failed` 的处理同理。
+    """
+    table = payload / "share" / "messages.tsv"
+    declared = {l.split("\t")[0] for l in table.read_text().splitlines()
+                if l.strip() and not l.startswith("#")}
+    Cardinality.require_nonempty("messages.tsv", declared, "表读不到 ⇒ 空真")
+
+    used = set()
+    for f in sorted((payload / "lib").rglob("*.py")):
+        tree = ast.parse(f.read_text())
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            fn = n.func
+            is_ui_text = (isinstance(fn, ast.Attribute) and fn.attr == "_text"
+                          and isinstance(fn.value, ast.Name) and fn.value.id == "ui")
+            if not is_ui_text or not n.args:
+                continue
+            a0 = n.args[0]
+            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                used.add(a0.value)
+    Cardinality.require_nonempty("代码里 ui._text 的字面量键", used, "一个都没解析到 ⇒ 空真")
+    Cardinality.check("ui._text 用了但未登记的键", sorted(used - declared), rel="empty")
 
 
 def test_every_message_renders_with_its_own_params(payload: Path):

@@ -64,7 +64,8 @@ def _api(p):
     # type: (dict) -> str
     run = p.get("running")
     lines = [f"  {ui._RUN.get(run, '·')} 网关   " +
-             (f"在跑   pid {p.get('pid')}" if run else "未运行   `mlx up api` 起它")]
+             (f"在跑   pid {p.get('pid')}" if run
+              else ui._text("status.gateway.not_running"))]
     urls = p.get("urls") or []
     if urls:
         w = max(ui._w(u["label"]) for u in urls)
@@ -77,10 +78,16 @@ def _api(p):
     if p.get("interpreter"):
         lines.append(f"    解释器 {p['interpreter']} {p.get('interpreter_version') or ''}".rstrip())
     tok = p.get("token") or {}
-    state = {"ok": "与运行中一致", "changed": "已变更，需 `mlx restart api`",
-             "env_unknown": "由环境变量设置，当前 shell 无法比较", None: "—"}.get(tok.get("state"), "—")
-    lines.append(f"    令牌   {'已配置' if tok.get('configured') else '未配置（`mlx bootstrap keys`）'}"
-                 f"   来源 {tok.get('source') or '—'}   {state}")
+    if tok.get("configured") is None and p.get("settings_error"):
+        # settings.json 读不出来：「已配置/未配置」是从 settings 读的判断，
+        # 这时候不知道，不能默认成「未配置」再支用户去跑一条会撞上同一份
+        # 坏文件的命令（`mlx bootstrap keys`）。
+        lines.append(f"    令牌   读不出设置（{p['settings_error']}）")
+    else:
+        state = {"ok": "与运行中一致", "changed": "已变更，需 `mlx restart api`",
+                 "env_unknown": "由环境变量设置，当前 shell 无法比较", None: "—"}.get(tok.get("state"), "—")
+        lines.append(f"    令牌   {'已配置' if tok.get('configured') else '未配置（`mlx bootstrap keys`）'}"
+                     f"   来源 {tok.get('source') or '—'}   {state}")
     nets = p.get("allowed_nets") or []
     if nets:
         lines.append("    放行网段  " + "、".join(

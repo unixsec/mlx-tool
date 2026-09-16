@@ -174,11 +174,12 @@ rec("api", port=8340, model_arg=None, type="api", token_source="env",
 t2 = _tool_status(ctx).payload
 from mlx_server import ui
 from mlx_server.cmd import render_svc  # noqa: F401
+from mlx_server.tables import TablesView
 print(json.dumps({"cap": cap,
                   "t1": {"rows": {r["id"]: r["key_changed"] for r in t1["models"]},
                          "gw": t1["gateway"], "restart": t1["restart_needed"]},
                   "t2": {"gw": t2["gateway"], "restart": t2["restart_needed"],
-                         "text": ui.human(t2)}}))
+                         "text": ui.human(t2, TablesView(SHARE))}}))
 """
 
 

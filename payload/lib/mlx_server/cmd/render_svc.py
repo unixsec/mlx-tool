@@ -50,15 +50,12 @@ def _tool_status(p):
                    + (" · TLS " + ("开" if gw.get("tls") else "关") if gw.get("bind") else "")
                    + (f" · 放行网段 {gw['allowed_count']}" if gw.get("allowed_count") else "")
                    if run
-                   else ui._text("status.gateway.not_running",
-                                 "未运行   `mlx up api` 起它"))]
+                   else ui._text("status.gateway.not_running"))]
         # 只在网关真的在跑时才提示令牌轮换检测的局限——记录还在但进程已停时
         # `token_state` 可能仍是 `env_unknown`，这时打印它是误导（进程都没在跑，
         # 「无法比较是否已变更」这句话没有意义）。
         if run and gw.get("token_state") == "env_unknown":
-            lines.append("     └ " + ui._text(
-                "status.gateway.token_env_unknown",
-                "令牌由环境变量设置，当前 shell 未设 MLX_GATEWAY_TOKEN，无法比较是否已变更"))
+            lines.append("     └ " + ui._text("status.gateway.token_env_unknown"))
 
     rs = p.get("restart_needed") or []
     if rs:

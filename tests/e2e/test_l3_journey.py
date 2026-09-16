@@ -347,18 +347,22 @@ def test_l3_default_output_is_human_readable(cli):
     assert isinstance(js, dict) and js["kind"] == "tool", "--json 必须仍是机读"
 
 
-def test_l3_check_failure_keeps_the_nine_rows(cli):
+def test_l3_check_failure_keeps_the_twelve_rows(cli):
     """**`check` 失败时主产物不得丢。**
 
-    坏样本（本轮真实发生）：失败走 `Failed` ⇒ 九行主产物被丢掉，
+    坏样本（本轮真实发生）：失败走 `Failed` ⇒ 十二行主产物被丢掉，
     用户只看到一行 Python repr（`check.failed（failed=[...]；rows=[(...)]）`），
     看不出是哪几项挂了、更不知道该做什么。
     `Aggregate` 携带 payload 就是为了这个。
+
+    边界收紧到 `== 13`（十二项各一行 + `ui._checks` 末尾追加的一行汇总；
+    曾经是 `>= 9`，在十二项契约下这条宽松边界即使丢了好几行也照样绿——
+    名字与断言都要钉住真实的行数，不是「至少这么多」）。
     """
     rc, out, err = cli("check", human=True)
     assert rc in (0, 64, 65), f"check 的 rc 应 ∈ {{0,64,65}}，实得 {rc}"
     lines = [l for l in out.splitlines() if l.strip()]
-    assert len(lines) >= 9, f"九项主产物丢了，只剩 {len(lines)} 行：\n{out}"
+    assert len(lines) == 13, f"十二项 + 汇总行丢了，只剩 {len(lines)} 行：\n{out}"
     assert "rows=[" not in out and "failed=[" not in out, (
         f"主产物里出现了 Python repr：\n{out}")
     if rc != 0:

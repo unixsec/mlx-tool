@@ -111,7 +111,13 @@ def caps(ctx):
 
 
 def gateway_nets(ctx):
-    """网关的放行网段是解析出来的（`parsed`），不是回落值。网关没在跑 ⇒ 无事可查，通过。"""
+    """网关的放行网段是解析出来的（`parsed`），不是回落值。
+
+    通过条件是「没有运行记录，**或**运行记录里压根没有 `nets_source` 这个键」——
+    后者不止「网关没在跑」，也覆盖「网关在跑，但门面从没把 `nets_source` 并进
+    运行记录」这种接线缺口（本项要防的正是「算出来的网段不是 parsed」，
+    这两种情形都无从判定「算出来的是什么」，所以都放行，不当失败）。
+    """
     from . import supervisor
     try:
         snap = supervisor.snapshot(ctx, "api")
@@ -123,7 +129,14 @@ def gateway_nets(ctx):
 
 
 def gateway_port(ctx):
-    """网关端口上没有外来监听者（spec D24）。有记录 ⇒ 全部监听者须属网关；无记录 ⇒ 须无人监听。"""
+    """网关端口上没有外来监听者（spec D24）。有记录 ⇒ 全部监听者须属网关；无记录 ⇒ 须无人监听。
+
+    `supervisor.port_owner` 在「记录还在，但端口上此刻确知无人监听」时报
+    `Unknown("NO_LISTENER")`（进程可能已静默退出，记录是陈旧的）——这不是
+    「外来监听者占用端口」要防的那件事，**在这里特意塌成 `Ok(True)`**（D8：
+    Unknown 折叠必须声明）；其余 `Unknown`（探测本身失败，如 `PS_FAILED`）
+    原样穿透，不塌成通过或失败——判不出就是判不出。
+    """
     from . import supervisor
     try:
         snap = supervisor.snapshot(ctx, "api")
@@ -139,14 +152,23 @@ def gateway_port(ctx):
 
 
 def settings_mode(ctx):
-    """settings.json 权限不宽于 0600（里面有两把密钥）。文件不存在 ⇒ 通过。"""
+    """settings.json 权限不宽于 0600（里面有两把密钥）。文件不存在 ⇒ 通过。
+
+    `os.path.exists` 与 `os.stat` 之间有 TOCTOU 窗口（文件被并发删除、
+    上级目录不可读等）；这里不让 `OSError` 原样穿出去 —— `cmd.check` 的
+    12 行主产物一项探测失败不能连累另外 11 项全丢
+    （`test_l3_check_failure_keeps_the_twelve_rows` 护的就是这条）。
+    """
     import stat
 
     from . import store
     p = store.settings_path(ctx)
-    if not os.path.exists(p):
-        return Ok(True)
-    return Ok(not (stat.S_IMODE(os.stat(p).st_mode) & 0o077))
+    try:
+        if not os.path.exists(p):
+            return Ok(True)
+        return Ok(not (stat.S_IMODE(os.stat(p).st_mode) & 0o077))
+    except OSError as e:
+        return Unknown("PARSE_FAILED", str(e)[:120])
 
 
 ALL = {
