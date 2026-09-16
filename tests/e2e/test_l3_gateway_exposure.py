@@ -1,0 +1,230 @@
+"""L3 · 真安装产物上由 `mlx up api` 起的真网关（spec §8.2「来源·分类」「传输」「TLS」、§8.3「密钥·泄漏」）。
+
+REMOTE 来源**真实触发**：客户端 socket 绑定本机 Wi-Fi / 有线 / 虚拟机网桥上的 IPv4 再连网关，
+网关看到的对端地址就是它 —— 产品代码里没有「把回环当远端」的测试钩子。
+
+2 MB 请求体不真的发：见 controller ruling —— 只发**超限 Content-Length 的请求头**、
+不写体、只读状态行断 413，跟 Task 7（`tests/integration/test_l2_gateway_server.py`）的
+`raw_request` 用同一形状。真发 2 MB 体在这台机器上会在 server 判 413 不读体、
+client 自己的 write 卡住再 ECONNRESET（预检 10/10 复现），测的是传输巧合不是行为。
+"""
+import http.client
+import json
+import os
+import re
+import socket
+import ssl
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cardinality import Cardinality  # noqa: E402
+from floor import run_floor  # noqa: E402
+
+pytestmark = pytest.mark.e2e
+
+
+def _free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+@pytest.fixture()
+def product(tmp_path, repo):
+    roots = {"MLX_ROOT_CODE": tmp_path / "code", "MLX_ROOT_DATA": tmp_path / "data",
+             "MLX_ROOT_WEIGHTS": tmp_path / "weights"}
+    port = _free_port()
+    env = dict(os.environ, PATH="/usr/bin:/bin", MLX_GATEWAY_PORT=str(port),
+               **{k: str(v) for k, v in roots.items()})
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+                       capture_output=True, text=True, timeout=120, check=False, env=env)
+    assert r.returncode == 0, r.stderr
+    code = roots["MLX_ROOT_CODE"]
+
+    def mlx(*argv, extra_env=None):
+        return subprocess.run([str(code / "bin" / "mlx"), *argv], capture_output=True, text=True,
+                              timeout=90, check=False,
+                              env=dict(env, MLX_SHARE_ROOT=str(code / "share"), **(extra_env or {})))
+
+    data = roots["MLX_ROOT_DATA"]
+    settings = json.loads((data / "settings.json").read_text())
+    try:
+        yield {"mlx": mlx, "port": port, "data": data, "code": code, "root": tmp_path,
+               "token": settings["api.token"], "backend_key": settings["backend.api_key"],
+               "roots": list(roots.values())}
+    finally:
+        mlx("down", "api")
+
+
+def _lan_ipv4(payload, sys_py):
+    got = run_floor(payload, sys_py, """
+        import json
+        from gateway import peers
+        from mlx_server.ctx import DEFAULT_BINS
+        hw, ifc = peers.command_loader(DEFAULT_BINS)()
+        n = peers.compute_nets(peers.parse_hardware_ports(hw), peers.parse_ifconfig(ifc))
+        print(json.dumps([a["addr"] for a in n["allowed"]
+                          if a["kind"] in ("wifi", "ethernet", "vm") and a["addr"]
+                          and ":" not in a["addr"]]))
+    """, with_gateway=True)
+    assert got, ("本机没有 Wi-Fi / 有线 / 虚拟机网桥上的 IPv4 地址 —— REMOTE 来源无法真实触发。"
+                 "spec §8.2 要求此时失败而不是跳过：连上 Wi-Fi 或启动 Parallels 后重跑")
+    return got[0]
+
+
+def _http(host, port, method, path, token=None, body=None, source=None, tls_ctx=None):
+    kw = {"timeout": 30, "source_address": (source, 0) if source else None}
+    conn = (http.client.HTTPSConnection(host, port, context=tls_ctx, **kw) if tls_ctx
+            else http.client.HTTPConnection(host, port, **kw))
+    headers = {}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    conn.request(method, path, body=body, headers=headers)
+    r = conn.getresponse()
+    raw = r.read()
+    conn.close()
+    return r.status, raw
+
+
+def _headers_only_status(host, port, token, content_length, path="/v1/chat/completions",
+                         timeout=5):
+    """发只带请求头的 POST（声明 `content_length` 字节的体，一个字节体都不写），只读状态行。
+
+    controller ruling 1 的替代形状：不真的发一个超大体 —— server 看 `Content-Length`
+    立刻判超限就回 413 且不读体，client 若真写体会在这条连接上卡住再被 RST。
+    这里连体都不构造、不 sendall，规避同一条竞态。
+    """
+    s = socket.create_connection((host, port), timeout=timeout)
+    head = (f"POST {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n"
+           f"Content-Type: application/json\r\nContent-Length: {content_length}\r\n\r\n").encode()
+    s.sendall(head)
+    s.settimeout(timeout)
+    try:
+        first = s.recv(256).decode(errors="replace")
+    except OSError:
+        first = ""
+    s.close()
+    m = re.match(r"HTTP/1\.[01] (\d+)", first)
+    assert m, f"没收到状态行：{first!r}"
+    return int(m.group(1))
+
+
+def _wait_record(data, key, want=None, timeout=15):
+    path = data / "run" / "api.json"
+    end = time.time() + timeout
+    while time.time() < end:
+        if path.exists():
+            rec = json.loads(path.read_text())
+            if key in rec and (want is None or rec[key] == want):
+                return rec
+        time.sleep(0.2)
+    raise AssertionError(f"{timeout}s 内运行记录没有出现 {key}={want!r}")
+
+
+def test_remote_peer_record_checks_and_no_key_leak(product, payload, sys_py):
+    lan = _lan_ipv4(payload, sys_py)
+    mlx, port, tok = product["mlx"], product["port"], product["token"]
+    r = mlx("up", "api")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    rec = _wait_record(product["data"], "nets_source", "parsed")
+    assert rec["bind"] == "0.0.0.0" and rec["interpreter"], rec
+    assert any(n.get("addr") == lan for n in rec["allowed_nets"]), f"{lan} 不在放行网段：{rec}"
+
+    assert _http(lan, port, "GET", "/v1/models", token=tok, source=lan)[0] == 200
+    assert _http(lan, port, "GET", "/v1/models", source=lan)[0] == 401
+    assert _http("127.0.0.1", port, "GET", "/v1/models")[0] == 401, "本机也要令牌"
+    assert _http("127.0.0.1", port, "GET", "/v1/models", token="wrong" * 8)[0] == 401
+    assert _http("127.0.0.1", port, "POST", "/v1/unload", token=tok, body=b"{}")[0] == 404
+
+    info = json.loads(mlx("api", "info", "--json").stdout)
+    assert f"http://{lan}:{port}/v1" in [u["openai"] for u in info["urls"]]
+    assert info["token"]["state"] == "ok"
+
+    check = mlx("check")
+    text = check.stdout + check.stderr
+    for item in ("gateway_nets", "gateway_port", "settings_mode"):
+        assert re.search(item + r"\s+ok", text), f"check 的 {item} 未通过：\n{text}"
+    mlx("status")
+
+    needles = [product["token"], product["backend_key"]]
+    needles += [n[:8] for n in needles]
+    scanned, leaked = [], []
+    for base in product["roots"]:
+        for p in base.rglob("*"):
+            if p.is_symlink() or not p.is_file() or p.name == "settings.json" or ".venv" in p.parts:
+                continue
+            if p.stat().st_size > 50 * 1024 * 1024:
+                continue
+            scanned.append(p.name)
+            if any(n.encode() in p.read_bytes() for n in needles):
+                leaked.append(str(p))
+    Cardinality.require_nonempty("被扫描的文件", scanned, "一个文件都没扫到 ⇒ 空真")
+    assert "api.log" in scanned and "api.json" in scanned, "泄漏扫描没覆盖网关日志与运行记录"
+    Cardinality.check("含密钥的文件", leaked, rel="empty")
+
+
+def test_tls_transport_env_token_and_loopback_bind(product, payload, sys_py):
+    lan = _lan_ipv4(payload, sys_py)
+    mlx, port, tok, root = product["mlx"], product["port"], product["token"], product["root"]
+
+    cert, key = root / "gw.crt", root / "gw.key"
+    subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(key), "-out", str(cert), "-days", "1", "-subj", "/CN=mlx-gateway",
+                    "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True)
+    key.chmod(0o600)
+    for k, v in (("api.tls_cert", cert), ("api.tls_key", key)):
+        assert mlx("config", "set", k, f"--value={v}").returncode == 0
+    r = mlx("up", "api")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _wait_record(product["data"], "tls")["tls"] is True
+    tls_ctx = ssl.create_default_context(cafile=str(cert))
+    assert _http("127.0.0.1", port, "GET", "/v1/models", token=tok, tls_ctx=tls_ctx)[0] == 200
+
+    s = socket.create_connection(("127.0.0.1", port), 3)
+    s.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+    s.settimeout(3)
+    t0 = time.time()
+    try:
+        data = s.recv(64)
+    except OSError:
+        data = b""
+    assert data == b"" and time.time() - t0 < 2, "明文请求打到 TLS 端口应被立即关闭"
+
+    key.chmod(0o644)
+    r = mlx("restart", "api")
+    assert r.returncode == 6 and "0600" in (r.stdout + r.stderr), r.stdout + r.stderr
+    key.chmod(0o600)
+    for k in ("api.tls_cert", "api.tls_key"):
+        assert mlx("config", "unset", k).returncode == 0
+
+    assert mlx("config", "set", "api.max_body_mb", "--value=1").returncode == 0
+    assert mlx("up", "api").returncode == 0
+    status = _headers_only_status("127.0.0.1", port, tok, 2 * 1024 * 1024)
+    assert status == 413, "1 MB 上限下声明 2 MB 体的请求应立即 413（只发头，不发体）"
+    assert mlx("config", "unset", "api.max_body_mb").returncode == 0
+
+    other = "E" * 43
+    r = mlx("restart", "api", extra_env={"MLX_GATEWAY_TOKEN": other})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _http("127.0.0.1", port, "GET", "/v1/models", token=tok)[0] == 401
+    assert _http("127.0.0.1", port, "GET", "/v1/models", token=other)[0] == 200
+    assert _wait_record(product["data"], "token_source")["token_source"] == "env"
+    huge = json.dumps({"pad": "x" * (200 * 1024 * 1024)}).encode()
+    assert _http("127.0.0.1", port, "POST", "/v1/chat/completions", token=other, body=huge)[0] == 400, \
+        "默认上限 256 MB 内的请求体应通过上限检查（缺 model ⇒ 400）"
+
+    assert mlx("config", "set", "api.bind", "--value=127.0.0.1").returncode == 0
+    assert mlx("restart", "api").returncode == 0
+    assert _http("127.0.0.1", port, "GET", "/v1/models", token=tok)[0] == 200
+    with pytest.raises(OSError):
+        socket.create_connection((lan, port), 2)
