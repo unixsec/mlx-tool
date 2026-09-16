@@ -45,6 +45,9 @@ api.allow_cidrs	str	#cidrs		user	global	gateway	yes	no	api	backendarg,gw.peers,c
 api.tls_cert	str	<证书路径>		user	global	gateway	no	no	api	backendarg,gw.server,cmd.svc,cmd.api
 api.tls_key	str	<私钥路径>		user	global	gateway	no	no	api	backendarg,gw.server,cmd.svc
 api.max_body_mb	int	1-2048	256	user	global	gateway	yes	no	api	backendarg,gw.server
+api.media_max_mb	int	1-2048	128	user	global	gateway	yes	no	api	backendarg,gw.media
+api.media_max_parts	int	1-256	32	user	global	gateway	yes	no	api	backendarg,gw.media
+api.inflight_max_mb	int	64-65536	2048	user	global	gateway	yes	no	api	backendarg,gw.media
 fit.reserve_pct	int	0-99	20	user	global	none	yes	no	fitness	fitness
 fit.tight_pct	int	1-100	75	user	global	none	yes	no	fitness	fitness
 fit.over_pct	int	1-100	95	user	global	none	yes	no	fitness	fitness

@@ -222,7 +222,11 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce, extra=None):
                     # `-`（这张表「未给」的既有哨兵，`key_env`/`env_clear` 等列同一套写法）
                     # 与空 cell 都规范成空列表 —— 网关侧 `endpoints_of` 把空列表当「未给」回退
                     "endpoints": [e for e in (rt.row.get("endpoints") or "").split(",")
-                                 if e and e != "-"]})
+                                 if e and e != "-"],
+                    # 网关据此做兼容映射（spec §4.5）：记录快照，不在请求时查表
+                    "reads_completion_tokens":
+                        rt.row.get("completion_tokens") == "max_completion_tokens",
+                    "native_template_kwargs": rt.row.get("thinking_params") == "template_kwargs"})
     if not spec.model_arg:
         # 网关：密钥只存指纹（spec §3.4），`status` 用它判「已变更，需重启」
         from .route import key_fingerprint

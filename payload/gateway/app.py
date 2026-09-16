@@ -13,15 +13,18 @@ from . import endpoints, guard, peers, routes, translate
 T1_FACADE = ("store.load", "supervisor.running",
              "supervisor.port_owner", "supervisor.snapshot", "supervisor.merge_record")
 
+# 媒体与在途预算的出厂值（spec §4.4；与 schema.tsv 同值 —— 网关进程读环境变量，缺失时用这里）
+LIMIT_DEFAULTS = {"media_max_mb": 128, "media_max_parts": 32, "inflight_max_mb": 2048}
+
 
 class Gateway:
     """网关进程内状态。**日志两条流写本进程 fd 1/2**，文件由 supervisor 重定向。"""
 
     __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key", "nets",
-                 "_key_missing_logged", "_key_missing_had_key")
+                 "_key_missing_logged", "_key_missing_had_key", "limits")
 
     def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None, backend_key=None,
-                 nets=None):
+                 nets=None, limits=None):
         self.ctx = ctx
         self.facade = facade            # {name: callable}，键集 == T1_FACADE
         self.view = routes.RouteView()
@@ -30,6 +33,7 @@ class Gateway:
         self._token = token
         self._backend_key = backend_key
         self.nets = nets
+        self.limits = dict(LIMIT_DEFAULTS, **(limits or {}))
         # `backend_key_missing` 去重：按「模型 + 当前是否有密钥」——密钥状态翻转
         # （比如运行中改配置后重装配）就重新起算，翻转前的沉默不会漏掉新一轮缺钥匙
         self._key_missing_logged = set()

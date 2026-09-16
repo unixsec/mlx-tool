@@ -51,6 +51,19 @@ def make_reporter(facade, ctx, pid=None):
     return report
 
 
+def _int_env(key, default):
+    # type: (str, int) -> int
+    """读一个整数环境变量；缺失或非法用出厂值并记日志（spec §4.8）。"""
+    raw = os.environ.get(key)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        log_event("error", "bad_env", key=key)
+        return default
+
+
 def main(argv):
     share = os.environ.get("MLX_SHARE_ROOT") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "share")
@@ -76,14 +89,13 @@ def main(argv):
     nets = peers.NetView(peers.command_loader(c.bins),
                          allow_cidrs=os.environ.get("MLX_GATEWAY_ALLOW_CIDRS", ""),
                          on_change=make_reporter(facade, c))
-    gw = Gateway(c, facade, bind_addr=bind, token=token, backend_key=backend_key, nets=nets)
+    gw = Gateway(c, facade, bind_addr=bind, token=token, backend_key=backend_key, nets=nets,
+                 limits={"media_max_mb": _int_env("MLX_GATEWAY_MEDIA_MAX_MB", 128),
+                         "media_max_parts": _int_env("MLX_GATEWAY_MEDIA_MAX_PARTS", 32),
+                         "inflight_max_mb": _int_env("MLX_GATEWAY_INFLIGHT_MAX_MB", 2048)})
 
     # 进程配置全部来自 `backendarg.spec("api")` 设的环境变量（spec §4.8）；缺失或非法用出厂值并记日志
-    try:
-        max_body_mb = int(os.environ.get("MLX_GATEWAY_MAX_BODY_MB") or DEFAULT_MAX_BODY_MB)
-    except ValueError:
-        log_event("error", "bad_env", key="MLX_GATEWAY_MAX_BODY_MB")
-        max_body_mb = DEFAULT_MAX_BODY_MB
+    max_body_mb = _int_env("MLX_GATEWAY_MAX_BODY_MB", DEFAULT_MAX_BODY_MB)
     cert = os.environ.get("MLX_GATEWAY_TLS_CERT") or ""
     key = os.environ.get("MLX_GATEWAY_TLS_KEY") or ""
     tls = None
