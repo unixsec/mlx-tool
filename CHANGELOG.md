@@ -15,6 +15,10 @@
 - **新配置键**：`modality`（auto / text / vision）、`max_concurrency`（默认 8）
 - `mlx model info` 显示模态依据、模板默认的思考开关与 effort 值域；`model ls` 增「模态」列；`status` 增「后端」「并发」列
 - `mlx model repair` 清除 1.0.0 旧字段与退役配置键
+- **多来源接入**：网关放行本机、同一 Wi-Fi / 有线网段、Parallels / VMware 共享网络的虚拟机（按硬件端口类型与虚拟机网桥判定，VPN 与雷雳网桥拒绝），可用 `api.allow_cidrs` 追加网段
+- **端点**：`/v1/responses`（含按 id 查询、删除、取消）与 Anthropic `/v1/messages`（多模态后端）；路径可省略 `/v1`
+- **可选 TLS**：`api.tls_cert` / `api.tls_key`，最低 TLS 1.2
+- `mlx api info` 列出各来源的 OpenAI 与 Anthropic base URL、放行网段、令牌与 TLS 状态；`mlx check` 增至 12 项（放行网段、网关端口外来占用、settings.json 权限）
 
 ### 变更
 
@@ -22,6 +26,12 @@
 - `--type` 变为可选，含义改为「模态覆盖」，写进该模型的 `modality`；不给不再报「无法判定类型」
 - 安装器默认安装 **mlx-vlm**（会带入 torch 等依赖，安装时间变长）；采集失败时打印原因
 - `MLX_GATEWAY_TOKEN` 仍可覆盖，但须满足令牌值域（32–128 位 `[A-Za-z0-9_-]`），过短的会被 `mlx up api` 拒绝
+- **`api.bind` 默认 127.0.0.1 → 0.0.0.0**（不兼容）。只给本机用：`mlx config set api.bind --value=127.0.0.1`
+- **所有来源都要令牌**，本机也不例外（不兼容）。1.0.0 在回环上免鉴权
+- **端点收紧**（不兼容）：此前任意 POST 路径都转发给后端；现在白名单之外一律 404，后端零请求
+- 后端 4xx 状态码透传（本机来源原文、远端来源去掉路径与异常片段）；后端 5xx 与鉴权失败返回 502
+- 网关请求体上限 8 MB → 256 MB（`api.max_body_mb`）；令牌与来源校验在读请求体之前完成
+- `mlx up api` 在令牌为空、TLS 配置不完整或私钥权限过宽、网关端口已被别的进程占用时拒绝启动
 
 ### 移除
 
@@ -33,6 +43,8 @@
 2. 跑一次 `mlx model repair` 清除旧字段
 3. MTP drafter 不再可用（mlx-vlm #2033）；配过 `draft_model` 指向 MTP 模型的，`mlx config unset <id> --key=draft_model`
 4. 网关与模型进程不再继承 shell 里的 `MLX_BACKEND_API_KEY` / `MLX_GATEWAY_TOKEN`：后端密钥请用 `mlx config set backend.api_key --value=…`（或 `mlx bootstrap keys` 生成）；网关令牌仍可用 `MLX_GATEWAY_TOKEN=… mlx up api` 临时覆盖
+5. 网关现在对局域网与虚拟机开放。只给本机用的：`mlx config set api.bind --value=127.0.0.1`；
+   所有客户端都要改为带令牌（`mlx config get --key=api.token --reveal`）
 
 ---
 

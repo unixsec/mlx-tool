@@ -106,6 +106,29 @@ fail-closed 是 D24 的设计意图，不是缺陷。后果：机器上没有 `/
 `argv[0]` 是占位值。照着 `--dry-run` 打印的命令行手工复现，跑起来的解释器可能与
 `mlx up api` 实际用的不是同一个。
 
+### TLS 关闭时同网段可旁听
+
+默认不开 TLS。同一 Wi-Fi 上的设备能看到请求内容与令牌。`mlx api info` 在这种情况下给出警告；开启方法见手册 {#remote}。
+
+### 放行网段依赖系统命令的输出格式
+
+放行网段由 `networksetup -listallhardwareports` 与 `ifconfig` 的输出解析。macOS 改变输出格式时解析会失败：
+网关沿用上一份结果（从未成功过则只放行本机），`mlx check` 的 `gateway_nets` 项不通过。
+
+### 端口复用保持开启
+
+`allow_reuse_address` 关掉会让 `mlx restart api` 在网关刚处理过请求后必然失败（实测 `errno 48`），所以保持开启。
+代价是别的进程可能同时占着 `127.0.0.1:<网关端口>`：`mlx up api` 起之前会检查并拒绝；网关起来**之后**才出现的占用者，
+由 `mlx check` 的 `gateway_port` 项发现。
+
+### 持有令牌的来源能看到全部在跑的模型
+
+`/v1/models` 对所有持令牌的请求列出全部在跑模型，不按来源区分。
+
+### 未开放的端点
+
+embeddings、rerank、images、audio、realtime 不经网关（它们只对相应类型的模型有意义，对生成模型调用会再加载一份权重）。
+
 ---
 
 ## 二、机制层面的缺口

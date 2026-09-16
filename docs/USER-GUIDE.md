@@ -579,13 +579,15 @@ $ mlx up api
 
 ```
 $ mlx api info
-  ✓ 网关   在跑
-    地址   http://127.0.0.1:8080/v1
-    端口   8080   pid 48057
+  ✓ 网关   在跑   pid 65853
+    地址（OpenAI 兼容 base URL / Anthropic base URL）
+      本机            http://127.0.0.1:8080/v1   http://127.0.0.1:8080
+      Wi-Fi           http://192.168.2.11:8080/v1   http://192.168.2.11:8080
+      虚拟机共享网络  http://10.211.55.2:8080/v1   http://10.211.55.2:8080
+    绑定   0.0.0.0   TLS 关
+    令牌   已配置   来源 config   与运行中一致
     可用   qwen38
     未起   qwen38-d（已登记，但网关转发不到）
-
-  同机场景下模型端口本就在回环上无鉴权监听；网关令牌提供零额外阻挡，真正的边界是绑定地址
 ```
 
 **网关端口默认 8080**，与模型端口（`mlx model ls` 里那一列）是两回事 ——
@@ -597,8 +599,8 @@ Cherry Studio / OpenWebUI / 任何 OpenAI 兼容客户端，填这三项：
 
 | 配置项 | 填什么 | 从哪来 |
 |---|---|---|
-| **API 地址 / Base URL** | `http://127.0.0.1:8080/v1` | `mlx api info` 的「地址」行 |
-| **API 密钥 / API Key** | 回环绑定时任意非空串；局域网绑定时填网关令牌 | 令牌：`mlx config get --key=api.token --reveal` |
+| **API 地址 / Base URL** | 本机填 `http://127.0.0.1:8080/v1`；虚拟机或 Wi-Fi 上的设备填对应那行 | `mlx api info` 的「地址」段 |
+| **API 密钥 / API Key** | 网关令牌 —— **所有来源都要**，本机也不例外 | `mlx config get --key=api.token --reveal` |
 | **模型 ID / Model** | `qwen38` | `mlx api info` 的「可用」行，或 `mlx model ls` |
 
 在 Cherry Studio 里的位置：**设置 → 模型服务 → 添加提供商 → 选「OpenAI 兼容」**，
@@ -647,7 +649,8 @@ $ curl ... -d '{"model":"qwen38","messages":[...],"max_tokens":20}'
 
 ```bash
 # 1. 列模型 —— 应当能看到你起的那个
-curl -s http://127.0.0.1:8080/v1/models
+curl -s http://127.0.0.1:8080/v1/models \
+  -H "Authorization: Bearer $(mlx config get --key=api.token --reveal)"
 ```
 
 ```json
@@ -657,6 +660,7 @@ curl -s http://127.0.0.1:8080/v1/models
 ```bash
 # 2. 发一次对话。max_tokens 给够，否则推理模型只会返回 reasoning 没有 content
 curl -s http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(mlx config get --key=api.token --reveal)" \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen38","messages":[{"role":"user","content":"1+1=?"}],"max_tokens":2048}'
 ```
@@ -664,6 +668,7 @@ curl -s http://127.0.0.1:8080/v1/chat/completions \
 ```bash
 # 3. 流式（多数客户端默认走这条），结尾应当有 data: [DONE]
 curl -sN http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(mlx config get --key=api.token --reveal)" \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen38","messages":[{"role":"user","content":"数到三"}],"max_tokens":2048,"stream":true}'
 ```
@@ -671,26 +676,94 @@ curl -sN http://127.0.0.1:8080/v1/chat/completions \
 `/v1/models` 列的是**正在跑的**模型。列表是空的说明模型没起 —— 回第五节，
 先 `mlx up <id>`，再刷新客户端的模型列表。
 
-### 让局域网其它机器连
+### 从虚拟机、同一 Wi-Fi 的设备连 {#remote}
 
-默认只绑回环（`127.0.0.1`），别的机器连不上。要开放：
+网关默认绑定全部网卡（`api.bind` = `0.0.0.0`），但**只放行这几类来源**，其余一律回 403 `peer_not_allowed`：
+
+| 来源 | 放行依据 |
+|---|---|
+| 本机 | 回环地址 |
+| 同一 Wi-Fi / 有线网段的设备 | 硬件端口类型为 Wi-Fi 或以太网的网卡所在网段 |
+| Parallels / VMware 虚拟机（共享网络） | 成员含 `vmenet` / `vnic` 的网桥所在网段 |
+| 你额外指定的网段 | `mlx config set api.allow_cidrs --value=192.168.8.0/24,fd00:1::/64` |
+
+VPN（`utun*`）、雷雳网桥、AirDrop 等接口**不放行** —— VPN 对端不是你的局域网。网卡换网（换 Wi-Fi、开热点）后
+网关 30 秒内自动重算；新设备第一次连进来时会立即重算一次。
+
+`mlx api info` 列出每类来源该填的地址：
+
+```
+$ mlx api info
+  ✓ 网关   在跑   pid 65853
+    地址（OpenAI 兼容 base URL / Anthropic base URL）
+      本机            http://127.0.0.1:8080/v1   http://127.0.0.1:8080
+      Wi-Fi           http://192.168.2.11:8080/v1   http://192.168.2.11:8080
+      虚拟机共享网络  http://10.211.55.2:8080/v1   http://10.211.55.2:8080
+    绑定   0.0.0.0   TLS 关
+    令牌   已配置   来源 config   与运行中一致
+```
+
+**令牌**：所有来源都要。客户端填 `Authorization: Bearer <令牌>` 或 `x-api-key: <令牌>`（Anthropic 客户端用后者）。
 
 ```bash
-mlx config set api.bind --value=0.0.0.0     # 绑全部网卡
+mlx config get --key=api.token --reveal       # 看原值
+mlx config set api.token --value=<新值>        # 轮换（32–128 位字母、数字、_ 或 -）
 mlx restart api
-mlx api info                                 # 「地址」行会变成 0.0.0.0，确认一下
 ```
 
-**令牌是配置项 `api.token`**，安装时已生成（`settings.json`，权限 0600，`config ls` 里显示 `****`）：
+临时换一个令牌起网关：`MLX_GATEWAY_TOKEN='<32 位以上的串>' mlx up api`（环境变量覆盖配置，只对这次启动有效）。
+
+**只给本机用**：`mlx config set api.bind --value=127.0.0.1 && mlx restart api`。
+
+**TLS（可选，默认关）**：TLS 关闭时同一网段上的设备能看到请求内容与令牌。需要时：
 
 ```bash
-mlx config get --key=api.token --reveal      # 看原值，填进客户端的 API Key
-mlx config set api.token --value=<新值>       # 轮换（32–128 位字母、数字、_ 或 -）
-mlx restart api                               # 改完要重启网关才生效
+cd ~/.local/state/mlx_server
+openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout gateway.key -out gateway.crt \
+  -subj "/CN=mlx-gateway" -addext "subjectAltName=IP:127.0.0.1,IP:192.168.2.11,IP:10.211.55.2"
+chmod 600 gateway.key
+mlx config set api.tls_cert --value="$PWD/gateway.crt"
+mlx config set api.tls_key --value="$PWD/gateway.key"
+mlx restart api
 ```
 
-临时换一个令牌起网关也可以：`MLX_GATEWAY_TOKEN='<32 位以上的串>' mlx up api` —— 环境变量覆盖配置，只对这次启动有效。
-`mlx status` 会在令牌或后端密钥变更后提示需要重启哪些服务。
+`subjectAltName` 里写 `mlx api info` 列出的地址。客户端要信任这张证书（把 `gateway.crt` 导入，或在 curl 里用 `--cacert gateway.crt`）。
+私钥权限宽于 0600 时 `mlx up api` 会拒绝启动。系统 python 最高支持 TLS 1.2，装了推理 venv 时网关自动用 venv 的解释器（TLS 1.3）。
+
+### 接入各类客户端 {#clients}
+
+| 客户端 | 配置 |
+|---|---|
+| Cherry Studio / OpenWebUI | 「OpenAI 兼容」提供商：Base URL 填 `…/v1`，API Key 填令牌，模型 id 填 `mlx api info` 的「可用」 |
+| Claude Code | `ANTHROPIC_BASE_URL=http://<地址>:8080` `ANTHROPIC_AUTH_TOKEN=<令牌>` `ANTHROPIC_MODEL=qwen38` |
+| Qwen Code 等 OpenAI 兼容 CLI | `OPENAI_BASE_URL=http://<地址>:8080/v1` `OPENAI_API_KEY=<令牌>` `OPENAI_MODEL=qwen38` |
+| Codex CLI | `~/.codex/config.toml` 见下 |
+
+```toml
+model = "qwen38"
+model_provider = "mlx"
+
+[model_providers.mlx]
+name = "mlx-toolkit"
+base_url = "http://127.0.0.1:8080/v1"
+env_key = "MLX_GATEWAY_TOKEN"          # 在 shell 里 export MLX_GATEWAY_TOKEN=<令牌>
+wire_api = "responses"
+```
+
+**端点按后端能力开放**（后端由权重自动判定，见[自动选择后端](#backend)）：
+
+| 端点 | 文本模型（mlx_lm） | 多模态模型（mlx_vlm） |
+|---|---|---|
+| `/v1/chat/completions` | ✓ | ✓ |
+| `/v1/completions` | ✓ | 404 `endpoint_not_supported_by_backend` |
+| `/v1/responses` 及 `/v1/responses/{id}` 系列 | 404 | ✓ |
+| `/v1/messages`（Anthropic） | 404 | ✓ |
+| 其他路径（embeddings、images、audio、管理端点） | 404 `endpoint_not_supported` | 同左 |
+
+路径带不带 `/v1` 都行。Codex 与 Claude Code 分别只用 responses 与 messages，所以只能配多模态后端的模型。
+
+**本版暂不支持**：由网关代取 `http(s)://` 图片（请传 `data:` URL）；`reasoning_effort` 超出模型模板接受的取值时后端报错
+（qwen38 只接受 `low` / `medium` / `xhigh`）。
 
 ---
 
@@ -839,7 +912,7 @@ MLX_ROOT_WEIGHTS=<你的权重根> \
 
 **数据不会丢**：升级只替换代码根，注册表、会话、权重都在另外两个根里，原样不动。
 
-升级后跑一次 `mlx check`，九项应该全绿。
+升级后跑一次 `mlx check`，十二项应该全绿。
 
 ---
 
@@ -984,8 +1057,11 @@ $ mlx check
   ✓ run_dir       ok
   ✓ ports         ok
   ✓ caps          ok
+  ✓ gateway_nets   ok
+  ✓ gateway_port   ok
+  ✓ settings_mode  ok
 
-  9 项，8 项通过，1 项未通过：venv
+  12 项，11 项通过，1 项未通过：venv
 ```
 
 失败项的 detail 是**可操作的下一步**，不是一个裸的 `False`。
@@ -1144,6 +1220,15 @@ curl 通而 `mlx chat` 不通，说明注册表里登记的端口与实际监听
 
 mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟。超时按体积算（`20 + 3 × 体积 GB` 秒），
 报错里会说明「可能只是还没加载完」—— 先 `mlx status <id>` 看它是否已在跑，不要重复 `up`。
+
+### 客户端收到 403 / 401 / 415
+
+| 状态码 | 含义 | 怎么办 |
+|---|---|---|
+| 403 `peer_not_allowed` | 来源地址不在放行网段（常见：经 VPN 连、网桥不是虚拟机网桥） | `mlx api info` 看放行网段；确需放行：`mlx config set api.allow_cidrs --value=<网段>` 后 `mlx restart api` |
+| 401 | 没带令牌或令牌不对（本机也要） | `mlx config get --key=api.token --reveal` |
+| 415 | 请求头不是 `Content-Type: application/json` | 客户端改请求头 |
+| 404 `endpoint_not_supported_by_backend` | 该模型的后端不提供这个端点 | 看[端点表](#clients) |
 
 ### 退出码
 

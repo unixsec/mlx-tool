@@ -347,7 +347,7 @@ def build_deps(ctx):
         "bench": bench_once,
         "confirm": confirm,
         "caps_drift": lambda: _drift(ctx, venv_py),
-        "checks": checks.ALL,          # 九项健康检查的生产实现
+        "checks": checks.ALL,          # 十二项健康检查的生产实现
         "wait_ready": lambda spec, port, timeout_sec: wait_ready(
             ctx, spec, port, timeout_sec=timeout_sec,
             log_path=os.path.join(ctx.root_data, "logs", f"{spec.service}.log")),

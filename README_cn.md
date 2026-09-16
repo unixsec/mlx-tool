@@ -43,7 +43,7 @@ brew install python@3.13
 git clone https://github.com/<你>/mlx-tool.git && cd mlx-tool
 bash deployer/install.sh
 source ~/.zshrc          # 或者新开一个终端
-mlx check                # 9 项检查，应该全过
+mlx check                # 12 项检查，应该全过
 ```
 
 ### 跑一个模型
@@ -62,13 +62,14 @@ mlx chat qwen38 --prompt="用一句话说明什么是投机解码"
 
 ```bash
 mlx up api               # OpenAI 兼容网关
-mlx api info             # → http://127.0.0.1:8080/v1
+mlx api info             # 本机、虚拟机、Wi-Fi 设备各自该填的地址
+mlx config get --key=api.token --reveal   # 所有客户端都要带的令牌
 ```
 
 | 客户端里填 | 值 |
 |---|---|
-| API 地址 | `http://127.0.0.1:8080/v1` |
-| API 密钥 | 任意非空值 —— 网关不校验它 |
+| API 地址 | 本机：`http://127.0.0.1:8080/v1`；虚拟机或 Wi-Fi 设备：`mlx api info` 里对应那行 |
+| API 密钥 | 网关令牌 —— 所有来源都要，本机也不例外 |
 | 模型 ID | `qwen38`（`mlx model ls` 里的 id，不是 HF 仓库名） |
 
 > ⚠️ **`max_tokens` 要给到 2048 以上。** 推理模型会先把思考过程输出到单独的
@@ -94,7 +95,7 @@ mlx api info             # → http://127.0.0.1:8080/v1
 
 ## 🖼️ 长什么样
 
-**健康检查 —— 九项，每一项失败时都给可执行的修法**
+**健康检查 —— 十二项，每一项失败时都给可执行的修法**
 
 ```console
 $ mlx check
@@ -107,8 +108,11 @@ $ mlx check
   ✓ run_dir       ok
   ✓ ports         ok
   ✓ caps          ok
+  ✓ gateway_nets   ok
+  ✓ gateway_port   ok
+  ✓ settings_mode  ok
 
-  9 项，9 项通过
+  12 项，12 项通过
 ```
 
 **状态 —— 登记了什么、在跑什么、吃多少内存**

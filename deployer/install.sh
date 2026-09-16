@@ -225,6 +225,20 @@ else
   say "     补齐之前，多模态模型（mlx_vlm）与网关将拒绝启动。补：mlx bootstrap keys"
 fi
 
+say "== 网关暴露面"
+# spec §4.1 升级提示：1.1.0 起 `api.bind` 默认 0.0.0.0。沿用默认的人（settings 里没显式设 api.bind）
+# 装完后网关对 Wi-Fi / 有线 / 虚拟机网段开放 —— 必须醒目说出来；显式设过的尊重其选择，不打扰。
+if MLX_SETTINGS="$DATA_ROOT/settings.json" /usr/bin/python3 -c '
+import json, os, sys
+p = os.environ["MLX_SETTINGS"]
+sys.exit(0 if os.path.exists(p) and "api.bind" in json.load(open(p)) else 1)' 2>/dev/null; then
+  say "   · api.bind 已显式设置，保持不变"
+else
+  say "   !! 网关默认绑定全部网卡（0.0.0.0）：本机、Parallels 虚拟机、同一 Wi-Fi / 有线网段都能连。"
+  say "      所有来源都要令牌（查看：mlx config get --key=api.token --reveal）；VPN、雷雳网桥等接口一律拒绝。"
+  say "      只给本机用：mlx config set api.bind --value=127.0.0.1"
+fi
+
 say "== 校验产物（按 manifest.tsv）"
 missing=0
 while IFS=$'\t' read -r path kind _; do

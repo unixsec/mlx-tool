@@ -381,3 +381,25 @@ def test_l3_keys_never_leak_into_files_or_output(installed):
                 leaked.append(str(p))
     Cardinality.require_nonempty("被扫描的文件", scanned, "一个文件都没扫到 ⇒ 空真")
     Cardinality.check("含密钥的文件", leaked, rel="empty")
+
+
+def test_l3_exposure_hint_only_when_bind_not_explicit(tmp_path, repo):
+    """spec §4.1「升级提示」：沿用默认（未显式设 api.bind）⇒ 醒目提示新暴露面；显式设过 ⇒ 不打扰。"""
+    def install(sub, settings=None):
+        roots = {k: tmp_path / sub / v for k, v in
+                 (("MLX_ROOT_CODE", "code"), ("MLX_ROOT_DATA", "data"),
+                  ("MLX_ROOT_WEIGHTS", "weights"))}
+        if settings is not None:
+            roots["MLX_ROOT_DATA"].mkdir(parents=True)
+            (roots["MLX_ROOT_DATA"] / "settings.json").write_text(json.dumps(settings))
+        env = dict(os.environ, PATH="/usr/bin:/bin", **{k: str(v) for k, v in roots.items()})
+        r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+                           capture_output=True, text=True, timeout=60, check=False, env=env)
+        assert r.returncode == 0, r.stderr
+        return r.stdout + r.stderr
+
+    fresh = install("fresh")
+    assert "0.0.0.0" in fresh and "mlx config set api.bind --value=127.0.0.1" in fresh
+    pinned = install("pinned", {"api.bind": "127.0.0.1"})
+    assert "api.bind 已显式设置" in pinned
+    assert "mlx config set api.bind --value=127.0.0.1" not in pinned

@@ -44,7 +44,7 @@ brew install python@3.13
 git clone https://github.com/<you>/mlx-tool.git && cd mlx-tool
 bash deployer/install.sh
 source ~/.zshrc          # or open a new terminal
-mlx check                # 9 checks — all should pass
+mlx check                # 12 checks — all should pass
 ```
 
 ### Run a model
@@ -63,13 +63,14 @@ mlx chat qwen38 --prompt="Explain speculative decoding in one sentence"
 
 ```bash
 mlx up api               # OpenAI-compatible gateway
-mlx api info             # → http://127.0.0.1:8080/v1
+mlx api info             # base URLs for this Mac, VMs and Wi-Fi devices
+mlx config get --key=api.token --reveal   # the token every client must send
 ```
 
 | Field in your client | Value |
 |---|---|
-| Base URL | `http://127.0.0.1:8080/v1` |
-| API Key | anything non-empty — the gateway does not check it |
+| Base URL | this Mac: `http://127.0.0.1:8080/v1`; a VM or Wi-Fi device: the matching row from `mlx api info` |
+| API Key | the gateway token — every source needs it, this Mac included |
 | Model ID | `qwen38` (the id from `mlx model ls`, not the HF repo name) |
 
 > ⚠️ **Set `max_tokens` to 2048 or higher.** Reasoning models emit thinking into
@@ -96,7 +97,7 @@ mlx api info             # → http://127.0.0.1:8080/v1
 
 ## 🖼️ Showcase
 
-**Health check — nine items, every one actionable when it fails**
+**Health check — twelve items, every one actionable when it fails**
 
 ```console
 $ mlx check
@@ -109,8 +110,11 @@ $ mlx check
   ✓ run_dir       ok
   ✓ ports         ok
   ✓ caps          ok
+  ✓ gateway_nets   ok
+  ✓ gateway_port   ok
+  ✓ settings_mode  ok
 
-  9 项，9 项通过
+  12 项，12 项通过
 ```
 
 **Status — what's registered, what's running, what it costs**
