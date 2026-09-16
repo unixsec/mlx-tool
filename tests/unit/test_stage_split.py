@@ -48,6 +48,35 @@ def _run_on_floor(payload: Path, sys_py: str, body: str):
                   os.path.join(_d, "w"), os.path.join(_d, "venv"),
                   8340, (8100, 8199), None, share_root=SHARE)
 
+        # ── 外部命令计数：**按类量，不按名字**（收尾评审 Critical 9）──
+        # 此前四个求值器各自盯着一个**具名**的桩：一个手注的 caps_drift lambda、
+        # `MLX_BIN_PS` 账本、`MLX_BIN_LSOF` 账本、文件系统 diff。并集仍然漏掉
+        # 「产品在 dry-run 路径上直接起了别的进程」这一整类 —— 实测把
+        # `subprocess.run(["/bin/echo", ...])` 注进 `_v_spec`（每一条
+        # `up ... --dry-run` 必经的校验步），25 条相关用例**全绿**。
+        # 改成钩产品真正汇聚过去的那个原语：`subprocess.Popen.__init__` 是
+        # `subprocess.run` 与 `Popen` 两种写法的共同底座，probe / templates /
+        # checks / runtime / peers 全部经它起进程；再补几个绕开 subprocess 的
+        # exec 原语，免得「换个写法就量不到」。
+        import subprocess as _sp
+        spawns = []
+        _real_popen_init = _sp.Popen.__init__
+        def _counting_popen_init(self, args, *a, **kw):
+            spawns.append(list(args) if isinstance(args, (list, tuple)) else [str(args)])
+            return _real_popen_init(self, args, *a, **kw)
+        _sp.Popen.__init__ = _counting_popen_init
+        for _n in ("system", "posix_spawn", "posix_spawnp",
+                   "execv", "execve", "execvp", "execvpe"):
+            _orig = getattr(os, _n, None)
+            if _orig is None:
+                continue
+            def _mk(orig=_orig, name=_n):
+                def _counting(*a, **kw):
+                    spawns.append([name] + [str(x) for x in a[:1]])
+                    return orig(*a, **kw)
+                return _counting
+            setattr(os, _n, _mk())
+
         calls = []
         deps = {
             "backendarg_spec": backendarg.spec,
@@ -70,10 +99,20 @@ def test_gate1_dry_run_runs_zero_external_commands(payload: Path, sys_py: str):
     """
     got = _run_on_floor(payload, sys_py, """
         out = run(ctx, None, Invocation("up", "qwen", dry_run=True), deps)
-        print(json.dumps({"rc": out.rc, "calls": calls}))
+        dry = list(spawns)
+        # **阳性对照**：证明这个计数器此刻真的在工作。没有它，「零外部命令」
+        # 可以由「钩子压根没装上」空真满足 —— 本项目自己总结过的
+        # 「失败会伪装成零发现」。
+        _sp.run(["/bin/echo", "probe"], capture_output=True)
+        print(json.dumps({"rc": out.rc, "calls": calls, "spawns": dry,
+                          "after_probe": len(spawns) - len(dry)}))
     """)
     assert got["rc"] == 0, f"dry-run 应成功，实得 {got}"
     assert got["calls"] == [], f"dry-run 跑了外部命令：{got['calls']}"
+    assert got["after_probe"] == 1, (
+        f"进程计数器没装上 —— 下面那条断言会空真通过：{got}")
+    assert got["spawns"] == [], (
+        f"dry-run 起了子进程（按类计数，不依赖任何具名桩）：{got['spawns']}")
 
 
 def test_gate1_dry_run_prints_spec_argv(payload: Path, sys_py: str):

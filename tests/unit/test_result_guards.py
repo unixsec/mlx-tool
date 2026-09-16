@@ -43,18 +43,46 @@ def test_result01_code_literals_in_registered_sets(payload: Path):
 
 
 CREATORS = {"mkdir", "makedirs", "commit", "spawn", "spawn_supervised",
-            "materialize", "lock", "open"}
+            "materialize", "lock", "open",
+            # `run/<service>.json` 的**唯一写者**（`supervisor.py:208` 逐字）。
+            # 漏了它，「起服务时写完运行记录之后再 Refused」这一整类违规不可见。
+            "write_record"}
+
+# **限定名**匹配的创建点。末段单独拿出来太常见 —— `str.replace` / `bytes.replace`
+# 遍地都是，把 `replace` 放进 `CREATORS` 会把一大片无关调用判红（守卫的提取面
+# 比不变式宽 ⇒ 假阳性）。所以这一类按 `模块.函数` 的全名匹配。
+QUALIFIED_CREATORS = {"atomic.replace", "_atomic.replace"}
+
+
+def _dotted(func):
+    """调用目标的限定名：`a.b.c(...)` → `"a.b.c"`，`f(...)` → `"f"`，其余 → `""`。"""
+    if isinstance(func, ast.Attribute):
+        base = _dotted(func.value)
+        return (base + "." + func.attr) if base else func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ""
 
 
 def _creates(node):
     """这次调用是否**创建**资源。
+
+    〔收尾评审 Critical 10〕创建者词汇表此前漏掉了产品**自己指定的两个写入原语**：
+    `atomic.replace`（`atomic.py:1`：唯一的原子替换实现点）与
+    `supervisor.write_record`（`supervisor.py:208`：`run/<service>.json` 的唯一写者）。
+    把这两个注入到 `route.decide()` 里某个 `Refused` 之前，19 条守卫用例全绿 ——
+    **代码越忠实地把写入收敛到单一写点，这条守卫就越瞎**：它认得的是
+    `open`/`commit` 这些泛化名字，而真正落盘的调用早就改叫别的了。
 
     `open` 要看模式：只读的 `open(p)` / `open(p, encoding=...)` 什么都不建，
     把它算进来会让「先读文件再校验、校验失败 Refused」这种完全正当的
     写法被判红 —— 守卫的提取面比不变式宽，报的是假阳性。
     判据：第二个位置参或 `mode=` 里含 `w`/`a`/`x`/`+`。
     """
-    nm = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+    dotted = _dotted(node.func)
+    if dotted in QUALIFIED_CREATORS:
+        return True
+    nm = dotted.rsplit(".", 1)[-1] if dotted else None
     if nm != "open":
         return nm in CREATORS
     mode = None
