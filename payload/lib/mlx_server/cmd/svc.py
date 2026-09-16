@@ -248,8 +248,18 @@ def _size_mb(rec, path):
 
 def _api_checks(cfg):
     # type: (object) -> object
-    """api 目标的校验（spec §4.1）。**只读文件系统**，所以留在校验段（dry-run 同样会拒）。"""
+    """api 目标的校验（spec §4.1）。**只读文件系统 + 一次本地 TLS 加载**，
+    所以留在校验段（dry-run 同样会拒；零资源已创建）。
+
+    判据与 `payload/gateway/server.py::tls_context` 逐条对齐（可读、私钥权限、
+    `load_cert_chain` 真的加载得动），但**不 import 网关代码** —— 复检 Important 1：
+    只查前两条会漏掉「文件读得到、权限也对，但内容不是合法证书/私钥，或证书与
+    私钥不配对」这一类——那种输入会一路混到执行段，网关子进程起来后自己发现
+    TLS 加载失败再退出（rc 6），用户看到的是 `Failed(10, svc.died_before_ready)`
+    加一段日志尾，而这本是**零资源创建**时就能问出的问题。
+    """
     import os
+    import ssl
     import stat
     v = cfg.values
     if not v.get("api.token"):
@@ -263,7 +273,11 @@ def _api_checks(cfg):
                 return Refused(6, "api.tls_unreadable", path=p)
         mode = stat.S_IMODE(os.stat(key).st_mode)
         if mode & 0o077:
-            return Refused(6, "api.tls_key_permissive", path=key, mode=oct(mode))
+            return Refused(6, "api.tls_key_permissive", path=key, mode=format(mode & 0o777, "03o"))
+        try:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key)
+        except (ssl.SSLError, OSError) as exc:
+            return Refused(6, "api.tls_unusable", cert=cert, key=key, detail=str(exc))
     return None
 
 

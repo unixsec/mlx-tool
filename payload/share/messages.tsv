@@ -208,4 +208,5 @@ api.token_missing	网关令牌 api.token 是空的 —— 所有来源（含本�
 api.tls_incomplete	TLS 只配了证书或私钥中的一个。两个都设：`mlx config set api.tls_cert --value=<证书>` 与 `mlx config set api.tls_key --value=<私钥>`；不用 TLS 就都清掉：`mlx config unset api.tls_cert` 与 `mlx config unset api.tls_key`
 api.tls_unreadable	TLS 文件读不到：{path}
 api.tls_key_permissive	私钥 {path} 的权限是 {mode}，宽于 0600，同机其他用户能读到它。修：chmod 600 {path}
+api.tls_unusable	证书或私钥读得到、权限也对，但加载不动（{detail}）。检查证书与私钥是否配对、是否为 PEM 格式：cert={cert}，key={key}
 ports.foreign_listener	端口 {port} 上已有别的进程在监听（pid {pids}）。网关与它共用端口时，发给本机的请求可能落到对方手里 —— 先停掉它，或换网关端口

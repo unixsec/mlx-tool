@@ -90,6 +90,22 @@ mlx_vlm 在并发请求下会静默输出损坏的内容（上游 mlx-vlm #2033�
 一旦模板绕过 jinja2 沙箱，它能读取当前用户可读的文件（包括 0600 的 `settings.json`）。
 只登记来源可信的模型；环境变量隔离是纵深防御，jinja2 沙箱才是实际边界。
 
+### `mlx up api` 硬依赖 `lsof`
+
+启动前检查端口上有没有外来监听者（spec D24）要调 `lsof`；探不到（`TOOL_UNAVAILABLE` /
+`TIMEOUT` / `PARSE_FAILED`）一律 `Refused(9, "ports.probe_undeterminable")`——
+fail-closed 是 D24 的设计意图，不是缺陷。后果：机器上没有 `/usr/sbin/lsof`，或
+`MLX_BIN_LSOF` 指到了一个不对的路径，网关**完全起不来**，而这在本版之前是可以的。
+更容易踩到的边界：`lsof` 退出非零但 stderr 有内容时判定成 `PS_FAILED`（同样是 `Unknown`，
+同样挡启动）——不止「命令不存在」这一种形状会触发它。
+
+### `up api --dry-run` 打印的命令行，解释器可能与真启动不同
+
+网关用哪个 python3 是**启动那一刻**才判定的（spec D20：venv 的解释器真的 import
+得动网关就用它，否则回落 `/usr/bin/python3`）；`--dry-run` 打印 argv 时这一步还没跑，
+`argv[0]` 是占位值。照着 `--dry-run` 打印的命令行手工复现，跑起来的解释器可能与
+`mlx up api` 实际用的不是同一个。
+
 ---
 
 ## 二、机制层面的缺口

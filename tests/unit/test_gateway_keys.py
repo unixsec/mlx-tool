@@ -59,9 +59,14 @@ from mlx_server.cmd.svc import Invocation, run
 deps = {"backendarg_spec": backendarg.spec}
 put_settings({"api.token": "T" * 43})
 a = run(ctx, None, Invocation("up", "api", dry_run=True), deps).payload["env"]
+# **真证书**：`_api_checks` 现在会真的 `ssl.load_cert_chain` 一次（复检 Important 1），
+# 垫片文本读得到、权限也对但加载不动，会在校验段被拒成 `api.tls_unusable`
+# 而不是这里要的 dry-run 成功。`/usr/bin/openssl` 生成到临时目录，不进仓库。
+import subprocess
 cert, key = os.path.join(DATA, "c.pem"), os.path.join(DATA, "k.pem")
-for p in (cert, key):
-    open(p, "w").write("x")
+subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048",
+               "-keyout", key, "-out", cert, "-days", "1", "-nodes",
+               "-subj", "/CN=mlxtest"], check=True, capture_output=True)
 os.chmod(key, 0o600)
 put_settings({"api.token": "T" * 43, "api.bind": "::", "api.allow_cidrs": "192.168.2.0/24",
               "api.tls_cert": cert, "api.tls_key": key, "api.max_body_mb": 16})
@@ -69,7 +74,7 @@ b = run(ctx, None, Invocation("up", "api", dry_run=True), deps).payload["env"]
 put_settings({"api.token": "T" * 43, "api.bind": "localhost"})
 c = run(ctx, None, Invocation("up", "api", dry_run=True), deps)
 print(json.dumps({"a": a, "b": b, "c": [c.rc, c.msg_key]}))
-""")
+""", timeout=60)
     keys = ("MLX_GATEWAY_BIND", "MLX_GATEWAY_ALLOW_CIDRS", "MLX_GATEWAY_TLS_CERT",
             "MLX_GATEWAY_TLS_KEY", "MLX_GATEWAY_MAX_BODY_MB")
     assert tuple(got["a"][k] for k in keys) == ("0.0.0.0", "", "", "", "256")

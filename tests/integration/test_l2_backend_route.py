@@ -208,3 +208,36 @@ print(json.dumps(up("noventv")))
     assert got["rc"] == 0, got
     assert got["route"]["rule"] == "R4" and got["route"]["backend"] == "mlx_lm"
     assert got["route"]["effort_domain"] == [], got["route"]
+
+
+def test_r2_real_up_success_payload_keeps_rule_for_serial_display(payload, sys_py):
+    """coverage gap（Task 8 修复轮 1）：R2「串行」显示此前只在 `--dry-run` 路径上
+    被断言过（`tests/e2e/test_route_r2_serial_display_e2e.py`），唯一间接相关的
+    非 dry-run 成功行用例（`test_l2_display.py`）手造了一个 R3 payload——丢了
+    `rule` 字段对 R3 是字节不变的（`_concurrency_display` 只在 `rule == "R2"`
+    时分岔），这条缝因此一直没被看见。
+
+    这里真的走一遍 R2 路线（mlx_lm + 独立完整 drafter）的**非 dry-run** `up`，
+    直接断言成功 payload 里的 `rule`——brief Step 6.5 给的替换代码丢了这个字段，
+    落地会让真实（非 `--dry-run`）`mlx up <R2 模型>` 的成功行显示「并发 8」
+    而不是「串行」，且没有任何已有测试会因此变红。
+    """
+    got = _run(payload, sys_py, """
+drafter_cfg = json.dumps({"architectures": ["LlamaForCausalLM"], "model_type": "llama"})
+seed("t2", "org/t2", 8110, config={}, user={"draft_model": "d2"})
+seed("d2", "org/d2", 8111, config=drafter_cfg)
+spawned = []
+deps.update({
+    "spawn": lambda spec, cwd: (spawned.append(list(spec.argv)),
+                                {"pid": 4242, "pgid": 4242, "started_at": "t"})[1],
+    "wait_ready": lambda spec, port, timeout_sec: None,
+})
+out = run(ctx, None, Invocation("up", "t2"), deps)
+print(json.dumps({"rc": out.rc, "payload": out.payload, "spawned": len(spawned)}))
+""")
+    assert got["rc"] == 0, got
+    assert got["spawned"] == 1, f"没有真的走到 spawn：{got}"
+    assert got["payload"]["rule"] == "R2", (
+        "真实（非 dry-run）up 成功 payload 丢了 rule —— R2「串行」判据读不到它："
+        + json.dumps(got))
+    assert got["payload"]["backend"] == "mlx_lm"
