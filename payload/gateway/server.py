@@ -169,29 +169,32 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.wfile.write(raw)
 
         def _parse_content_length(self):
-            # type: () -> object
-            """严格解析 `Content-Length`：**只接受一段裸数字**（`str.isdigit`），
-            拒绝空值、负号、`+` 前缀、内部空白、任何非数字字符；重复出现时**必须
-            全部一致**才放行，否则一律 `None`（非法）。
+            # type: () -> tuple
+            """**整个 handler 里关于「`Content-Length` 是什么」的唯一判据**——
+            `_read_body`（POST 读体）与 `_close_if_body_unread`（GET/DELETE/OPTIONS
+            判断要不要关连接）都调它，不再各自维护一份对这个头的理解。
 
-            复检 Important（同一类缺陷第六次复发）：此前逐个补丁具体的坏值——先补
-            `int()` 直抛异常、再补负数、再补 `Transfer-Encoding`，每一次都只堵住
-            了送到眼前的那一个畸形样本，对下一种拼法保持沉默。`empty` 用「不在
-            `(None, "")` 里才 int()」的写法把空值特例成 0（当无体处理，实际字节
-            没被丢弃，keep-alive 下被当成下一条请求解析）；重复的 `Content-Length`
-            头此前从没处理过，`self.headers.get()` 只取第一个值（`email.message.
-            Message.get` 语义），声明值与实际字节不一致时同一形状的走私就成立。
-            这里改成一次性接住整个类：不是纯数字（含空、含符号、含空白）→ 非法；
-            重复但取值不完全一致 → 非法；没有 `Content-Length` 头 → 0（无体）。
+            → `(n, 错误 | None)`。`错误` 非 None 时 `n` 无意义，调用方必须让连接
+            不可复用——声明了但没被读走/丢弃的字节，留给下一条 keep-alive 请求解析
+            就是请求走私。
+
+            复检 Important（同一类缺陷第六次复发，round 2 只收窄到 `_read_body`
+            一个调用点，第七次复发就发生在 `_close_if_body_unread` 那边）：此前
+            逐个补丁具体的坏值——先补 `int()` 直抛异常、再补负数、再补
+            `Transfer-Encoding`——每一次都只堵住了送到眼前的那一个畸形样本，对
+            下一种拼法、对另一个调用点都保持沉默。这里改成一次性接住整个类，且
+            只有这一个函数认得这个头：不是纯数字（`str.isdigit`——拒绝空值、负号、
+            `+` 前缀、内部空白、任何非数字字符）→ 非法；重复出现但取值不完全
+            一致 → 非法；没有该头 → `(0, None)`（无体）。
             """
             values = self.headers.get_all("Content-Length") or []
             if not values:
-                return 0
+                return 0, None
             if len(set(values)) > 1:
-                return None
+                return None, "Content-Length values disagree"
             if not values[0].isdigit():
-                return None
-            return int(values[0])
+                return None, "Content-Length is not a bare digit string"
+            return int(values[0]), None
 
         def _read_body(self):
             if self.headers.get("Transfer-Encoding") is not None:
@@ -201,8 +204,8 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.close_connection = True
                 return None, (400, {"error": {"message": "chunked transfer encoding is not supported",
                                               "type": "invalid_request"}})
-            n = self._parse_content_length()
-            if n is None:
+            n, err = self._parse_content_length()
+            if err:
                 self.close_connection = True
                 return None, (400, {"error": {"message": "invalid Content-Length",
                                               "type": "invalid_request"}})
@@ -222,11 +225,20 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                                               "type": "invalid_request"}})
 
         def _close_if_body_unread(self):
-            """GET / DELETE / OPTIONS 都不读请求体。带体（Content-Length 非 0 —— 含无法解析
-            的值 —— 或出现 Transfer-Encoding）时回完就关连接：否则 keep-alive 下体里的字节
-            会被当成同一连接上的下一条请求解析，请求分帧就被打乱了（请求走私）。"""
-            clen = (self.headers.get("Content-Length") or "").strip()
-            if self.headers.get("Transfer-Encoding") is not None or clen.lstrip("0"):
+            """GET / DELETE / OPTIONS 都不读请求体。带体（`Content-Length` 非零、
+            解析失败/冲突，或出现 `Transfer-Encoding`）时回完就关连接：否则
+            keep-alive 下体里的字节会被当成同一连接上的下一条请求解析，请求
+            分帧就被打乱了（请求走私）。
+
+            复检 Important 第七次复发：这里此前自己用 `.strip()`/`.lstrip("0")`
+            土办法猜"有没有体"——`self.headers.get("Content-Length")` 只取重复头的
+            第一个值，空值被 `.lstrip("0")` 判成假（当无体）。改成只关连接、不回
+            400（GET/DELETE/OPTIONS 本来就要往下走各自的正常响应，插一个新的错误
+            分支要动三处调用点；这个方法唯一的职责就是"关不关连接"，加一条判据
+            分支比改调用点更干净——见 fix round 3 报告）。
+            """
+            n, err = self._parse_content_length()
+            if err or n or self.headers.get("Transfer-Encoding") is not None:
                 self.close_connection = True
 
         def do_GET(self):        # noqa: N802

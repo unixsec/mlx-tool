@@ -134,28 +134,42 @@ out["smuggle_post_chunked"] = raw(
     b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"
     b"Transfer-Encoding: chunked\r\n",
     b"%x\r\n" % len(inner) + inner + b"\r\n0\r\n\r\n")
-# 复检 Important（第六次同一类缺陷）：`Content-Length` 解析要接住整整一类畸形拼法，
-# 不是一个一个值地补丁。CTRL_BODY 是一个真实、格式合法但缺 `model` 字段的小体
-# （给「应该被正常处理」的两个 control case 用）；其余 case 声明的长度本身就非法，
-# 实际发送的字节固定用 `inner`（一条完整的 `GET /healthz`）——如果没被拒绝、
-# 又没被整条读走，剩下的字节会被当成下一条 keep-alive 请求解析。
+# 复检 Important（同一类缺陷第六、第七次复发）：`Content-Length` 解析要接住整整
+# 一类畸形拼法，且**每一个读它的调用点**都要接住——不是一个值一个值、一个方法
+# 一个方法地补丁。CTRL_BODY 是一个真实、格式合法但缺 `model` 字段的小体（给
+# 「应该被正常处理」的两个 control case 用，只对 POST 有意义——GET/DELETE/OPTIONS
+# 本来就不读体，声明了非零长度就该关连接，不管那个长度写得对不对）；其余 case
+# 声明的长度本身就非法，实际发送的字节固定用 `inner`（一条完整的 `GET /healthz`）
+# ——如果没被拒绝/没被关连接，又没被整条读走，剩下的字节会被当成下一条 keep-alive
+# 请求解析。矩阵按「值 × 方法」铺开，同一份 case 定义，不为方法另开一份表。
 CTRL_BODY = b'{"pad":"x"}'
-def cl_headers(*values):
-    auth = b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"
-    return auth + b"".join(b"Content-Length: %s\r\n" % v.encode() for v in values)
 cl_len = str(len(CTRL_BODY)).encode().decode()
-cl_cases = {
-    "empty": (cl_headers(""), inner),
-    "negative": (cl_headers("-1"), inner),
-    "nonnumeric": (cl_headers("abc"), inner),
-    "plus_prefixed": (cl_headers("+5"), inner),
-    "whitespace_padded": (cl_headers(" 5 "), inner),
-    "dup_differing": (cl_headers("5", "1000"), inner),
-    "dup_identical": (cl_headers(cl_len, cl_len), CTRL_BODY),
-    "valid_control": (cl_headers(cl_len), CTRL_BODY),
+CL_VALUES = {
+    "empty": [""], "negative": ["-1"], "nonnumeric": ["abc"],
+    "plus_prefixed": ["+5"], "whitespace_padded": [" 5 "],
+    # 首值特意选 "0"：旧版 `_close_if_body_unread` 只看第一个 Content-Length 值，
+    # `"0".lstrip("0")` 是空串（假），会误判成"没有体"而不关连接——这正是复检点名
+    # 的那个洞；新的严格解析看的是"重复且不一致"，不管哪个值排第一都要拒
+    "dup_differing": ["0", "1000"],
+    "dup_identical": [cl_len, cl_len],
+    "valid_control": [cl_len],
 }
-out["cl_class"] = {name: raw("POST", "/v1/chat/completions", hdrs, body)
-                   for name, (hdrs, body) in cl_cases.items()}
+CL_ACCEPT_CASES = ("dup_identical", "valid_control")
+# 每个方法自带能给出干净、确定的单条响应的目标路径/固定头（与既有 smuggle_* 用例
+# 同一套目标）；`Content-Length` 头由下面的循环按 case 拼接在后面
+METHOD_TARGETS = {
+    "GET": ("/v1/models", b"Authorization: Bearer @TOK@\r\n"),
+    "OPTIONS": ("/v1/chat/completions", b""),
+    "POST": ("/v1/chat/completions",
+             b"Authorization: Bearer @TOK@\r\nContent-Type: application/json\r\n"),
+}
+cl_matrix = {}
+for _method, (_target, _base_headers) in METHOD_TARGETS.items():
+    for _case, _values in CL_VALUES.items():
+        _hdrs = _base_headers + b"".join(b"Content-Length: %s\r\n" % v.encode() for v in _values)
+        _body = CTRL_BODY if _case in CL_ACCEPT_CASES else inner
+        cl_matrix["%s:%s" % (_method, _case)] = raw(_method, _target, _hdrs, _body)
+out["cl_matrix"] = cl_matrix
 print(json.dumps(out))
 '''
 
@@ -238,27 +252,33 @@ def test_post_chunked_is_rejected_and_does_not_smuggle_a_second_request(payload,
 REJECT_CL_CASES = ("empty", "negative", "nonnumeric", "plus_prefixed",
                    "whitespace_padded", "dup_differing")
 ACCEPT_CL_CASES = ("dup_identical", "valid_control")
+CL_METHODS = ("GET", "OPTIONS", "POST")
 
 
 def test_content_length_parsed_strictly_across_the_whole_class(payload, sys_py):
-    """复检 Important（第六次同一类缺陷）：严格解析 `Content-Length`，不是一个值一个值地补丁。
+    """复检 Important（同一类缺陷第六、第七次复发）：严格解析 `Content-Length`
+    是这个 handler 里**唯一**的判据，`_read_body`（POST 读体）与
+    `_close_if_body_unread`（GET/DELETE/OPTIONS 判断要不要关连接）必须共用它——
+    矩阵按「值 × 方法」铺开，不是给某一个方法单开一张表。
 
-    拒绝集合：空值、负数、非数字、`+` 前缀、内部有空白、重复且不一致——每一种都必须
-    恰好回一条 400 并关连接，且没有把没读走的字节（一条完整的 `GET /healthz`）当成
-    下一条 keep-alive 请求解析。放行集合：重复但完全一致的头、正常单值——必须走完
-    正常处理（不因为「重复」或「完全合法」被误杀），也不该被关连接。
+    三条不变式对矩阵里的**每一格**都成立：
+    1. 恰好一条状态行（没有把没读走的字节当成了下一条 keep-alive 请求解析）；
+    2. 响应原文里不出现 stdlib 的「Bad request syntax」（同一份证据，防 Critical 3
+       那种"看 status_lines/closed 两条表面断言也会碰巧全绿"的假阴性）；
+    3. 关不关连接：畸形值（`REJECT_CL_CASES`）在任何方法上都必须关；"重复但一致"
+       与"单值合法"（`ACCEPT_CL_CASES`）只在 POST 上不关（体被正常读走处理）——
+       GET/OPTIONS/DELETE 本来就不读体，声明了非零长度（哪怕值写得完全合法）
+       就该关，这不是误杀，是这两个方法本来就有的行为。
     """
     got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60, TOK=TOK)
-    cls = got["cl_class"]
-    for case in REJECT_CL_CASES:
-        r = cls[case]
-        assert r["status_lines"] == ["HTTP/1.1 400"], \
-            f"{case}：畸形 Content-Length 应恰好回一条 400，收到 {r['status_lines']}"
-        assert r["closed"], f"{case}：畸形 Content-Length 被拒后连接应被关闭"
-        assert "Bad request syntax" not in r["raw"], \
-            f"{case}：没读走的字节被当成了下一条请求解析：{r['raw']!r}"
-    for case in ACCEPT_CL_CASES:
-        r = cls[case]
-        assert r["status_lines"] == ["HTTP/1.1 400"], \
-            f"{case}：应正常处理（缺 model 的诊断性 400），收到 {r['status_lines']}"
-        assert not r["closed"], f"{case}：不该被当成畸形 Content-Length 误杀连接"
+    matrix = got["cl_matrix"]
+    for method in CL_METHODS:
+        for case in REJECT_CL_CASES + ACCEPT_CL_CASES:
+            r = matrix[f"{method}:{case}"]
+            assert len(r["status_lines"]) == 1, \
+                f"{method}:{case}：应当恰好一条状态行，收到 {r['status_lines']}"
+            assert "Bad request syntax" not in r["raw"], \
+                f"{method}:{case}：没读走的字节被当成了下一条请求解析：{r['raw']!r}"
+            should_close = case in REJECT_CL_CASES or method != "POST"
+            assert r["closed"] is should_close, \
+                f"{method}:{case}：期望 closed={should_close}，收到 {r['closed']}"
