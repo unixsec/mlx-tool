@@ -775,9 +775,9 @@ wire_api = "responses"
 
 模型进程自己不对外连接，`http(s)://` 媒体一律由网关代取。**目标地址规则**（本机来源不受限，以下只针对虚拟机与 Wi-Fi 设备）：
 
-- 私网、CGNAT、链路本地、回环、组播与保留地址，除非落在 `mlx api info` 列出的**放行网段**内，一律拒绝；
+- 回环、链路本地、组播、未指定（`0.0.0.0`）、保留、广播地址与 Teredo **无条件拒绝**，放行网段也豁免不了；私网与 CGNAT 地址只有落在 `mlx api info` 列出的**放行网段**内才放行，否则拒绝；
 - **任何公网地址一律放行**。因此经 VPN 可达的公网段地址，远端来源也能让网关去取（已知限制，见 [KNOWN-ISSUES](KNOWN-ISSUES.md)）；
-- 目标等于本机自身的地址（包括公网形态）拒绝；IPv4-mapped、NAT64、6to4 先还原成 IPv4 再判断，Teredo 拒绝；
+- 目标等于本机自身的地址（包括公网形态）拒绝；IPv4-mapped、NAT64、6to4 先还原成 IPv4 再判断；
 - 重定向最多 3 跳，每一跳都重新检查；主机名写成数字形式（如 `2130706433`）按 `address_denied` 处理。
 
 代取失败返回 400 `media_fetch_failed`，`error.reason` 说明原因：
@@ -809,12 +809,13 @@ wire_api = "responses"
 
 ### 思考与输出长度 {#thinking}
 
-**关思考**，任选一种写法：`"enable_thinking": false`、`"chat_template_kwargs": {"enable_thinking": false}`、
+**关思考**（chat / completions 端点，任选一种写法）：`"enable_thinking": false`、`"chat_template_kwargs": {"enable_thinking": false}`、
 `"thinking": {"type": "disabled"}`、`"reasoning_effort": "none"`（`off` / `disabled` / `false` / `0` 同义）。
-多模态模型的后端（mlx_vlm）不读 `chat_template_kwargs`，网关把 `enable_thinking` / `reasoning_effort` 改写到请求顶层再转给它。
+多模态模型的后端（mlx_vlm）不读 `chat_template_kwargs`，网关把 `enable_thinking` / `reasoning_effort` 写到请求顶层再转给它。
+responses 与 messages 端点上，网关不归一开关，交后端按原生字段（`reasoning`、`thinking`）处理，只做下面的强度映射。
 
 **思考强度**：chat 认 `reasoning_effort`（也认 `chat_template_kwargs.reasoning_effort`、`reasoning.effort`），
-responses 认 `reasoning.effort`。模型模板只接受部分取值时，网关换成**不低于它的最小可用值**，没有就用最大值：
+responses 与 messages 认 `reasoning.effort`（顶层 `reasoning_effort` 同样映射）。模型模板只接受部分取值时，网关换成**不低于它的最小可用值**，没有就用最大值：
 
 | 你发的 | qwen38 实际用（模板接受 `low` / `medium` / `xhigh`） |
 |---|---|
@@ -835,9 +836,10 @@ responses 认 `reasoning.effort`。模型模板只接受部分取值时，网关
 
 - **流式请求**：边生成边转发。收到模型的 200 响应头之后，上游静默满 15 秒（排队、读长上下文、长时间思考），网关发一行 `: keepalive`（SSE 注释，客户端会忽略），连接不会被中间设备当成空闲掐断。收到响应头之前模型不可达或出错，客户端拿到的是一个正常的 JSON 错误响应。
 - **非流式请求**：网关收齐后拼成一个完整 JSON 返回。这期间没有字节可发，**无法保活，客户端自己的 HTTP 超时可能先到** —— 长输出、Agent 类任务请用流式（Claude Code、Codex、Cherry Studio 默认都是流式）。
-- **客户端断开**（关页面、Ctrl-C、超时）：网关关闭到模型的连接，模型停止生成、腾出并发位；`api.log` 记 `client_disconnected`。明文连接每秒探测一次客户端是否还在；TLS 连接上非流式请求要到写回响应时才发现断连，模型会把这次生成跑完（流式不受影响）。
-- **模型一侧出问题**：连不上模型、或流中途被模型断开，`api.log` 记 `upstream_aborted`（与 `client_disconnected` 是两回事）；响应头还没发出时客户端收到 502 `upstream_error`（1.0.0 是 504）。
-- 同时请求超过模型的 `max_concurrency`（默认 8）时排队；排队中的流式请求同样收到保活。
+- **客户端断开**（关页面、Ctrl-C、超时）：网关关闭到模型的连接，模型停止生成、腾出并发位；`api.log` 记 `client_disconnected`。明文连接每秒探测一次客户端是否还在。**TLS 连接无法探测**，所有请求的客户端断开都只在网关写失败时才发现：上游响应头到达之前（mlx_lm 排队可能数分钟）发现不了，模型照常生成；头到达之后静默段最长约 15 秒才因保活写入发现，且对端已关时第一次写可能仍然成功。
+- **模型一侧出问题**：连不上模型或上游传输异常，`api.log` 记 `upstream_aborted`（与 `client_disconnected` 是两回事）；响应头还没发出时客户端收到 502 `upstream_error`（1.0.0 是 504）。非流式聚合失败同样记 `upstream_aborted` 并回 502。
+- **流已经开始后模型断了**：`api.log` 记 `sse_truncated`（流结束时没见到终止帧：半帧、断在帧边界，或上游发了错误帧后不发终止帧就关连接）或 `upstream_aborted`（上游传输异常）。响应头已发出，客户端只看到流结束、没有错误帧；OpenAI 风格客户端可能把缺 `[DONE]` 的流当成正常结束，遇到回答突然截断时看 `api.log`。
+- 同时请求超过模型的 `max_concurrency`（默认 8）时排队。mlx_vlm 排队期间保活照常；mlx_lm 排队时连响应头都不回，**此时没有保活**。挂了完整 drafter 的 mlx_lm 实际串行处理，`max_concurrency` 不生效（`mlx status` 并发列显示「串行」）。
 - 没在请求里写 `stream_options.include_usage` 的流式客户端收不到 usage 帧（网关内部为聚合打开了它，但不下发）。
 - 文本模型的流式帧只带 `reasoning`，网关补上多数客户端读的 `reasoning_content`。
 
@@ -1311,7 +1313,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 | 400 `thinking_budget_unsupported` | 文本模型不支持 `thinking_budget` | 去掉该字段，改用 `reasoning_effort` |
 | 400 `invalid_request` | 请求体不是 JSON 对象（数组、字符串）或不是合法 JSON | 客户端改请求体 |
 | 413 `invalid_request` | 请求体超过 `api.max_body_mb`（默认 256 MB，内联 `data:` 媒体也算） | 改用 `http(s)://` 让网关代取，或调大该键后 `mlx restart api` |
-| 502 `upstream_error` | 连不上模型 / 流中途断开（`api.log` 记 `upstream_aborted`），或按 id 查询 / 删除 / 取消时后端对 2xx 回了非 JSON | 看 `logs/<模型>.log`，`mlx status` 看它是否还在跑 |
+| 502 `upstream_error` | 连不上模型 / 上游传输异常（`api.log` 记 `upstream_aborted`；流已开始后断开则是 200 加 `sse_truncated`，见[流式](#streaming)），或按 id 查询 / 删除 / 取消时后端对 2xx 回了非 JSON | 看 `logs/<模型>.log`，`mlx status` 看它是否还在跑 |
 | 503 `gateway_busy` | 同时在处理的媒体太多（`api.inflight_max_mb`），或该键小于 `api.media_max_mb` | 按 `Retry-After` 5 秒后重试；或调大该键后 `mlx restart api` |
 | 507 `media_storage_failed` | 视频临时文件写不下 | 看数据根所在磁盘的剩余空间 |
 

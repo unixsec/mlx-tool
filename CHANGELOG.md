@@ -39,7 +39,7 @@
 - 思考强度 `effort` 按模型模板接受的取值映射（qwen38：`minimal`→`low`，`high` / `max`→`xhigh`），越界不再让后端报错
 - 多模态模型上 `max_completion_tokens` 生效（网关换成后端认的 `max_tokens`）；文本模型收到 `thinking_budget` 返回 400 `thinking_budget_unsupported`；多模态后端的 `enable_thinking` / `reasoning_effort` 由网关写到请求顶层
 - 请求里的 `adapters`、`adapter_path`、`draft_model` 被网关剥离，客户端不能让模型加载别的权重
-- **连不上模型上游由 504 改为 502 `upstream_error`**；日志事件 `sse_stream_aborted` 改名 `upstream_aborted`，与客户端自己断开的 `client_disconnected` 区分；按 id 的查询 / 删除 / 取消端点上后端对 2xx 回非 JSON 体同样是 502，请求体不是 JSON 对象是 400
+- **连不上模型上游由 504 改为 502 `upstream_error`**；日志事件 `sse_stream_aborted` 改名 `upstream_aborted`，与客户端自己断开的 `client_disconnected` 区分；流开始后未见终止帧（半帧、断在帧边界）记 `sse_truncated`；按 id 的查询 / 删除 / 取消端点上后端对 2xx 回非 JSON 体同样是 502，请求体不是 JSON 对象是 400
 
 ### 移除
 
