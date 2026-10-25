@@ -108,14 +108,32 @@ def _commands(text):
     """一段文字里的每条 `mlx` 命令 → 原文片段（不含开头的 `mlx`）。
 
     在这些地方截断：反引号（代码块里粘贴的产品输出自带行内代码）、`·`（help 的「参见」行把
-    几条命令连写）、`——`（help 的「名称」行）、三个以上连续空格（命令与行尾说明之间的对齐空白）。
+    几条命令连写）、`——`（help 的「名称」行）、三个以上连续空格（命令与行尾说明之间的对齐空白）、
+    引号外的中文标点（见 `_cut_prose`）。
     注释与 shell 操作符留给 `_tokens` 截。
     """
     out = []
     for m in _CMD.finditer(text):
         tail = re.split(r"`|·|——|\s{3,}", text[m.end():], maxsplit=1)[0]
-        out.append(tail)
+        out.append(_cut_prose(tail))
     return out
+
+
+def _cut_prose(tail):
+    """引号外遇到中文标点就截断：粘贴的产品输出里命令后面常紧跟「）；」（`查看：mlx … --reveal）；VPN…`）。
+    引号与 `<占位符>` 内不截 —— `--prompt="…，…"` 的值里可以有中文标点。"""
+    quote = None
+    for i, ch in enumerate(tail):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "<":
+            quote = ">"                       # 占位符 `<同一家族、同一词表…>` 里的标点同样不截
+        elif ch in "）；。，、」":
+            return tail[:i]
+    return tail
 
 
 def _tokens(tail):

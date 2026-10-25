@@ -1,9 +1,9 @@
 # MLX Toolkit 使用指南
 
 > macOS + Apple Silicon 上管理 MLX 本地大模型的命令行工具。
-> 版本 1.0.0 · 带 `$` 提示符的段落**都是从真实产物上粘贴的**。
-> 其余是说明文字。审查发现过三处「照设计意图写、没跑过」的段落
-> （局域网、升级、`model info` 打路径），已全部改为实测结果。
+> 工具版本 1.0.0；本手册按当前开发分支的行为编写（即将发布的 1.1.0，改动见
+> [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]` 段）。
+> 带 `$` 提示符的段落取自真实运行，路径、pid、地址等换成了示意值，输出的形状与本版一致。
 
 本文按**你实际会走的顺序**编排：先把工具装上，再找模型、下载、登记、启动、使用，
 最后是停用、卸载与升级。每一节都写清楚**现在能做到什么程度** ——
@@ -23,9 +23,14 @@
 | 启动多模态模型（图像输入） | ✅ 可用 | 第五节「自动选择后端」。按权重自动选 mlx_vlm |
 | 用模型对话 / 跑基准 | ✅ 可用 | 第六节 |
 | 起网关 | ✅ 可用 | 第七节 |
-| 接入 Cherry Studio | ✅ 可用 | 第七节。三项配置填完即可对话 |
+| 接入 Cherry Studio / OpenWebUI | ✅ 可用 | 第七节。三项配置填完即可对话 |
+| 从虚拟机、同一 Wi-Fi 的设备连网关 | ✅ 可用 | 第七节「[从虚拟机、同一 Wi-Fi 的设备连](#remote)」。所有来源都要令牌，TLS 可选 |
+| 接入 Claude Code / Codex CLI | ✅ 可用（仅多模态模型） | 第七节「[接入各类客户端](#clients)」 |
+| 发图片、音频、视频；控制思考 | ✅ 可用 | 第七节「[媒体](#media)」「[思考与输出长度](#thinking)」 |
 | 停用服务 | ✅ 可用 | 第八节 |
 | 卸载模型登记 | ✅ 可用 | 第九节 |
+| 改配置、管密钥 | ✅ 可用 | 第十二之二节 |
+| 自检 | ✅ 可用 | `mlx check`（12 项），见第十二节 |
 
 整条链已在真机上跑通：下载 `mlx-community/Qwen2.5-0.5B-Instruct-4bit` →
 登记 → `mlx up` → `mlx chat` 拿到回答 → `mlx up api` → Cherry Studio 经网关对话。
@@ -55,7 +60,7 @@ Python 3.13.x            # 有这一行就够了，安装器会自己挑
 `mlx ≥ 0.30.4`。3.9 上**永远装不上**能跑新模型的后端，且 `pip` 只会报
 `ResolutionImpossible: 依赖冲突`，一个字都不提解释器版本 —— 极难自查。
 
-**分工要分清**（`00-inheritance` §0.4.1/§0.4.2）：工具本体（`check`、`config`、
+**分工要分清**：工具本体（`check`、`config`、
 `model ls`、`help` 这些）是纯标准库的，**系统 python3 也跑得动**，这是故意的 ——
 venv 坏掉时你还得能用 `mlx check` 诊断它。Homebrew 的 Python 是给 venv 用的，
 venv 只服务**下载权重**与**跑推理**这两件事。
@@ -67,11 +72,38 @@ $ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
 == 建三根
 == 拷载荷
 == 写 constants.env（三根的兜底来源，裁决 R4-3 断口②）
+== 建 venv
+   ✓ ~/.local/share/mlx_server/.venv  Python 3.13.x
+== 装推理依赖（失败不影响工具本体）
+   ✓ huggingface_hub
+   ✓ mlx
+   ✓ mlx-lm
+   ✓ mlx-vlm
+== 采集后端能力
+   ✓ caps.json
+== 生成密钥（只补空值，已有的不动）
+     ✓ 已生成  api.token
+     ✓ 已生成  backend.api_key
+     查看原值：mlx config get <键名> --reveal
+== 网关暴露面
+   !! 网关默认绑定全部网卡（0.0.0.0）：本机、Parallels 虚拟机、同一 Wi-Fi / 有线网段都能连。
+      所有来源都要令牌（查看：mlx config get api.token --reveal）；VPN、雷雳网桥等接口一律拒绝。
+      只给本机用：mlx config set api.bind --value=127.0.0.1
 == 校验产物（按 manifest.tsv）
 == 挂 PATH
-   ✓ ~/.zshrc（备份 ~/.local/state/mlx_server/backups/zshrc.20260831-183129）
+   ✓ ~/.zshrc（备份 ~/.local/state/mlx_server/backups/.zshrc.20261026-071807）
 == 完成。**新开一个终端**，或先跑：source ~/.zshrc
 ```
+
+安装器做的事比看上去多三件，第一次装之前知道比较好：
+
+- **装 `mlx-vlm`**：多模态模型的后端，会带入 torch 等依赖，第一次装要多等几分钟。
+  某个包没装上时打印 `! <包> 未装上` 和补装命令，工具本体不受影响。
+- **生成两把密钥**：`backend.api_key`（访问 mlx_vlm 后端）与 `api.token`（客户端访问网关），只补空值，
+  输出只列键名不打印值（见[密钥](#keys)）。
+- **网关默认对局域网开放**：上面那段 `!!` 警告就是在说这件事；只给本机用就照它给的命令改。
+
+重装时（代码根已有旧版本）第一步是 `== 收敛正在运行的服务（重装前置）`，会先停掉在跑的服务，结尾列出起回来的命令。
 
 **PATH 是自动写入的**，不用你手动贴。安装器用 `# >>> mlx_server:mlx >>>` 标记块
 包住它写的行，重装时先删旧块再写新块（永远只有一份），改动前把你的 rc 备份到数据根。
@@ -103,21 +135,28 @@ $ mlx status
   · 工具版本 1.0.0
 
   ✓ PATH 生效  ~/.local/share/mlx_server/bin
-  ✓ 分发清单  53 项，完整
+  ✓ 分发清单  73 项，完整
 
 模型（2）
-     ID       模型                            状态  端口   PID  内存  体积
-  ─  ───────  ──────────────────────────────  ────  ─────  ───  ────  ─────
-  ·  llama8b  mlx-community/Llama-3-8B        就绪  :8101  —    —     18 MB
-  ·  qwen27b  mlx-community/Qwen3.8-27B-8bit  就绪  :8100  —    —     42 MB
+     ID       模型                            状态  端口   后端     并发  PID    内存      体积
+  ─  ───────  ──────────────────────────────  ────  ─────  ───────  ────  ─────  ────────  ────────
+  ·  qwen05b  mlx-community/Qwen3-0.6B-4bit   就绪  :8150  —        —     —      —         335 MB
+  ✓  qwen38   mlx-community/Qwen3.8-27B-8bit  就绪  :8100  mlx_vlm  8     43699  27788 MB  28164 MB
 
-  2 个已登记，0 个在跑
+  2 个已登记，1 个在跑，共占 27788 MB 内存
 
 网关
-  ✓ api        在跑  :8340  pid 71835
+  ✓ api        在跑  :8080  pid 65853 · 绑定 0.0.0.0 · TLS 关 · 放行网段 3
 ```
 
-`PATH 生效` 那行打 ✗ 就是终端没重载 —— 新开一个，或 `source ~/.zshrc`。
+- `PATH 生效` 那行打 ✗ 就是终端没重载 —— 新开一个，或 `source ~/.zshrc`。
+- `分发清单` 的项数来自安装产物的清单（`share/manifest.tsv`），缺文件时列出缺的前几个；`mlx bootstrap verify` 逐项校验。
+- 模型表的「后端」「并发」只对在跑的模型有值。挂了完整 drafter 的 mlx_lm 并发列显示「串行」（见[投机解码](#draft)）。
+- 网关行在跑时带绑定地址、TLS 开关与放行网段个数。运行记录读不出来时下面多一行 `└ 运行记录读不出来…`，
+  照它说的确认进程后删掉数据根的 `run/api.json` 再 `mlx up api`。
+- 改过密钥而服务还没重启时，末尾有一行 `⚠ 密钥已变更，需重启：mlx restart …`。
+
+只看一个服务：`mlx status qwen38`；看所有有运行记录的服务：`mlx status --all`；给脚本用：`mlx status --json`。
 
 ---
 
@@ -131,11 +170,12 @@ mlx model install qwen38 --repo mlx-community/Qwen3.8-27B-8bit   # ✗ rc 2
                                ↑ 报「--repo 需要一个值，写成 --repo=<值>」
 ```
 
-布尔参数（`--json` / `--dry-run` / `--all` / `--yes` / `--weights` / `--force`）
-不带值，直接写：`mlx model rm qwen38 --weights --yes`。
+布尔参数（`--json` / `--dry-run` / `--all` / `--yes` / `--weights` / `--reveal` / `--ignore-fitness`）
+不带值，直接写：`mlx model rm qwen38 --weights --yes`。每个参数只属于特定命令，
+用错了会报「`--x` 不是 `mlx …` 的参数（它属于：…）」，`mlx help <命令>` 列出该命令能用的。
 
 **为什么跟 GNU 习惯不同**：`--k v` 要靠"下一个 token 是值还是位置参数"来消歧，
-而本工具的位置参数判据是 `not startswith("--")`（`cli.py:375`）——
+而本工具把凡是不以 `--` 开头的词都当位置参数 ——
 两者会打架。锁死等号形态后，`--repo` 缺值是**当场报错**而不是把下一个词
 悄悄吞掉。代价是要记一条规矩，换来的是不会静默做错事。
 
@@ -151,7 +191,7 @@ mlx model install qwen38 --repo mlx-community/Qwen3.8-27B-8bit   # ✗ rc 2
 
 ```
 $ mlx model search qwen
-model 没有子命令 'search'；可用：gc · info · install · ls · register · repair · rm
+model 没有子命令 'search'；可用：gc · info · install · ls · register · repair · rm · trash empty · trash ls · trash restore
 ```
 
 **怎么找**：去 <https://huggingface.co/mlx-community> 挑。这个组织专门放
@@ -188,7 +228,7 @@ model 没有子命令 'search'；可用：gc · info · install · ls · registe
 ```
 
 这是 HuggingFace 的缓存布局，工具按它解析。**放错地方的后果是静默的**：
-登记能成功，但状态一直停在「已登记未下载」，启动时才报错。
+登记能成功，但状态一直停在「已登记」（变不成「就绪」），启动时才报错。
 
 不确定权重根在哪就先问工具：
 
@@ -293,16 +333,16 @@ modelscope download \
 mlx model register qwen05b \
     --repo=mlx-community/Qwen2.5-0.5B-Instruct-4bit --port=8100
 mlx model repair          # 用磁盘事实校对注册表
-mlx model ls              # 状态应该从「已登记未下载」变成「就绪」
+mlx model ls              # 状态应该是「就绪」
 ```
 
-**状态还是「已登记未下载」** = 路径算错了。用这条对一下工具到底在找哪里：
+**状态还是「已登记」** = 路径算错了。用这条对一下工具到底在找哪里：
 
 ```bash
 mlx model info qwen05b
 ```
 
-它会打印期望的权重路径，跟你 `hf`/`modelscope` 实际写的目录逐字比。
+它会打印「期望路径」与「实际找到」两行，跟你 `hf`/`modelscope` 实际写的目录逐字比。
 
 ---
 
@@ -317,14 +357,17 @@ $ mlx model register qwen27b --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
     模态    auto（auto = 每次 up 按权重判定）
 ```
 
-三个参数的含义：
+参数的含义（`model install` 与 `model register` 相同）：
 
 | 参数 | 说明 |
 |---|---|
 | `<短名>` | 你自己起的 id，之后 `mlx up <短名>` 用它 |
 | `--repo` | HuggingFace 仓库名，要和你下载时用的**一致** |
-| `--type` | 可选。模态覆盖：`text` / `vision`。不给则每次 `mlx up` 按权重自动判定（见[自动选择后端](#backend)） |
 | `--port` | 这个模型的监听端口。每个模型一个，不能重复 |
+| `--type` | 可选。模态覆盖：`text` / `vision`，写进这个模型的 `modality`。不给则每次 `mlx up` 按权重自动判定（见[自动选择后端](#backend)） |
+| `--revision` | 可选。仓库的分支、标签或 commit，对应目录里的 `snapshots/<revision>`；不给是 `main` |
+
+登记成功那行的「模态」显示的是登记下来的值，括号里的说明是固定文字（给了 `--type=vision` 也照样印「auto = 每次 up 按权重判定」），以 `mlx model info <短名>` 为准。
 
 登记完看一眼：
 
@@ -341,10 +384,10 @@ $ mlx model ls
 **状态列的含义**：
 
 - `就绪` —— 权重在盘上，记录也完整
-- `已登记` —— 记录有了，但 `machine.revision` 还没回填（权重找不到，或刚 register 还没 repair）
-- `已登记未下载` —— 记录只有 user 段（极少见；正常路径不会停在这里）
+- `已登记` —— 记录有了，但权重的版本（`revision`）还没回填：权重找不到，或刚登记还没 `repair`
+- `已登记未下载` —— 记录里还没有任何磁盘事实（比如 `model install` 下载失败时，记录会停在这里）
 
-如果状态是「已登记未下载」而你确信权重下好了，多半是目录布局不对。跑一次：
+如果状态是「已登记」而你确信权重下好了，多半是目录布局不对。跑一次：
 
 ```
 $ mlx model repair
@@ -363,9 +406,11 @@ $ mlx model repair
 ## 五 · 启动模型
 
 ```
+$ mlx up qwen05b
   ✓ qwen05b 已启动 · mlx_lm · 并发 8 · port 8150
 ```
 
+成功行带上判定出的后端与并发上限；挂了完整 drafter 的 mlx_lm 显示「串行」而不是「并发 N」（它实际逐个处理请求）。
 端口取的是**登记时给的那个**，不是默认值。想先看会跑什么命令，用 `--dry-run`：
 
 ```
@@ -385,7 +430,9 @@ $ mlx up qwen05b --dry-run
 
 ### 它会等到真的就绪才返回
 
-`up` 起完进程**不会立刻报成功**，而是等端口监听上。进程若在就绪之前退出
+`up` 起完进程**不会立刻报成功**，而是等端口监听上（mlx_lm 最多等 20 秒；mlx_vlm 加载完权重才监听，
+最多等 `20 + 3 × 体积 GB` 秒）。注意 mlx_lm **先监听、首次请求才加载模型**，所以「已启动」不保证模型能加载成功
+（见 [KNOWN-ISSUES](KNOWN-ISSUES.md)）。进程若在就绪之前退出
 （最常见是端口被别人占了），返回 **rc 10** 并附日志尾部：
 
 ```
@@ -434,10 +481,17 @@ rc 6 意味着**零资源创建** —— 没起进程、没写 run 记录，没�
 
 ```bash
 mlx up qwen05b llama8b        # 每个目标一行结论
-mlx restart qwen05b           # 停了再起
+mlx restart qwen05b           # 先校验，校验全过才停，再起
 ```
 
 同时起多个时端口必须各不相同 —— 登记那一步就会拦住重复端口（rc 7）。
+
+**`restart` 被拒绝时服务不会被停掉**：它先把 `up` 的全部校验跑一遍（权重在不在、装不装得下、密钥与 TLS 配置等），
+有一条不过就原样返回拒绝，在跑的服务保持原状；全过了才停、再起。`--ignore-fitness` 对 `restart` 同样有效。
+
+**多个目标的结论**：每个目标一行。全部成功 rc 0；失败的目标全是「拒绝」（零资源创建）时，整体也是拒绝，
+rc 取其中最差的那个（例如 6 = 模型不存在）；只要有目标真的落地了东西（起了进程又失败），整体是失败，
+并逐个列出要收敛的运行记录。
 
 ---
 
@@ -462,11 +516,11 @@ mlx restart qwen05b           # 停了再起
 | 判不出是否多模态 | `config.json` 读不到或字段自相矛盾 | `mlx config set <id> --key=modality --value=text`（或 `vision`） |
 | 需要 mlx_vlm 后端，但 venv 里没有 | 装包失败或旧安装 | 重跑 `bash deployer/install.sh`，再 `mlx caps refresh` |
 | 需要 backend.api_key，但它是空的 | 密钥没生成 | `mlx bootstrap keys` |
-| 是附属 drafter，不能单独启动 | 你 `up` 的是 MTP 预测头 | 它只能配给主模型，而本版不支持（见 5.4） |
+| 是附属 drafter，不能单独启动 | 你 `up` 的是 MTP 预测头 | 它只能配给主模型，而本版不支持（见[投机解码](#draft)） |
 
 ---
 
-### 5.4 投机解码（speculative decoding） {#draft}
+### 投机解码（speculative decoding） {#draft}
 
 用一个**小模型**先猜若干 token，大模型一次性校验 —— 吞吐能明显提升，
 输出与不用它时**逐字节一致**（校验不通过就回退，不是近似）。
@@ -535,7 +589,7 @@ mlx chat qwen05b --prompt="用一句话说明 MLX 是什么"
 mlx chat qwen05b --session=qwen05b-1788188855174 --prompt="再展开讲讲统一内存"
 ```
 
-接着上次的会话继续聊，把 id 带上：`mlx chat qwen05b --session=<id>`。
+不带 `--prompt` 而带 `--session=<id>`，就是接着那个会话进入多轮模式：`mlx chat qwen05b --session=<id>`。
 
 ### 跑基准
 
@@ -559,21 +613,28 @@ mlx bench qwen05b --prompt="用一句话介绍 MLX"
 
 ```
 $ mlx bench qwen05b
-连不上后端 qwen05b。先确认它在跑：mlx status qwen05b
+qwen05b 没在跑。先起它：mlx up qwen05b
   rc=3
 ```
 
-rc 3 = 外部依赖不可用。先 `mlx status` 看那一行有没有 PID。
+进程在跑、端口却连不上时是另一句：
+
+```
+qwen05b 的进程在跑，但连不上它的端口 8150 —— 多半是模型没加载成功。看日志：~/.local/state/mlx_server/logs/qwen05b.log
+```
+
+这种情况 `mlx status` 会说「在跑」（mlx_lm 先监听再加载，加载失败进程也不退出），**真因只在日志里**。
+`mlx chat` 给的是同样两句。rc 3 = 外部依赖不可用。
 
 ---
 
 ## 七 · 接入 Cherry Studio 等外部工具
 
-网关提供 OpenAI 兼容接口，把已经起来的模型统一转发出去。
+网关提供 OpenAI 兼容与 Anthropic 兼容接口，把已经起来的模型统一转发出去。
 
 ```
 $ mlx up api
-  ✓ api   已启动   port 8080   pid 48057
+  ✓ api 已启动 · 绑定 0.0.0.0 · TLS 关 · port 8080
 ```
 
 ```
@@ -584,13 +645,49 @@ $ mlx api info
       Wi-Fi           http://192.168.2.11:8080/v1   http://192.168.2.11:8080
       虚拟机共享网络  http://10.211.55.2:8080/v1   http://10.211.55.2:8080
     绑定   0.0.0.0   TLS 关
+    解释器 ~/.local/share/mlx_server/.venv/bin/python3 3.13.5
     令牌   已配置   来源 config   与运行中一致
+    放行网段  127.0.0.0/8、::1/128、192.168.2.0/24、10.211.55.0/24
+    排除接口  bridge0（Thunderbolt Bridge）、utun4（隧道接口（VPN 等））
     可用   qwen38
-    未起   qwen38-d（已登记，但网关转发不到）
+    未起   qwen05b（已登记，但网关转发不到）
+
+  ⚠ TLS 未开启：同一网段上的其他设备能看到请求内容与令牌。需要时设 api.tls_cert 与 api.tls_key 后 `mlx restart api`
+
+  所有来源都要令牌（本机也不例外）；只有上面列出的网段能连进来，VPN、雷雳网桥等其余接口一律拒绝
 ```
 
+逐行看：
+
+- **地址**：每类来源一行，左列给 OpenAI 风格客户端（带 `/v1`），右列给 Anthropic 客户端（不带 `/v1`）。网关没在跑时只有一行本机地址。
+- **绑定 / TLS**：TLS 开着时显示 `TLS 开（最高 TLS1.3）` 之类，括号里是解释器支持的最高版本。
+- **解释器**：网关启动那一刻判定 —— venv 的 python3 能 import 网关就用它（TLS 1.3），否则用 `/usr/bin/python3`（最高 TLS 1.2）。
+- **令牌**：「来源 config」是从配置读的，「来源 env」是启动时用 `MLX_GATEWAY_TOKEN` 覆盖的；改了令牌没重启时显示「已变更，需 `mlx restart api`」。
+- **放行网段 / 排除接口**：哪些来源能连、哪些网卡被排除以及原因（见[从虚拟机、同一 Wi-Fi 的设备连](#remote)）。
+- **可用 / 未起**：网关转发得到的模型与已登记但没起的模型。
+- 有远端地址且 TLS 关时，末尾多一段 `⚠ TLS 未开启` 提示。
+- 运行记录（数据根的 `run/api.json`）读不出来时，第二行是 `⚠ 网关运行记录读不出来…`，下面只显示已知的部分。
+  这不等于网关没在跑：确认进程后删掉 `run/api.json`，再 `mlx up api`。`mlx status` 的网关行同样会提示这件事。
+
 **网关端口默认 8080**，与模型端口（`mlx model ls` 里那一列）是两回事 ——
-客户端要连的是网关，不是模型。
+客户端要连的是网关，不是模型。网关自己的日志在数据根的 `logs/api.log`（启动、请求访问记录带来源地址、
+代取、断连等事件都在这里），排查网关问题先看它。
+
+### `mlx up api` 被拒绝时
+
+网关起来之前会先检查下面几件事，任何一条不过都**拒绝启动、零资源创建**（令牌与 TLS 几条 rc 6，端口被占 rc 7，判不出 rc 9），文案里给了修法：
+
+| 提示 | 原因 | 怎么办 |
+|---|---|---|
+| 网关令牌 api.token 是空的 | 没生成令牌 | `mlx bootstrap keys` |
+| TLS 只配了证书或私钥中的一个 | `api.tls_cert` / `api.tls_key` 只设了一个 | 两个都设，或两个都 `mlx config unset` |
+| TLS 文件读不到 | 路径不对或没有读权限 | 改对路径（要绝对路径） |
+| 私钥 … 的权限是 …，宽于 0600 | 私钥对同机其他用户可读 | `chmod 600 <私钥>` |
+| 证书或私钥读得到、权限也对，但加载不动 | 证书与私钥不配对，或不是 PEM 格式 | 重新生成一对 |
+| 端口 … 上已有别的进程在监听 | 网关端口被别的程序占着 | 停掉它，或换网关端口 |
+| 端口 … 的占用状态不可判定 | 查端口占用要用 `/usr/sbin/lsof`，它不可用或输出异常 | 见 [KNOWN-ISSUES](KNOWN-ISSUES.md)「`mlx up api` 硬依赖 `lsof`」 |
+
+令牌与 TLS 这几条，`mlx restart api` 在停网关之前就查，不过就不会停掉正在跑的网关；端口占用要等旧网关停了才查得准。
 
 ### 三项配置
 
@@ -691,7 +788,9 @@ curl -sN http://127.0.0.1:8080/v1/chat/completions \
 | 你额外指定的网段 | `mlx config set api.allow_cidrs --value=192.168.8.0/24,fd00:1::/64` |
 
 VPN（`utun*`）、雷雳网桥、AirDrop 等接口**不放行** —— VPN 对端不是你的局域网。网卡换网（换 Wi-Fi、开热点）后
-网关 30 秒内自动重算；新设备第一次连进来时会立即重算一次。
+网关 30 秒内自动重算；不在放行网段的地址连进来时，网关会先重算一次再判（两次重算至少隔 2 秒，连串的陌生请求不会每次都重算）。
+
+被拒的来源收到 403 `peer_not_allowed`，**响应体里不含它的地址与网段**（不给探测者信息）；地址记在 `logs/api.log` 的 `peer_denied` 事件里。
 
 `mlx api info` 列出每类来源该填的地址：
 
@@ -702,8 +801,7 @@ $ mlx api info
       本机            http://127.0.0.1:8080/v1   http://127.0.0.1:8080
       Wi-Fi           http://192.168.2.11:8080/v1   http://192.168.2.11:8080
       虚拟机共享网络  http://10.211.55.2:8080/v1   http://10.211.55.2:8080
-    绑定   0.0.0.0   TLS 关
-    令牌   已配置   来源 config   与运行中一致
+    …
 ```
 
 **令牌**：所有来源都要。客户端填 `Authorization: Bearer <令牌>` 或 `x-api-key: <令牌>`（Anthropic 客户端用后者）。
@@ -757,24 +855,39 @@ wire_api = "responses"
 
 | 端点 | 文本模型（mlx_lm） | 多模态模型（mlx_vlm） |
 |---|---|---|
-| `/v1/chat/completions` | ✓ | ✓ |
-| `/v1/completions` | ✓ | 404 `endpoint_not_supported_by_backend` |
-| `/v1/responses` 及 `/v1/responses/{id}` 系列 | 404 | ✓ |
-| `/v1/messages`（Anthropic） | 404 | ✓ |
-| 其他路径（embeddings、images、audio、管理端点） | 404 `endpoint_not_supported` | 同左 |
+| `POST /v1/chat/completions` | ✓ | ✓ |
+| `POST /v1/completions` | ✓ | 404 `endpoint_not_supported_by_backend` |
+| `POST /v1/responses`、`POST /v1/responses/input_tokens` | 404 `endpoint_not_supported_by_backend` | ✓ |
+| `GET` / `DELETE /v1/responses/{id}`、`POST /v1/responses/{id}/cancel`、`GET /v1/responses/{id}/input_items` | 不问它 | ✓（见下） |
+| `POST /v1/messages`、`POST /v1/messages/count_tokens`（Anthropic） | 404 `endpoint_not_supported_by_backend` | ✓ |
+| `GET /v1/models` | 网关自己回答：列出正在跑的模型 | 同左 |
+| `GET /healthz` | 网关自己回答，**免令牌**，只回路由状态 | 同左 |
+| 其他路径（embeddings、rerank、images、audio、realtime，以及后端的管理端点如 `/unload`、`/v1/settings`） | 404 `endpoint_not_supported`，不转发 | 同左 |
 
-路径带不带 `/v1` 都行。Codex 与 Claude Code 分别只用 responses 与 messages，所以只能配多模态后端的模型。
+路径带不带 `/v1` 都行。按请求体 `model` 字段路由的端点，发给不支持它的后端时直接回 404，后端收不到请求。
+按 id 的 responses 端点请求里没有 `model`：网关并发去问所有在跑的多模态模型（最多等 10 秒），第一个认得这个 id 的作答；
+都不认得回 404 `not_found`，等满 10 秒还有没回话的回 504 `upstream_timeout`。
+Codex 与 Claude Code 分别只用 responses 与 messages，所以只能配多模态后端的模型。
+
+**浏览器里的 Web 客户端**：网关支持 CORS。预检请求（`OPTIONS` 带 `Access-Control-Request-Method`）在鉴权之前回 204，
+允许 `GET, POST, DELETE, OPTIONS` 与 `Authorization`、`x-api-key`、`Content-Type`、`anthropic-version`、`anthropic-beta`、`openai-beta` 这几个请求头；
+响应带 `Access-Control-Allow-Origin: *`，不带 `Allow-Credentials`（令牌走请求头）。真正的请求仍要令牌，
+且 `POST` 必须是 `Content-Type: application/json`（浏览器的 `text/plain` 简单请求会被 415 挡掉）。
 
 ### 图片、音频、视频 {#media}
 
 | 你发的 | 本机来源 | 虚拟机 / Wi-Fi 设备 |
 |---|---|---|
-| `data:image/…`、`data:audio/…;base64,`、Anthropic `source.type=base64` | 原样交给模型 | 同左 |
-| `data:video/…` | 网关解码成临时文件交给模型，请求结束即删 | 同左 |
+| `data:image/…`、`data:audio/…;base64,…` | 原样交给模型 | 同左 |
+| `input_audio.data` 里的裸 base64 串（严格 base64，不带 `data:` 前缀） | 原样交给模型 | 同左 |
+| Anthropic `source.type=base64`（`media_type` 为 `image/*` 或不填） | 原样交给模型 | 同左 |
+| `data:video/…;base64,…` | 网关解码成临时文件交给模型，请求结束即删；base64 解不开 → 400 `media_source_rejected` | 同左 |
 | `http(s)://` 图片、音频（含 Anthropic `source.type=url`） | 网关取回，改写成 `data:` 交给模型 | 同左，目标地址受限（见下） |
 | `http(s)://` 视频 | 网关取回存成临时文件，请求结束即删 | 同左，目标地址受限 |
-| 本机文件路径、`file://` | 原样交给模型 | 400 `media_source_rejected` |
+| 本机文件路径、`file://`，以及模型后端会当成路径读的其他写法（不带 `;base64` 的 `data:audio`、`media_type` 不是图片的 Anthropic base64 等） | 原样交给模型 | 400 `media_source_rejected` |
 | `file_id`、Anthropic `source.type=file` | 400 `media_source_rejected` | 同左 |
+
+网关只改写媒体部件，其余字段原样转发。判定按后端实际怎么读这个值来：后端会当成本机路径去读的，远端来源一律拒。
 
 模型进程自己不对外连接，`http(s)://` 媒体一律由网关代取。**目标地址规则**（本机来源不受限，以下只针对虚拟机与 Wi-Fi 设备）：
 
@@ -790,10 +903,10 @@ wire_api = "responses"
 | `address_denied` | 目标地址不允许，或主机名写成了数字形式 |
 | `dns_failed` / `connect_failed` / `timeout` | 解析不了、连不上、30 秒内没取完 |
 | `redirect_limit` | 重定向超过 3 跳 |
-| `too_large` | 超过 `api.media_max_mb` |
-| `bad_content_type` | 响应不是 `image/*`、`audio/*`、`video/*` |
+| `too_large` | 超过 `api.media_max_mb`（看 `Content-Length` 或边读边数） |
+| `bad_content_type` | 响应的 `Content-Type` 大类与这个部件要的不一致：图片部件要 `image/*`、音频要 `audio/*`、视频要 `video/*`（图片部件取回一个 `video/mp4` 也算） |
 | `encoding_rejected` | 对方坚持压缩传输 |
-| `http_error` | 对方返回了非 2xx 状态码 |
+| `http_error` | 对方没回 200：任何其他状态码（含 204、206 与 4xx / 5xx），重定向却没给 `Location`，或正文比 `Content-Length` 短（被截断） |
 
 | 配置键 | 默认（域） | 管什么，超出时 |
 |---|---|---|
@@ -802,18 +915,25 @@ wire_api = "responses"
 | `api.media_max_parts` | 32（1–256） | 一个请求里的媒体个数：超出 → 400 `too_many_media_parts`，一个都不代取 |
 | `api.inflight_max_mb` | 2048（64–65536） | 全网关同时在处理的请求体、代取内容与临时文件之和：超出 → 503 `gateway_busy`，带 `Retry-After: 5` |
 
-`api.inflight_max_mb` 不能小于 `api.media_max_mb`：每次代取都要先按 `media_max_mb` 预留额度，预留不下就拒，
-小于它时**所有远端代取都会 503 `gateway_busy`**。遇到这种情况调大 `api.inflight_max_mb`（或调小 `api.media_max_mb`）。
+`api.inflight_max_mb` 不能小于 `api.media_max_mb`：**每一次代取**（本机来源也一样）都先按 `media_max_mb` 整额预留，取完再退回多出的部分，
+预留不下就拒。两个键各自的取值域允许 `inflight_max_mb` 比 `media_max_mb` 小，配置时**不做交叉校验** ——
+这样配了之后**所有代取都会 503 `gateway_busy`**。遇到这种情况调大 `api.inflight_max_mb`（或调小 `api.media_max_mb`）。
 改完 `mlx restart api` 生效。
 
 网关日志 `api.log` 的 `media_fetched` 事件记主机名、原因与字节数，**不记完整 URL**（查询串里常有签名）。
-视频临时文件落在 `<数据根>/run/media/<uuid4>/`（目录权限 0700），请求结束即删；网关启动时与运行中会清扫超过 1 小时的残留。
+视频临时文件落在 `<数据根>/run/media/<uuid4>/`（目录权限 0700），请求结束即删；网关崩溃留下的目录，启动时清扫一次、运行中随路由刷新（约每 5 秒）再查，删掉超过 1 小时的残留。
 写不下时返回 507 `media_storage_failed`。
 
 ### 思考与输出长度 {#thinking}
 
-**关思考**（chat / completions 端点，任选一种写法）：`"enable_thinking": false`、`"chat_template_kwargs": {"enable_thinking": false}`、
-`"thinking": {"type": "disabled"}`、`"reasoning_effort": "none"`（`off` / `disabled` / `false` / `0` 同义）。
+**开关思考**（chat / completions 端点，任选一种写法）：
+
+- 关：`"enable_thinking": false`、`"chat_template_kwargs": {"enable_thinking": false}`、`"thinking": {"type": "disabled"}`、
+  `"reasoning_effort": "none"` 或 `"reasoning": {"effort": "none"}`（`off` / `disabled` / `false` / `0` 与 `none` 同义）。
+- 开：`"enable_thinking": true`、`"chat_template_kwargs": {"enable_thinking": true}`、`"thinking": {"type": "enabled"}` 或 `{"type": "adaptive"}`。
+  `"thinking": {"type": "auto"}` 等于没表态，用模型模板的默认。
+- 几种写法同时出现时按这个顺序取第一个出现的：`chat_template_kwargs.enable_thinking` → `enable_thinking` → `thinking.type` → 取值为禁用的 `reasoning_effort` / `reasoning.effort`。
+  开关与强度分开算：`"enable_thinking": true` 加 `"reasoning_effort": "low"` 是「开，低强度」。
 多模态模型的后端（mlx_vlm）不读 `chat_template_kwargs`，网关把 `enable_thinking` / `reasoning_effort` 写到请求顶层再转给它。
 responses 与 messages 端点上，网关不归一开关，交后端按原生字段（`reasoning`、`thinking`）处理，只做下面的强度映射。
 
@@ -837,10 +957,15 @@ responses 与 messages 认 `reasoning.effort`（顶层 `reasoning_effort` 同样
 
 网关对模型**一律用流式**取结果：
 
-- **流式请求**：边生成边转发。收到模型的 200 响应头之后，上游静默满 15 秒（排队、读长上下文、长时间思考），网关发一行 `: keepalive`（SSE 注释，客户端会忽略），连接不会被中间设备当成空闲掐断。收到响应头之前模型不可达或出错，客户端拿到的是一个正常的 JSON 错误响应。
+- **流式请求**：边生成边转发。收到模型的 200 响应头之后，上游静默满 15 秒（排队、读长上下文、长时间思考），网关发一行 `: keepalive`（SSE 注释，客户端会忽略），连接不会被中间设备当成空闲掐断。网关每秒检查一次，所以实际间隔在 15～16 秒之间。收到响应头之前模型不可达或出错，客户端拿到的是一个正常的 JSON 错误响应。
 - **非流式请求**：网关收齐后拼成一个完整 JSON 返回。这期间没有字节可发，**无法保活，客户端自己的 HTTP 超时可能先到** —— 长输出、Agent 类任务请用流式（Claude Code、Codex、Cherry Studio 默认都是流式）。
-- **客户端断开**（关页面、Ctrl-C、超时）：网关关闭到模型的连接，模型停止生成、腾出并发位；`api.log` 记 `client_disconnected`。明文连接每秒探测一次客户端是否还在。**TLS 连接无法探测**，所有请求的客户端断开都只在网关写失败时才发现：上游响应头到达之前（mlx_lm 排队可能数分钟）发现不了，模型照常生成；头到达之后静默段最长约 15 秒才因保活写入发现，且对端已关时第一次写可能仍然成功。
+- **客户端断开**（关页面、Ctrl-C、超时）：网关关闭到模型的连接，模型停止生成、腾出并发位；`api.log` 记 `client_disconnected`。
+  - **明文连接**：网关每秒探测一次客户端是否还在（流式、非流式都一样，等响应头期间也探测），断开后约 1 秒内发现。
+  - **TLS 连接无法探测**，断开只能在网关往客户端写失败时发现。流式请求：上游响应头到达之前（mlx_lm 排队可能数分钟）发现不了，模型照常生成；
+    头到达之后，靠转发帧或保活写入发现，静默段最长约 16 秒，且对端已关时第一次写可能仍然成功。
+    非流式请求：没有保活，要等模型生成完、网关写回响应时才发现，这次生成会跑完。
 - **模型一侧出问题**：连不上模型或上游传输异常，`api.log` 记 `upstream_aborted`（与 `client_disconnected` 是两回事）；响应头还没发出时客户端收到 502 `upstream_error`（1.0.0 是 504）。非流式聚合失败同样记 `upstream_aborted` 并回 502。
+  这条说的是按请求体 `model` 路由的端点；按 id 查询 / 删除 / 取消 responses 的扇出端点，后端连不上或回 5xx 是 502，等满 10 秒仍有后端没回话是 504 `upstream_timeout`。
 - **流已经开始后模型断了**：`api.log` 记 `sse_truncated`（流结束时没见到终止帧：半帧、断在帧边界，或上游发了错误帧后不发终止帧就关连接）或 `upstream_aborted`（上游传输异常）。响应头已发出，客户端只看到流结束、没有错误帧；OpenAI 风格客户端可能把缺 `[DONE]` 的流当成正常结束，遇到回答突然截断时看 `api.log`。
 - 同时请求超过模型的 `max_concurrency`（默认 8）时排队。mlx_vlm 排队期间保活照常；mlx_lm 排队时连响应头都不回，**此时没有保活**。挂了完整 drafter 的 mlx_lm 实际串行处理，`max_concurrency` 不生效（`mlx status` 并发列显示「串行」）。
 - 没在请求里写 `stream_options.include_usage` 的流式客户端收不到 usage 帧（网关内部为聚合打开了它，但不下发）。
@@ -861,8 +986,11 @@ $ mlx down --all
 mlx down qwen27b        # 停一个
 mlx down api qwen27b    # 停多个
 mlx down --all          # 停掉全部有运行记录的
-mlx restart qwen27b     # 先停再起
+mlx restart qwen27b     # 先校验，通过了才停、再起
 ```
+
+想先看会停掉谁：`mlx down qwen27b --dry-run`（`down` / `restart` 都接 `--dry-run`，只打印不动手）。
+**别对 `--all` 用它**：`mlx down --all --dry-run` 目前会真的停掉全部服务（已知缺陷，见 [KNOWN-ISSUES](KNOWN-ISSUES.md)）。
 
 ---
 
@@ -886,12 +1014,15 @@ mlx model rm qwen27b --weights    # 连权重一起移入回收站
 带 `--weights` 时会要求你**键入模型 id** 确认（比 yes 更防手滑）：
 
 ```
-$ mlx model rm qwen27b
+$ mlx model rm qwen27b --weights
 确认删除 qwen27b？此操作移入回收站
 键入 qwen27b 确认: qwen27b
   ✓ qwen27b   已删除登记
-    未加 --weights，权重原样保留
+    权重已移入回收站  ~/.local/state/mlx_server/trash/models--mlx-community--Qwen3.8-27B-8bit.1788226602363
 ```
+
+不带 `--weights` 不问，直接删登记，并说明权重原样保留。（`mlx help model rm` 的说明里「删除前会要求你键入模型 id 确认」
+这句对不带 `--weights` 的情形不成立，以本节为准。）`model rm` 没有 `--dry-run`。
 
 不带 tty 的场景（脚本、CI）下确认读不到输入，按设计**视为拒绝**，零删除。
 
@@ -904,7 +1035,7 @@ mlx model gc            # 确认无误后再真回收
 
 ---
 
-### 9.3 回收站：看 · 恢复 · 清空 {#trash}
+### 回收站：看 · 恢复 · 清空 {#trash}
 
 `model rm --weights` 与 `model gc` 都是**移入回收站**，不是直接删。
 
@@ -995,6 +1126,14 @@ MLX_ROOT_WEIGHTS=<你的权重根> \
 
 升级后跑一次 `mlx check`，十二项应该全绿。
 
+**从 1.0.0 升到 1.1.0（开发中）** 还有几件事要做，[CHANGELOG](../CHANGELOG.md) 的「升级须知」逐条列了。要点：
+
+- 重跑 `bash deployer/install.sh`：会装 mlx-vlm、生成两把密钥、删除退役的表；
+- 跑一次 `mlx model repair`，清掉 1.0.0 的旧字段与退役配置键；
+- 网关现在默认对局域网与虚拟机开放、**所有来源都要令牌**：客户端都要填令牌，只给本机用就 `mlx config set api.bind --value=127.0.0.1`；
+- 配过 MTP drafter 的要撤掉（`mlx config unset <id> --key=draft_model`），本版不支持；
+- 后端密钥不再从 shell 的 `MLX_BACKEND_API_KEY` 继承，用 `mlx config set backend.api_key --value=…` 或 `mlx bootstrap keys`。
+
 ---
 
 ## 十一 · 卸载工具
@@ -1054,19 +1193,33 @@ mlx uninstall
 ## 十二 · 命令速查
 
 ```
+$ mlx help
 usage: mlx <命令> [<参数>] [--flag]
 
   工具自身  install · uninstall · status · check · version · help
   服务      up · down · restart <id>
   api       info
-  bootstrap render · verify
+  bootstrap keys · verify
   caps      refresh · show
   config    diff · export · get · import · ls · set · unset · validate
-  model     gc · info · install · ls · register · repair · rm
+  model     gc · info · install · ls · register · repair · rm · trash empty · trash ls · trash restore
   其他      bench · chat
 
+  带值的参数写成 --key=value（如 --repo=mlx-community/xxx）
   mlx help <命令>   看单条详解
 ```
+
+几条手册别处没细讲的：
+
+| 命令 | 做什么 |
+|---|---|
+| `mlx version` | 工具版本、当前解释器、venv 解释器、venv 里的后端包与能力采集时间 |
+| `mlx caps refresh` / `mlx caps show` | 重新采集 / 查看 venv 里装了哪些后端包（`up` 按它判断后端可不可用，装完包要 refresh） |
+| `mlx bootstrap keys` | 只补空的密钥，输出只列键名（见[密钥](#keys)） |
+| `mlx bootstrap verify` | 按分发清单逐项校验安装产物，`verified` 是齐全的项数，`extra` 是清单外多出来的 |
+| `mlx config validate` | 每个配置键一行：当前值与来源，取值非法的标成 failed |
+| `mlx status <id>` / `mlx status --all` | 只看一个服务 / 看所有有运行记录的服务 |
+| `mlx check --json` | 机读的检查结果 |
 
 ### 每条命令都有详解
 
@@ -1078,16 +1231,16 @@ $ mlx help model rm
     mlx model rm —— 删除一个模型的登记；--weights 连权重一起回收
 
 用法
-    mlx model rm <目标> [--dry-run] [--json] [--weights]
+    mlx model rm <目标> [--json] [--weights] [--yes]
 
 说明
     删除一个模型的**登记**。默认**不动权重** —— 加 --weights 才把权重
     移入回收站（可恢复）。删除前会要求你键入模型 id 确认。
 
 参数
-    --dry-run   只打印将要做什么，不真的做（零外部动作）
     --json      输出机读 JSON（默认输出是给人看的）
     --weights   连同权重文件一起回收（默认只删登记）
+    --yes       跳过确认（**只对 `model rm --weights` 有效**；`model trash empty` 不可跳过，它是唯一不可恢复的动作）
 
 退出码
     0   成功
@@ -1097,12 +1250,11 @@ $ mlx help model rm
     6   前置拒绝（校验段判定不通过，**零资源创建**）
 
 例子
-    mlx model rm qwen27b             # 只删登记，权重保留（不问确认）
-    mlx model rm qwen27b --weights   # 连权重一起回收（要确认）
-mlx model rm qwen27b --weights --yes   # 脚本 / CI 里跳过确认
+    mlx model rm qwen27b             # 只删登记，权重保留
+    mlx model rm qwen27b --weights   # 连权重一起回收
 
 参见
-    mlx model gc · mlx model info · mlx model install · mlx model ls · mlx model register · mlx model repair
+    mlx model gc · mlx model info · mlx model install · mlx model ls · mlx model register · mlx model repair · mlx model trash empty · mlx model trash ls · mlx model trash restore
 
 文档  USER-GUIDE.md#rm
 ```
@@ -1129,15 +1281,15 @@ $ mlx ls
 ```
 $ mlx check
 有检查项未通过（见上）。每一项的下一步写在它自己那行
-  ✓ code_root     ok
-  ✓ data_root     ok
-  ✓ weights_root  ok
-  ✗ venv          failed   推理 venv 未建 —— 只影响真实推理，工具本身可用
-  ✓ tables        ok
-  ✓ models_file   ok
-  ✓ run_dir       ok
-  ✓ ports         ok
-  ✓ caps          ok
+  ✓ code_root      ok
+  ✓ data_root      ok
+  ✓ weights_root   ok
+  ✗ venv           failed   推理 venv 缺失或解释器太旧（要 ≥ 3.10）—— `mlx up` 会起不来新模型。`mlx version` 看当前版本；修：`brew install python@3.13` 后重跑安装器 `bash <源码目录>/deployer/install.sh`（它会用新解释器重建 venv，权重与注册表不动）
+  ✓ tables         ok
+  ✓ models_file    ok
+  ✓ run_dir        ok
+  ✓ ports          ok
+  ✓ caps           ok
   ✓ gateway_nets   ok
   ✓ gateway_port   ok
   ✓ settings_mode  ok
@@ -1163,6 +1315,43 @@ mlx config unset port                      # 撤销，回落到下一层
 mlx config diff                            # 只看你改过的
 ```
 
+**`get` / `set` / `unset` 的目标有两种写法**，别混：
+
+- **全局键**：键名本身就是位置参数 —— `mlx config get api.token --reveal`、`mlx config set max_tokens --value=4096`、`mlx config unset max_tokens`。
+- **某个模型**：位置参数是模型 id，键用 `--key=` 给 —— `mlx config get qwen05b --key=max_tokens`、`mlx config unset qwen05b --key=modality`。
+
+只写 `--key=` 而不给位置参数（`config get` 后面直接跟 `--key=…`）会报「config get 需要一个目标」，rc 2。
+
+`get` 默认给人看（键 / 值 / 来源三行），密钥打码为 `****`；`--reveal` 显示原值，`--json` 给脚本用。
+
+注意：登记时给的端口记在注册表里，不在这三层里 —— `mlx config get <模型> --key=port` 显示的是配置层的值（没设过就是出厂 8100），
+不是模型实际用的端口。实际端口以 `mlx model ls` 或 `mlx up <id> --dry-run` 为准。
+
+全部配置键（`mlx config ls` 列出同一批；默认与取值域来自 `share/schema.tsv`）：
+
+| 键 | 默认（域） | 作用范围 | 管什么 | 改完重启 |
+|---|---|---|---|---|
+| `port` | 8100（1–65535） | 全局或模型 | 模型监听端口；登记时的 `--port` 优先 | 该模型 |
+| `max_tokens` | 81920（1–1048576） | 全局或模型 | 后端默认输出长度（请求里自带的值照常生效） | 该模型 |
+| `max_concurrency` | 8（1–256） | 全局或模型 | 后端同时处理的请求数 | 该模型 |
+| `modality` | auto（auto / text / vision） | 模型 | 模态覆盖，见[自动选择后端](#backend) | 该模型 |
+| `draft_model` | 空（模型短名） | 模型 | 投机解码的 drafter，见[投机解码](#draft) | 该模型 |
+| `num_draft_tokens` | 3（1–16） | 模型 | drafter 每次猜几个 token | 该模型 |
+| `backend.api_key` | 空（32–128 位 `[A-Za-z0-9_-]`） | 全局 | mlx_vlm 后端的密钥，见[密钥](#keys) | 多模态模型与网关 |
+| `api.token` | 空（同上） | 全局 | 网关令牌 | 网关 |
+| `api.bind` | 0.0.0.0（IP 地址） | 全局 | 网关绑定地址 | 网关 |
+| `api.allow_cidrs` | 空（逗号分隔的网段） | 全局 | 额外放行的网段，见[远端接入](#remote) | 网关 |
+| `api.tls_cert` / `api.tls_key` | 空（文件路径） | 全局 | 网关 TLS 证书与私钥，两个都设才开 TLS | 网关 |
+| `api.max_body_mb` | 256（1–2048） | 全局 | 请求体上限，超出 413 | 网关 |
+| `api.media_max_mb` | 128（1–2048） | 全局 | 单个代取媒体的上限，见[媒体](#media) | 网关 |
+| `api.media_max_parts` | 32（1–256） | 全局 | 一个请求里的媒体个数上限 | 网关 |
+| `api.inflight_max_mb` | 2048（64–65536） | 全局 | 全网关在途字节上限；**不得小于 `api.media_max_mb`**，否则所有代取 503（配置时不交叉校验） | 网关 |
+| `fit.reserve_pct` | 20（0–99） | 全局 | 容量闸门给系统预留的内存份额 | 不用 |
+| `fit.tight_pct` | 75（1–100） | 全局 | 超过这个比例算「挤」 | 不用 |
+| `fit.over_pct` | 95（1–100） | 全局 | 超过这个比例拒绝启动 | 不用 |
+
+`revision`、`size_mb` 也在表里，但它们是工具从磁盘读出的事实，不能 `config set`（见下）。
+
 ```
 $ mlx config diff
   键           当前值      来自      出厂值
@@ -1179,7 +1368,7 @@ mlx config import --from=mlx-config.json --dry-run   # 先看计划
 mlx config import --from=mlx-config.json
 ```
 
-`export` **只导出改过的键**（出厂值换台机器仍是出厂值），且**跳过机密**。
+`export` **只导出改过的键**（出厂值换台机器仍是出厂值），且**跳过机密**（两把密钥要在新机器上重新生成或设置）。
 `import` **不假装原子** —— 跨文件事务做不到一次全成，所以它逐条报告：
 
 ```
@@ -1239,41 +1428,41 @@ grep -n 'mlx_server' ~/.zshrc               # PATH 写进去了吗
 
 首次使用，能力还没采过。跑 `mlx caps refresh`。
 
-### 模型状态一直是「已登记未下载」
+### 模型状态一直是「已登记」，变不成「就绪」
 
 权重目录布局不对，或权重根路径不对（第 3.1 节讲了规划目录长什么样）。
 用 `mlx model install` 下载的不会出这个问题，手工下载的要对一下路径：
 
 ```bash
-mlx status                                       # 看权重根在哪
+mlx model info qwen05b                           # 「期望路径」与「实际找到」两行
 ls ~/lab/models/mlx/hub/                         # 看目录名对不对
 mlx model repair                                 # 让工具按磁盘事实重建
 ```
 
+状态是「已登记未下载」的，通常是 `model install` 下载失败留下的记录：补下完权重后同样跑 `mlx model repair`。
+
 ### `venv` 检查项失败
 
-安装器会建 venv 并装 `huggingface_hub` / `mlx` / `mlx-lm`。这一项失败有**两种**成因，
-先看 `mlx check` 那行的提示语区分：
+安装器会建 venv 并装 `huggingface_hub` / `mlx` / `mlx-lm` / `mlx-vlm`。这一项失败的提示是
+「推理 venv 缺失或解释器太旧（要 ≥ 3.10）」，对应**两种**成因，用 `mlx version` 的「venv 解释器」一行区分：
 
-- **「缺失」** —— 建 venv 那步没成。工具本身仍可用（垫片会回落 Homebrew 或系统
+- **venv 不存在** —— 建 venv 那步没成。工具本身仍可用（垫片会回落 Homebrew 或系统
   python3），但下载与推理用不了。
-- **「解释器太旧（要 ≥ 3.10）」** —— venv 在，但它是拿 3.9 建的，**装不上
-  `mlx ≥ 0.30.4`**。先 `brew install python@3.13` 再重跑安装器，它会**就地重建**
-  venv（权重与注册表不动）。
+- **venv 是 3.9 建的** —— **装不上 `mlx ≥ 0.30.4`**。先 `brew install python@3.13` 再重跑安装器，
+  它会**就地重建** venv（权重与注册表不动）。
 
 两种都是重跑一次安装器：
 
 ```bash
 mlx install            # 幂等，会补建 venv
-mlx version            # 看「venv 解释器」和「依赖三包」两行
-
-> `mlx install` 跑的是**代码根里那份**安装器（`INV-20`：`deployer/*.sh` 是部署的
-> 唯一实现点，`mlx install` 只是转调它）。**安装器自身升级过**时它还是旧的 ——
-> 那种情况要从源码跑一次 `bash <源码>/deployer/install.sh`，跑完新 `deployer/`
-> 就被拷进代码根，之后 `mlx install` 又等价了。
+mlx version            # 看「venv 解释器」和「后端包」两行
 ```
 
-`依赖三包` 那行列的是**真正装上的**包。缺哪个就手工补：
+> `mlx install` 跑的是**代码根里那份**安装器（`mlx install` 只是转调它）。**安装器自身升级过**时它还是旧的 ——
+> 那种情况要从源码跑一次 `bash <源码>/deployer/install.sh`，跑完新 `deployer/`
+> 就被拷进代码根，之后 `mlx install` 又等价了。
+
+「后端包」那行列的是 venv 里**真正装上的**后端包（以最近一次能力采集为准）。缺哪个就手工补：
 
 ```bash
 ~/.local/share/mlx_server/.venv/bin/pip install -U mlx-lm
@@ -1282,15 +1471,15 @@ mlx caps refresh       # 重新采集，否则 `up` 会因能力漂移拒绝启�
 
 ### 服务在跑，但 `chat` / `bench` 说连不上
 
-先确认端口对得上：
+报错是「进程在跑，但连不上它的端口 … —— 多半是模型没加载成功」时，**先看那个服务的日志**：
 
 ```bash
-mlx status                     # 看那一行的端口和 PID
-curl -s http://127.0.0.1:<那个端口>/v1/models
+tail -n 50 ~/.local/state/mlx_server/logs/qwen05b.log
 ```
 
-curl 通而 `mlx chat` 不通，说明注册表里登记的端口与实际监听的不是同一个 ——
-`mlx model repair` 后重启服务。
+mlx_lm 是先监听端口、首次请求才加载模型的，加载失败（不支持的架构、配了它跑不了的 drafter）进程也不退出，
+所以 `mlx status` 会一直说「在跑」—— 真因只在日志里（常见是 `ValueError: Model type … not supported`）。
+修好原因后 `mlx restart <id>`。日志里看不出问题，再对一下端口：`mlx model ls` 的端口列与日志里的监听端口是否一致。
 
 ### 命令返回 rc=1 且提到「已落地（需收敛）」
 
@@ -1302,22 +1491,33 @@ curl 通而 `mlx chat` 不通，说明注册表里登记的端口与实际监听
 mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟。超时按体积算（`20 + 3 × 体积 GB` 秒），
 报错里会说明「可能只是还没加载完」—— 先 `mlx status <id>` 看它是否已在跑，不要重复 `up`。
 
-### 客户端收到 4xx / 503 / 507
+### 客户端收到 4xx / 5xx
+
+错误响应体都是 `{"error": {"type": …, "message": …}}`；网关自己的日志在数据根的 `logs/api.log`，模型的在 `logs/<模型>.log`。
 
 | 状态码 | 含义 | 怎么办 |
 |---|---|---|
-| 403 `peer_not_allowed` | 来源地址不在放行网段（常见：经 VPN 连、网桥不是虚拟机网桥） | `mlx api info` 看放行网段；确需放行：`mlx config set api.allow_cidrs --value=<网段>` 后 `mlx restart api` |
-| 401 | 没带令牌或令牌不对（本机也要） | `mlx config get api.token --reveal` |
+| 403 `peer_not_allowed` | 来源地址不在放行网段（常见：经 VPN 连、网桥不是虚拟机网桥）。响应里不含地址，地址记在 `api.log` 的 `peer_denied` | `mlx api info` 看放行网段；确需放行：`mlx config set api.allow_cidrs --value=<网段>` 后 `mlx restart api` |
+| 401 `auth` | 没带令牌或令牌不对（本机也要） | `mlx config get api.token --reveal`；改过令牌后网关要 `mlx restart api` |
 | 415 | 请求头不是 `Content-Type: application/json` | 客户端改请求头 |
+| 405 | `OPTIONS` 请求没带 `Access-Control-Request-Method`（不是合法的 CORS 预检） | 客户端问题，正常浏览器不会这样发 |
+| 404 `model_not_found` | 请求里的 `model` 没在网关的路由表里，`message` 列出当前可用的 id。最常见：模型没 `up` | `mlx up <id>`；id 用短名（`mlx api info` 的「可用」），不是仓库名 |
 | 404 `endpoint_not_supported_by_backend` | 该模型的后端不提供这个端点 | 看[端点表](#clients) |
+| 404 `endpoint_not_supported` | 这个路径网关根本不转发（embeddings、images、管理端点等） | 看[端点表](#clients) |
+| 404 `not_found` | 按 id 查询 / 删除 / 取消 responses 时，没有在跑的后端认得这个 id | id 是不是另一次会话、或模型重启前的 |
 | 400 `media_fetch_failed` | 网关没取到 URL 里的媒体，`error.reason` 说明原因 | 看[媒体](#media)的原因表 |
 | 400 `media_source_rejected` | 虚拟机或 Wi-Fi 设备发了本机路径 / `file://`，或用了 `file_id` | 改用 `data:` 或 `http(s)://` |
 | 400 `too_many_media_parts` | 一个请求里的媒体超过 `api.media_max_parts` | 拆成多个请求，或调大该键 |
 | 400 `thinking_budget_unsupported` | 文本模型不支持 `thinking_budget` | 去掉该字段，改用 `reasoning_effort` |
-| 400 `invalid_request` | 请求体不是 JSON 对象（数组、字符串）或不是合法 JSON | 客户端改请求体 |
+| 400 `invalid_request` | 缺 `model` 字段；请求体不是 JSON 对象（数组、字符串）或不是合法 JSON；用了分块传输（`Transfer-Encoding`，不支持）；`Content-Length` 非法 | 客户端改请求 |
 | 413 `invalid_request` | 请求体超过 `api.max_body_mb`（默认 256 MB，内联 `data:` 媒体也算） | 改用 `http(s)://` 让网关代取，或调大该键后 `mlx restart api` |
-| 502 `upstream_error` | 连不上模型 / 上游传输异常（`api.log` 记 `upstream_aborted`；流已开始后断开则是 200 加 `sse_truncated`，见[流式](#streaming)），或按 id 查询 / 删除 / 取消时后端对 2xx 回了非 JSON | 看 `logs/<模型>.log`，`mlx status` 看它是否还在跑 |
+| 502 `upstream_error` | 连不上模型 / 上游传输异常（`api.log` 记 `upstream_aborted`；流已开始后断开则是 200 加 `sse_truncated`，见[流式](#streaming)），后端回了 5xx，或按 id 查询 / 删除 / 取消时后端对 2xx 回了非 JSON | 看 `logs/<模型>.log`，`mlx status` 看它是否还在跑 |
+| 502 `upstream_auth_failed` | 后端拒绝了网关带的 `backend.api_key`：多半是改了密钥，网关或模型没重启 | `mlx status` 末尾的「密钥已变更，需重启」那行列出要重启的服务 |
+| 后端的 4xx | 后端认为请求参数不对（如 400 / 422），状态码原样透传；虚拟机与 Wi-Fi 来源看到的错误信息去掉了本机路径与异常片段 | 按 `message` 改请求参数 |
 | 503 `gateway_busy` | 同时在处理的媒体太多（`api.inflight_max_mb`），或该键小于 `api.media_max_mb` | 按 `Retry-After` 5 秒后重试；或调大该键后 `mlx restart api` |
+| 503 `auth` | 网关没有令牌（正常情况下 `mlx up api` 会拒绝这样起） | `mlx bootstrap keys` 后 `mlx restart api` |
+| 503 `route_lost` | 请求路由到的模型在这一刻停了 | `mlx up <id>` 后重试 |
+| 504 `upstream_timeout` | 按 id 的 responses 端点，10 秒内有后端没回话 | 看该模型是否卡住（`logs/<模型>.log`） |
 | 507 `media_storage_failed` | 视频临时文件写不下 | 看数据根所在磁盘的剩余空间 |
 
 ### 退出码
@@ -1327,11 +1527,12 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 | 0 | 成功 |
 | 1 | 执行段失败，可能有资源已落地 |
 | 2 | 参数错 |
-| 3 | 外部依赖不可用（网络 / venv / 外部命令缺失） |
+| 3 | 外部依赖不可用（网络 / venv / 外部命令缺失 / 无法启动） |
 | 4 | 有界等待走完仍未达成（就绪 / 终止确认） |
-| 5 | 用户取消或中断 |
+| 5 | 用户取消、确认串失配或中断 |
 | 6 | 前置条件不满足（**零资源创建**） |
-| 7 | 资源冲突（端口 / 锁） |
+| 7 | 资源冲突（端口 / 唯一性 / 锁超时） |
+| 8 | 供应链闸门阻断（登记在 `model install` / `register`、`config export` / `import` 的码集里） |
 | 9 | 要动手时判定不确定 → 拒绝（fail-closed） |
 | 10 | 服务启动后立即退出 |
 | 64 / 65 | 聚合结果：含告警 / 含失败 |
@@ -1345,29 +1546,32 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 
 ```
 ~/.local/share/mlx_server/      代码根 —— 卸载时删这个
-├── bin/mlx                     T0 垫片（3 行 exec）
-├── lib/mlx_server/             T1 主体（纯标准库；venv → brew → 系统，三级回落）
-├── gateway/                    T2 网关
+├── bin/mlx                     T0 垫片：找解释器（venv → Homebrew → 系统三级回落）后 exec
+├── lib/mlx_server/             T1 主体（纯标准库）
+├── gateway/                    T2 网关（纯标准库）
 ├── deployer/                   部署器（源码树删了也能卸载）
 ├── payload/                    载荷副本（`mlx install` 重装的源）
-├── .venv/                      推理用的虚拟环境（hf / mlx / mlx-lm 装在这里）
+├── .venv/                      推理用的虚拟环境（huggingface_hub、mlx、mlx-lm、mlx-vlm 装在这里）
 └── share/
     ├── constants.env           三根 · 端口 · 标记串（安装器产出）
     ├── verbs.tsv               动词台账 —— 解析/分派/help 都读它
     ├── cli.tsv                 参数面 —— 解析/补全/help 都读它
+    ├── schema.tsv              配置键：类型、取值域、默认值、改完重启什么
+    ├── backends.tsv            两个后端（mlx_lm / mlx_vlm）的启动参数与端点
+    ├── drafters.tsv            附属 drafter 的 model_type 集合
     ├── manifest.tsv            分发清单
-    └── messages.tsv            文案
+    ├── messages.tsv            文案
+    └── caps.json               后端能力采集结果（`mlx caps refresh` 写这里）
 
 ~/.local/state/mlx_server/      数据根 —— 卸载保留
 ├── models.jsonl                模型注册表 + 状态
-├── settings.json               全局配置（`mlx config set <键>` 写这里）
-├── caps.json                   能力采集缓存
+├── settings.json               全局配置与两把密钥（权限 0600；`mlx config set <键>` 写这里）
 ├── sessions/                   `mlx chat` 的会话记录
 ├── trash/                      回收站（`model rm --weights` / `model gc` 移到这里）
-│   └── origins.tsv             每份被回收物的原始路径
-├── run/<service>.json          运行记录（pid/pgid/port/started_at）
-├── run/media/<uuid4>/          网关代取的视频临时文件（0700，请求结束即删，残留超 1 小时启动时清扫）
-├── logs/<service>.log
+│   └── index.jsonl             每份被回收物的原始路径
+├── run/<服务>.json             运行记录（pid/pgid/port/started_at；网关的是 run/api.json）
+├── run/media/<uuid4>/          网关代取的视频临时文件（0700，请求结束即删；超过 1 小时的残留在网关启动时与运行中清扫）
+├── logs/<服务>.log             各模型的后端日志；网关的是 logs/api.log
 └── backups/                    改动你 shell rc 前的备份
 
 ~/lab/models/mlx/               权重根 —— 卸载保留
@@ -1395,13 +1599,17 @@ cd ~/dev/projects/mlx-toolkit
 bash check.sh           # ruff + pytest + 3.9.6 真解释器编译
 ```
 
-三步全绿才算过。**提交会被 pre-commit hook 拦** —— `check.sh` 不绿提交不进去。
+三步全绿（最后一行 `全绿 ✓`）才算过。仓库不替你装 git 钩子，提交前自己跑；想强制就把它挂进 `.git/hooks/pre-commit`。
+
+部分 L3 网关用例读这台机器的真实网络配置：需要 Wi-Fi / 有线 / 虚拟机网桥上有 IPv4 地址，且有一个在线的 `utun*` VPN 接口。
+条件不满足时这些用例**按设计失败**而不是跳过 —— 跳过会让「排除 VPN」这条规则在真实输出上没人验。
+设计台账层（`tests/design`）在没有台账的克隆里整层带原因跳过，这是预期的。
 
 ### 测试的纪律
 
 每条断言都要能回答：**错误的实现能通过它吗？** 答不上来的断言等于没有。
 
-本项目吃过这个亏：上一版 665 条断言全绿，同时有 9 个用户可见故障 ——
+本项目吃过这个亏：上一代实现（v6）断言全绿，同时有 9 个用户可见故障 ——
 因为断言求值的是源码和合成夹具，而用户运行的是**安装产物**。
 
 因此 L3 层一律跑真实安装器 + 真实安装产物，且命令跑在 `env -i`
