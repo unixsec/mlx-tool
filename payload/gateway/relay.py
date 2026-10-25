@@ -26,20 +26,26 @@ PROBE_SEC = 1.0
 READ_TIMEOUT_SEC = 600.0
 
 
-def open_upstream(port, path, payload, headers=None, host="127.0.0.1", timeout_sec=READ_TIMEOUT_SEC):
-    # type: (int, str, dict, object, str, float) -> tuple
+def open_upstream(port, path, payload, headers=None, host="127.0.0.1", timeout_sec=READ_TIMEOUT_SEC,
+                  register=None):
+    # type: (int, str, dict, object, str, float, object) -> tuple
     """→ `("stream", conn, resp)` / `("error", status, body)`（发出任何字节前的 HTTP 错误）/ `("failed", detail)`。
 
     `timeout_sec` 是**单次读等待**（spec：600 s，覆盖排队、prefill 与 token 间隔），没有总时长上限。
+    `register(conn)` 在连接建立后、发请求前调用：让调用方在响应头到达前就能关掉这条连接
+    （mlx_lm 排队时可能几分钟不回响应头，客户端此时走了也要能取消）。
     """
     conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
     try:
+        conn.connect()
+        if register is not None:
+            register(conn)
         conn.request("POST", path, body=json.dumps(payload).encode(),
                      headers=dict({"Content-Type": "application/json",
                                    "Accept": "text/event-stream"}, **(headers or {})))
         resp = conn.getresponse()
-    except (OSError, http.client.HTTPException) as exc:
-        conn.close()
+    except (OSError, http.client.HTTPException, ValueError, TypeError) as exc:
+        conn.close()                     # ValueError：头值含换行；TypeError：载荷不可序列化
         return ("failed", str(exc)[:200])
     if resp.status >= 400:
         try:
@@ -69,32 +75,52 @@ def client_alive(sock):
         return False
 
 
-def _close(head):
-    # type: (object) -> None
-    """**真正关掉**上游连接。只 `conn.close()` 不够：响应对象经 `makefile` 仍持有 socket 引用，
-    fd 不会关闭；macOS 上发往已 `SHUT_RD` 的数据被静默丢弃、不回 RST —— 后端的写一直成功，
-    永远走不到取消生成的 `finally`。先 shutdown 唤醒阻塞中的读，再关响应对象释放引用，最后关连接。"""
+def _close(state):
+    # type: (dict) -> None
+    """**真正关掉**上游连接，响应头到达前后都行（`state["conn"]` 由 `open_upstream` 提前登记）。
+    只 `conn.close()` 不够：响应对象经 `makefile` 仍持有 socket 引用，fd 不会关闭；macOS 上发往已
+    `SHUT_RD` 的数据被静默丢弃、不回 RST —— 后端的写一直成功，永远走不到取消生成的 `finally`。
+    先 shutdown 唤醒阻塞中的读，再关响应对象释放引用，最后关连接。"""
+    head = state["head"]
+    conn = state["conn"]
+    resp = None
     if head and head[0] == "stream":
         conn, resp = head[1], head[2]
+    if conn is None:
+        return
+    # 取登记时的 socket：以关连接标记结束的响应在 getresponse() 里就把 `conn.sock` 置 None，
+    # 此时只有响应对象还握着 socket，不 shutdown 的话 `resp.close()` 会等阻塞中的读线程
+    sock = state["sock"] or conn.sock
+    if sock is not None:
         with contextlib.suppress(OSError):
-            if conn.sock is not None:
-                conn.sock.shutdown(socket.SHUT_RDWR)
+            sock.shutdown(socket.SHUT_RDWR)
+    if resp is not None:
         with contextlib.suppress(OSError, http.client.HTTPException):
             resp.close()
+    with contextlib.suppress(OSError, http.client.HTTPException):
         conn.close()
 
 
 def relay(open_fn, on_head, on_chunk, client_alive_fn, keepalive=None,
           keepalive_sec=KEEPALIVE_SEC, probe_sec=PROBE_SEC, clock=time.monotonic):
     # type: (object, object, object, object, object, float, float, object) -> dict
+    """`open_fn(register)` 在读取线程里调用，把 `register` 交给 `open_upstream`。
+    任何退出路径（含回调抛出任意异常）都会关闭上游，读取线程随之结束。"""
     items = queue.Queue()
-    state = {"head": None, "cancelled": False}
+    state = {"head": None, "conn": None, "sock": None, "cancelled": False}
+
+    def register(conn):
+        state["conn"] = conn
+        state["sock"] = conn.sock
 
     def reader():
-        head = open_fn()
+        try:
+            head = open_fn(register)
+        except BaseException as exc:     # noqa: BLE001  读线程静默死亡会让主循环永远等
+            head = ("failed", f"{type(exc).__name__}: {str(exc)[:200]}")
         state["head"] = head
         if state["cancelled"]:
-            _close(head)                 # 客户端在等响应头期间就走了
+            _close(state)                # 客户端在等响应头期间就走了
         items.put(("head", head))
         if head[0] != "stream":
             return
@@ -112,53 +138,53 @@ def relay(open_fn, on_head, on_chunk, client_alive_fn, keepalive=None,
     threading.Thread(target=reader, daemon=True).start()
     result = {"outcome": "ok", "head": None, "bytes": 0}
     last = last_probe = clock()
-    while True:
-        # **按时间间隔探测，不依附于「取不到数据」**：上游持续出 token 时队列永远不空，
-        # 若只在空闲时探测，非流式客户端（帧只进聚合器、不写客户端）断开后后端会一直跑到生成结束
-        if clock() - last_probe >= probe_sec:
-            last_probe = clock()
-            if not client_alive_fn():
-                state["cancelled"] = True
-                _close(state["head"])
-                result["outcome"] = "client_disconnected"
-                return result
-        try:
-            kind, value = items.get(timeout=probe_sec)
-        except queue.Empty:
-            if keepalive is not None and result["head"] is not None and clock() - last >= keepalive_sec:
-                try:
-                    keepalive()
-                except OSError:
-                    state["cancelled"] = True
-                    _close(state["head"])
+    try:
+        while True:
+            # **按时间间隔探测，不依附于「取不到数据」**：上游持续出 token 时队列永远不空，
+            # 若只在空闲时探测，非流式客户端（帧只进聚合器、不写客户端）断开后后端会一直跑到生成结束
+            if clock() - last_probe >= probe_sec:
+                last_probe = clock()
+                if not client_alive_fn():
                     result["outcome"] = "client_disconnected"
                     return result
-                last = clock()
-            continue
-        if kind == "head":
-            result["head"] = value
-            on_head(value)
-            if value[0] == "error":
-                result["outcome"] = "upstream_error"
-                return result
-            if value[0] == "failed":
-                result["outcome"] = "upstream_failed"
-                return result
-            last = clock()
-        elif kind == "chunk":
             try:
-                on_chunk(value)
-            except OSError:
-                state["cancelled"] = True
-                _close(result["head"])
-                result["outcome"] = "client_disconnected"
+                kind, value = items.get(timeout=probe_sec)
+            except queue.Empty:
+                if keepalive is not None and result["head"] is not None and clock() - last >= keepalive_sec:
+                    try:
+                        keepalive()
+                    except OSError:
+                        result["outcome"] = "client_disconnected"
+                        return result
+                    last = clock()
+                continue
+            if kind == "head":
+                result["head"] = value
+                try:
+                    on_head(value)
+                except OSError:
+                    result["outcome"] = "client_disconnected"
+                    return result
+                if value[0] == "error":
+                    result["outcome"] = "upstream_error"
+                    return result
+                if value[0] == "failed":
+                    result["outcome"] = "upstream_failed"
+                    return result
+                last = clock()
+            elif kind == "chunk":
+                try:
+                    on_chunk(value)
+                except OSError:
+                    result["outcome"] = "client_disconnected"
+                    return result
+                result["bytes"] += len(value)
+                last = clock()
+            elif kind == "end":
                 return result
-            result["bytes"] += len(value)
-            last = clock()
-        elif kind == "end":
-            _close(result["head"])
-            return result
-        else:
-            _close(result["head"])
-            result["outcome"] = "upstream_aborted"
-            return result
+            else:
+                result["outcome"] = "upstream_aborted"
+                return result
+    finally:
+        state["cancelled"] = True
+        _close(state)

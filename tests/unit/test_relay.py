@@ -64,7 +64,7 @@ def run(mode, keepalive_sec=0.5, probe_sec=0.1, disconnect_after=None, write_fai
         got["keepalives"] += 1
     if disconnect_after is not None:
         threading.Timer(disconnect_after, peer.close).start()
-    res = R.relay(lambda: R.open_upstream(PORT, "/v1/chat/completions", {"mode": mode}),
+    res = R.relay(lambda reg: R.open_upstream(PORT, "/v1/chat/completions", {"mode": mode}, register=reg),
                   on_head, on_chunk, lambda: R.client_alive(client), keepalive,
                   keepalive_sec=keepalive_sec, probe_sec=probe_sec)
     elapsed = time.monotonic() - t0
@@ -86,7 +86,7 @@ r["write_fail"] = run("endless", write_fails_after=0.3)
 r["slow_head_disconnect"] = run("slow_head", disconnect_after=0.3)
 r["bad"] = run("bad")
 r["abort"] = run("abort")
-r["failed"] = R.relay(lambda: R.open_upstream(1, "/x", {}), lambda h: None, lambda c: None,
+r["failed"] = R.relay(lambda reg: R.open_upstream(1, "/x", {}, register=reg), lambda h: None, lambda c: None,
                       lambda: True, None, probe_sec=0.05)
 r["failed"] = [r["failed"]["outcome"], r["failed"]["head"][0]]
 a, b = socket.socketpair()
@@ -117,3 +117,181 @@ def test_relay_keepalive_disconnect_and_errors(payload, sys_py):
     assert got["abort"]["outcome"] == "upstream_aborted"
     assert got["failed"] == ["upstream_failed", "failed"]
     assert got["alive"] == [True, False]
+
+
+PROG2 = r"""
+import json, socket, ssl, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from gateway import relay as R
+
+SAW_CLOSE = {}          # mode -> 上游观测到连接关闭的时刻
+class Up(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a): pass
+    def _watch(self, mode, limit=6.0):
+        # 阻塞等客户端关连接；只做 recv，不写（写在 macOS 上对已关连接也可能成功）
+        self.connection.settimeout(0.1)
+        end = time.monotonic() + limit
+        while time.monotonic() < end:
+            try:
+                if self.connection.recv(1) == b"":
+                    SAW_CLOSE[mode] = time.monotonic(); return
+            except socket.timeout:
+                continue
+            except OSError:
+                SAW_CLOSE[mode] = time.monotonic(); return
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        mode = json.loads(self.rfile.read(n) or b"{}").get("mode")
+        if mode == "silent_head":                 # 排队：连响应头都不发
+            self._watch(mode); return
+        self.send_response(200); self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close"); self.end_headers(); self.wfile.flush()
+        if mode == "silent_stream":               # 头发了，之后一个字节都不发
+            self._watch(mode)
+        elif mode == "one_then_silent":
+            self.wfile.write(b'data: {"i": 0}\n\n'); self.wfile.flush()
+            self._watch(mode)
+        elif mode == "stall":                     # 静默 3 s，用来验证单次读超时真的传到了 socket
+            time.sleep(3)
+        elif mode == "steady":
+            for i in range(14):                   # 间隔 0.15 s > probe 0.1 s：队列会空，但不到保活间隔
+                self.wfile.write(b'data: {"i": %d}\n\n' % i); self.wfile.flush(); time.sleep(0.15)
+            self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
+up = ThreadingHTTPServer(("127.0.0.1", 0), Up); up.daemon_threads = True
+threading.Thread(target=up.serve_forever, daemon=True).start()
+PORT = up.server_address[1]
+
+def run(mode, on_head=None, on_chunk=None, keepalive=None, alive=None, open_kw=None,
+        keepalive_sec=0.4, probe_sec=0.1, disconnect_after=None, open_fn=None):
+    client, peer = socket.socketpair()
+    if disconnect_after is not None:
+        threading.Timer(disconnect_after, peer.close).start()
+    cnt = {"ka": 0}
+    def ka():
+        cnt["ka"] += 1
+        if keepalive:
+            keepalive()
+    t0 = time.monotonic()
+    err = None
+    res = {"outcome": None, "bytes": 0}
+    try:
+        res = R.relay(open_fn or (lambda reg: R.open_upstream(PORT, "/x", {"mode": mode}, register=reg,
+                                                              **(open_kw or {}))),
+                      on_head or (lambda h: None), on_chunk or (lambda c: None),
+                      alive or (lambda: R.client_alive(client)), ka,
+                      keepalive_sec=keepalive_sec, probe_sec=probe_sec)
+    except Exception as exc:
+        err = type(exc).__name__
+    elapsed = time.monotonic() - t0
+    client.close()
+    try: peer.close()
+    except OSError: pass
+    time.sleep(0.4)
+    return {"outcome": res["outcome"], "err": err, "elapsed": round(elapsed, 2), "ka": cnt["ka"],
+            "upstream_closed": mode in SAW_CLOSE and SAW_CLOSE[mode] - t0 < elapsed + 2.0}
+
+def boom(exc):
+    def f(*a):
+        raise exc
+    return f
+
+r = {}
+r["consts"] = [R.KEEPALIVE_SEC, R.PROBE_SEC, R.READ_TIMEOUT_SEC]
+# I5a 单次读超时真的传到 socket：上游静默 3 s，timeout_sec=0.4 ⇒ read1 超时 ⇒ aborted，不等 3 s
+r["read_timeout"] = run("stall", open_kw={"timeout_sec": 0.4}, keepalive_sec=60)
+# I1 / I5b 等响应头期间断开，上游（排队中）必须看到连接被关
+SAW_CLOSE.clear(); r["head_wait"] = run("silent_head", disconnect_after=0.3)
+# I5b 静默流 + 断开：读线程正阻塞在 read1
+SAW_CLOSE.clear(); r["quiet_disc"] = run("silent_stream", disconnect_after=0.3, keepalive_sec=60)
+# I2 on_head 写失败
+SAW_CLOSE.clear(); r["head_write_fail"] = run("silent_stream", on_head=boom(BrokenPipeError(32, "x")), keepalive_sec=60)
+# I5d 保活写失败
+SAW_CLOSE.clear(); r["ka_write_fail"] = run("silent_stream", keepalive=boom(BrokenPipeError(32, "x")), keepalive_sec=0.3)
+# I4 回调抛非 OSError：异常外抛，但上游必须被关
+SAW_CLOSE.clear(); r["alive_raises"] = run("silent_stream", alive=boom(ValueError("closed")), probe_sec=0.1, keepalive_sec=60)
+SAW_CLOSE.clear(); r["chunk_raises"] = run("one_then_silent", on_chunk=boom(ValueError("closed")), keepalive_sec=60)
+SAW_CLOSE.clear(); r["ka_raises"] = run("silent_stream", keepalive=boom(ValueError("closed")), keepalive_sec=0.3)
+# I3 open_fn 抛任意异常 / 头值含换行 / 载荷不可序列化
+r["open_raises"] = run("x", open_fn=boom(RuntimeError("boom")))
+r["bad_header"] = run("x", open_fn=lambda reg: R.open_upstream(PORT, "/x", {}, headers={"X-A": "a\nb"}, register=reg))
+r["bad_payload"] = run("x", open_fn=lambda reg: R.open_upstream(PORT, "/x", {"m": object()}, register=reg))
+# I5e 保活间隔：静默 ~1.3 s（用断开收尾）次数有上界；持续出数据时不保活
+r["quiet_ka"] = run("silent_stream", disconnect_after=1.3, keepalive_sec=0.4)
+r["steady_ka"] = run("steady", keepalive_sec=0.5)
+
+# I5c client_alive
+a, b = socket.socketpair()
+b.send(b"x")
+alive_pending = R.client_alive(a)
+kept = a.recv(1)
+r["peek"] = [alive_pending, kept.decode()]
+lst = socket.socket(); lst.bind(("127.0.0.1", 0)); lst.listen(1)
+c = socket.create_connection(lst.getsockname()); s_, _ = lst.accept()
+s_.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+s_.close(); time.sleep(0.2)
+r["reset"] = R.client_alive(c)
+# TLS：真握手的 SSLSocket 对 MSG_PEEK 抛 ValueError（前提），client_alive 须判在线且不吞数据
+sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); sctx.load_cert_chain("@CERT@", "@KEY@")
+cctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); cctx.check_hostname = False; cctx.verify_mode = ssl.CERT_NONE
+ta, tb = socket.socketpair()
+box = {}
+def srv():
+    box["s"] = sctx.wrap_socket(tb, server_side=True)
+th = threading.Thread(target=srv); th.start()
+tc = cctx.wrap_socket(ta, server_hostname="localhost"); th.join()
+box["s"].send(b"y"); time.sleep(0.2)
+try:
+    tc.recv(1, socket.MSG_PEEK); premise = "no-raise"
+except ValueError:
+    premise = "ValueError"
+r["tls"] = [premise, R.client_alive(tc), tc.recv(1).decode()]
+print(json.dumps(r))
+"""
+
+
+def _cert(tmp_path):
+    import subprocess
+    key, crt = tmp_path / "k.pem", tmp_path / "c.pem"
+    subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
+                    "-out", str(crt), "-days", "1", "-subj", "/CN=localhost"], check=True,
+                   capture_output=True)
+    return crt, key
+
+
+def test_relay_contract_fixes(payload, sys_py, tmp_path):
+    crt, key = _cert(tmp_path)
+    g = run_floor(payload, sys_py, PROG2, with_gateway=True, timeout=120, CERT=crt, KEY=key)
+    # 常量（spec 设计值）
+    assert g["consts"] == [15.0, 1.0, 600.0]
+    # 单次读超时真传到上游 socket
+    t = g["read_timeout"]
+    assert t["outcome"] == "upstream_aborted" and t["elapsed"] < 2.2, t
+    # I1：等响应头期间断开 ⇒ 上游连接被关
+    h = g["head_wait"]
+    assert h["outcome"] == "client_disconnected" and h["elapsed"] < 1.5 and h["upstream_closed"], h
+    # I5b：静默流 + 断开，读线程阻塞在 read1 时也要及时返回并关上游
+    q = g["quiet_disc"]
+    assert q["outcome"] == "client_disconnected" and q["elapsed"] < 1.5 and q["upstream_closed"], q
+    # I2：写响应头失败
+    w = g["head_write_fail"]
+    assert w["outcome"] == "client_disconnected" and w["err"] is None and w["upstream_closed"], w
+    # I5d：保活写失败
+    k = g["ka_write_fail"]
+    assert k["outcome"] == "client_disconnected" and k["elapsed"] < 1.5 and k["upstream_closed"], k
+    # I4：回调抛非 OSError ⇒ 异常外抛，上游照关
+    for name in ("alive_raises", "chunk_raises", "ka_raises"):
+        x = g[name]
+        assert x["err"] == "ValueError" and x["upstream_closed"] and x["elapsed"] < 3.0, (name, x)
+    # I3：open_fn 异常不让主循环永远等
+    for name in ("open_raises", "bad_header", "bad_payload"):
+        x = g[name]
+        assert x["outcome"] == "upstream_failed" and x["elapsed"] < 3.0, (name, x)
+    # I5e：保活间隔上界与「出数据时不保活」
+    ka = g["quiet_ka"]
+    assert 2 <= ka["ka"] <= ka["elapsed"] / 0.4 + 1, ka
+    assert g["steady_ka"]["ka"] == 0 and g["steady_ka"]["outcome"] == "ok", g["steady_ka"]
+    # I5c：peek 不吞数据；对端 RST ⇒ 离线；TLS ⇒ 在线且数据仍在
+    assert g["peek"] == [True, "x"]
+    assert g["reset"] is False
+    assert g["tls"] == ["ValueError", True, "y"], g["tls"]
