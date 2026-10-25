@@ -19,6 +19,7 @@ import ipaddress
 import re
 import socket
 import ssl
+import threading
 import time
 from urllib.parse import urljoin, urlsplit
 
@@ -79,6 +80,12 @@ def target_allowed(ip, peer_class, allowed_nets):
         return False
     if ip.version == 6 and ip.teredo is not None:
         return False
+    for n in allowed_nets or ():                  # 本机自身地址（含公网形态的）不作代取目标
+        try:
+            if ip == unwrap(ipaddress.ip_address(str(n.get("addr")).split("%")[0])):
+                return False
+        except ValueError:
+            continue
     if ip.is_global:
         return True
     for n in allowed_nets or ():
@@ -94,8 +101,29 @@ def _resolve(host, port):
     return [info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
 
 
-def _host_ips(host, port, resolver):
-    # type: (str, int, object) -> list
+def _resolve_by_deadline(resolver, host, port, remaining):
+    # type: (object, str, int, float) -> list
+    """解析放守护线程，按剩余墙钟 join；超时放弃线程（它只会自己结束），不阻塞调用方。"""
+    box = {}
+
+    def work():
+        try:
+            box["ok"] = resolver(host, port)
+        except BaseException as exc:  # noqa: BLE001 —— 原样交回调用线程处理
+            box["err"] = exc
+
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(max(0.01, remaining))
+    if t.is_alive():
+        raise FetchError("timeout", "DNS")
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
+
+
+def _host_ips(host, port, resolver, remaining=WALL_SEC):
+    # type: (str, int, object, float) -> list
     try:
         return [ipaddress.ip_address(host)]
     except ValueError:
@@ -103,7 +131,7 @@ def _host_ips(host, port, resolver):
     if _NUMERICISH.match(host):
         raise FetchError("address_denied", "非规范的 IP 写法")
     try:
-        answers = (resolver or _resolve)(host, port)
+        answers = _resolve_by_deadline(resolver or _resolve, host, port, remaining)
     except (OSError, UnicodeError) as exc:
         raise FetchError("dns_failed", str(exc)[:80]) from exc
     ips = []
@@ -134,14 +162,20 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
     deadline = clock() + wall_sec
     connect = connect or default_connect
     for _hop in range(MAX_REDIRECTS + 1):
-        parts = urlsplit(url)
-        scheme = (parts.scheme or "").lower()
-        if scheme not in ("http", "https") or not parts.hostname:
+        try:
+            parts = urlsplit(url)
+            scheme = (parts.scheme or "").lower()
+            host = parts.hostname
+            explicit_port = parts.port
+        except ValueError as exc:                 # 端口越界/非数字、方括号不配对
+            raise FetchError("address_denied", "URL 无法解析") from exc
+        if scheme not in ("http", "https") or not host:
             raise FetchError("address_denied", "只允许 http / https")
-        host = parts.hostname
+        if explicit_port == 0:
+            raise FetchError("address_denied", "端口 0")
         default_port = 443 if scheme == "https" else 80
-        port = parts.port or default_port
-        ips = _host_ips(host, port, resolver)
+        port = explicit_port or default_port
+        ips = _host_ips(host, port, resolver, deadline - clock())
         if not all(target_allowed(ip, peer_class, allowed_nets) for ip in ips):
             raise FetchError("address_denied", host)
         remaining = deadline - clock()
@@ -151,6 +185,7 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
         try:
             try:
                 conn = connect(ips[0], port, scheme, host, remaining, ssl_context)
+                sock = getattr(conn, "sock", None)   # getresponse 遇 will_close 会把 conn.sock 置空，先留住
                 target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
                 host_header = (f"[{host}]" if ":" in host else host) + (
                     "" if port == default_port else f":{port}")
@@ -168,7 +203,10 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
                 location = resp.getheader("Location")
                 if not location:
                     raise FetchError("http_error", "重定向缺 Location")
-                url = urljoin(url, location)
+                try:
+                    url = urljoin(url, location)
+                except ValueError as exc:
+                    raise FetchError("address_denied", "重定向目标无法解析") from exc
                 continue
             if resp.status != 200:
                 raise FetchError("http_error", str(resp.status))
@@ -183,18 +221,25 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
                 raise FetchError("too_large", length)
             chunks, total = [], 0
             while True:
-                if clock() > deadline:
+                left = deadline - clock()
+                if left <= 0:
                     raise FetchError("timeout", host)
                 try:
-                    chunk = resp.read(65536)
+                    if sock is not None:
+                        sock.settimeout(max(0.01, left))   # 每次 recv 都受剩余墙钟约束
+                    chunk = resp.read1(65536)               # 至多一次 recv，不攒满再返回
                 except socket.timeout as exc:
                     raise FetchError("timeout", host) from exc
+                except (OSError, http.client.HTTPException) as exc:
+                    raise FetchError("connect_failed", str(exc)[:80]) from exc
                 if not chunk:
                     break
                 total += len(chunk)
                 if total > max_bytes:
                     raise FetchError("too_large", str(total))
                 chunks.append(chunk)
+            if length and length.isdigit() and total != int(length):
+                raise FetchError("http_error", f"正文被截断 {total}/{length}")
             return {"content_type": ctype, "data": b"".join(chunks), "host": host}
         finally:
             if conn is not None:

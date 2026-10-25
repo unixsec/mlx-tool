@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from floor import run_floor  # noqa: E402
 
 PROG = r"""
-import ipaddress, json, os, socket, ssl, subprocess, tempfile, threading, time
+import ipaddress, json, os, socket, struct, ssl, subprocess, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from gateway import fetch as F
 from gateway import peers as P
@@ -35,6 +35,33 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/chain"):
             n = int(p[len("/chain"):] or 0)
             return self._send(301, headers={"Location": "/chain%d" % (n + 1) if n < 4 else "/img.png"})
+        if p == "/drip":                      # 声明 1000 字节，每 0.3 s 滴 1 字节
+            self.send_response(200); self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", "1000"); self.end_headers()
+            try:
+                for _ in range(1000):
+                    self.wfile.write(b"x"); self.wfile.flush(); time.sleep(0.3)
+            except OSError:
+                pass
+            return
+        if p == "/stall":                     # 0.8 s 后发头和 10 字节，随后停住
+            time.sleep(0.8)
+            self.send_response(200); self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", "1000"); self.end_headers()
+            self.wfile.write(b"x" * 10); self.wfile.flush(); time.sleep(5); return
+        if p == "/trunc":                     # 声明 1000 字节只发 10 字节就关
+            self.send_response(200); self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", "1000"); self.end_headers()
+            self.wfile.write(b"x" * 10); self.wfile.flush(); return
+        if p == "/reset":                     # 发一半后 RST
+            self.send_response(200); self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", "1000"); self.end_headers()
+            self.wfile.write(b"x" * 10); self.wfile.flush(); time.sleep(0.2)
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            self.connection.close(); return
+        if p.startswith("/rbad"):
+            loc = ["http://8.8.8.8:99999/x", "http://8.8.8.8:abc/x", "http://[::1/x", "http://8.8.8.8:0/x"][int(p[5:])]
+            return self._send(302, headers={"Location": loc})
         if p == "/slow":
             time.sleep(3); return self._send(200, "image/png", PNG)
         return self._send(404, "text/plain", b"no")
@@ -69,10 +96,10 @@ def resolver_of(mapping):
         seq = mapping[host]
         return seq[min(len(calls), len(seq)) - 1] if isinstance(seq[0], list) else seq
     return resolve
-def run(url, peer="REMOTE", resolver=None, connect=to_local, max_bytes=1024 * 1024, **kw):
+def run(url, peer="REMOTE", resolver=None, connect=to_local, max_bytes=1024 * 1024, nets=None, **kw):
     CONNECTS.clear()
     try:
-        got = F.fetch(url, peer, NETS, max_bytes, resolver=resolver, connect=connect, **kw)
+        got = F.fetch(url, peer, NETS if nets is None else nets, max_bytes, resolver=resolver, connect=connect, **kw)
         return ["ok", got["content_type"], len(got["data"]), list(CONNECTS)]
     except F.FetchError as e:
         return [e.reason, list(CONNECTS)]
@@ -112,6 +139,22 @@ SEEN.clear(); run("http://public.test:8080/img.png", resolver=resolver_of({"publ
 r["headers"] = SEEN[0]
 r["unwrap"] = [str(F.unwrap(ipaddress.ip_address(a))) for a in
                ("::ffff:10.0.0.1", "64:ff9b::a00:1", "2002:a00:1::1", "8.8.8.8")]
+
+t0 = time.monotonic(); d = run("http://8.8.8.8/drip", wall_sec=1.0)[0]
+r["drip"] = [d, time.monotonic() - t0 < 2.0]       # 滴灌也要在墙钟内被切断
+def slow_dns(host, port): time.sleep(3); return ["8.8.8.8"]
+t0 = time.monotonic(); d = run("http://slowdns.test/img.png", resolver=slow_dns, wall_sec=1.0)[0]
+r["slow_dns"] = [d, time.monotonic() - t0 < 2.0]
+t0 = time.monotonic(); d = run("http://8.8.8.8/stall", wall_sec=1.0)[0]
+r["stall"] = [d, time.monotonic() - t0 < 1.5]      # 读中途停住：socket 超时要按剩余墙钟收紧
+r["trunc"] = run("http://8.8.8.8/trunc")[0]
+r["reset"] = run("http://8.8.8.8/reset")[0]
+BADURLS = ["http://8.8.8.8:99999/x", "http://8.8.8.8:abc/x", "http://[::1/x", "http://8.8.8.8:0/x"]
+r["badurl"] = [run(u)[0] for u in BADURLS]
+r["badredirect"] = [run("http://8.8.8.8/rbad%d" % i)[0] for i in range(4)]
+NETS2 = NETS + [{"net": "8.8.4.0/24", "iface": "en1", "kind": "ethernet", "scope": None, "addr": "8.8.4.4"}]
+r["self_addr"] = [run("http://8.8.4.4/img.png", nets=NETS2)[0], run("http://8.8.8.8/img.png", nets=NETS2)[0],
+                  run("http://8.8.4.4/img.png", peer="LOOPBACK", nets=NETS2)[0]]
 
 # 共享网段包含判断（gateway.peers.net_matches）在同一份放行网段上必须给出同一个答案——
 # classify_peer 判来源、target_allowed 判代取目标，各自只多筛/少筛哪些条目参与判断，
@@ -156,3 +199,11 @@ def test_fetch_rules(payload, sys_py):
     assert got["agree_wifi_allowed"] == [True, True], "两处对 wifi 网段必须一致"
     assert got["agree_vpn_denied"] == [False, False], "两处对未放行的私网地址必须一致"
     assert got["agree_cgnat_denied"] == [False, False], "两处对 CGNAT 私网地址必须一致"
+    assert got["drip"] == ["timeout", True], "滴灌不得拖过 wall_sec"
+    assert got["slow_dns"] == ["timeout", True], "DNS 解析受墙钟约束"
+    assert got["trunc"] == "http_error", "Content-Length 与实际字节不符不得算成功"
+    assert got["reset"] == "connect_failed", "读中途 RST 要映射成原因码而不是裸异常"
+    assert got["badurl"] == ["address_denied"] * 4, "越界/非数字端口、方括号不配对、端口 0"
+    assert got["badredirect"] == ["address_denied"] * 4, "重定向 Location 同样"
+    assert got["self_addr"] == ["address_denied", "ok", "ok"], "本机自身地址（即便公网形态）远端来源不可达；本机来源不限"
+    assert got["stall"] == ["timeout", True], "每次 recv 的超时按剩余墙钟收紧，不是沿用建连时的整段"
