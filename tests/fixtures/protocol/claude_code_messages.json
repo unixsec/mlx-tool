@@ -1,0 +1,14 @@
+{
+  "model": "qwen38",
+  "max_tokens": 32000,
+  "stream": true,
+  "system": [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}],
+  "metadata": {"user_id": "user_abc"},
+  "thinking": {"type": "enabled", "budget_tokens": 2048},
+  "tools": [{"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": ["file_path"]}}],
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "看看这张截图里的报错，然后读 /Users/alex/dev/app.py"}, {"type": "image", "source": {"type": "url", "url": "http://img.test/shot.png"}}]},
+    {"role": "assistant", "content": [{"type": "thinking", "thinking": "先读文件。", "signature": "sig_1"}, {"type": "text", "text": "我先读一下文件。"}, {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "/Users/alex/dev/app.py"}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": "def main():\n    raise ValueError('boom')"}, {"type": "image", "source": {"type": "url", "url": "http://img.test/trace.png"}}]}, {"type": "text", "text": "继续"}]}
+  ]
+}

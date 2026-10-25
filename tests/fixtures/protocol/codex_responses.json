@@ -1,0 +1,18 @@
+{
+  "model": "qwen38",
+  "instructions": "You are Codex.",
+  "stream": true,
+  "store": false,
+  "parallel_tool_calls": false,
+  "include": ["reasoning.encrypted_content"],
+  "reasoning": {"effort": "high", "summary": "auto"},
+  "tools": [{"type": "function", "name": "shell", "description": "Run a command", "parameters": {"type": "object", "properties": {"command": {"type": "array", "items": {"type": "string"}}}, "required": ["command"]}}],
+  "input": [
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "跑一下测试并看截图"}, {"type": "input_image", "image_url": "http://img.test/ui.png"}]},
+    {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "先跑测试"}], "encrypted_content": "gAAAA"},
+    {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "shell", "arguments": "{\"command\":[\"pytest\",\"-q\"]}"},
+    {"type": "function_call_output", "call_id": "call_1", "output": "1 failed, 12 passed"},
+    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "有一个失败。"}]},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "修掉它"}]}
+  ]
+}

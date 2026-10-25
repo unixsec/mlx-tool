@@ -37,6 +37,47 @@ def inbound(body, model_arg):
     return out
 
 
+class InboundError(Exception):
+    """请求体里有后端不支持、网关也无法等价转换的参数（如 mlx_lm 上的 thinking_budget）。"""
+
+    def __init__(self, status, err_type, message):
+        # type: (int, str, str) -> None
+        super().__init__(message)
+        self.status, self.err_type, self.message = status, err_type, message
+
+    def reply(self):
+        # type: () -> tuple
+        return (self.status, {"error": {"type": self.err_type, "message": self.message}})
+
+
+def build_upstream(body, family, snap, peer_class, model_arg, media=None):
+    # type: (dict, str, dict, str, str, object) -> tuple
+    """入站管线（spec §4.3），顺序固定：**剥离加载类字段 -> 媒体 -> 思考与长度归一 -> 流式化 -> `.model`**。
+
+    其余字段（`tools`、`tool_choice`、`response_format`、`parallel_tool_calls`、`logprobs`、`stop`、
+    `top_k`、`thinking_budget`、厂商扩展、所有非媒体 part）逐字节透传。不修改入参。
+    -> `(上游请求体, {"client_stream", "client_usage"})`：server 层据此决定直出还是聚合、留不留 usage 帧。
+    """
+    from . import effort
+    from . import media as media_mod
+    out = effort.strip_loading(body)
+    if media is not None:
+        out = media_mod.process(out, family, peer_class, media["nets"], media["limits"],
+                                media["ticket"], media["store"], media.get("fetcher"))
+    out, err = effort.normalize(out, family, snap or {})
+    if err:
+        raise InboundError(*err)
+    stream_options = out.get("stream_options") if isinstance(out.get("stream_options"), dict) else {}
+    meta = {"client_stream": bool(out.get("stream")),
+            "client_usage": bool(stream_options.get("include_usage"))}
+    # **上游一律流式**（D22）：非流式在后端线程里跑完才返回，长输出必然读超时，且不感知客户端断开
+    out["stream"] = True
+    if family in ("chat", "completions"):
+        out["stream_options"] = dict(stream_options, include_usage=True)
+    out["model"] = model_arg
+    return out, meta
+
+
 def outbound(body, short_id):
     # type: (dict, str) -> dict
     """回程改写：`model` 各位置改回短 id，补 `reasoning_content`（`R-API-21` 三向一致）。"""
