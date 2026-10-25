@@ -45,6 +45,7 @@ cx = json.load(open("@PROTO@/codex_responses.json"))
 orig = copy.deepcopy(cx)
 up, meta = T.build_upstream(cx, "responses", VLM, "REMOTE", "BACKEND-ARG", media_ctx())
 r["cx"] = {
+    "input_untouched": canon(cx) == canon(orig),
     "items_same": [canon(up["input"][i]) == canon(orig["input"][i]) for i in (1, 2, 3, 4, 5)],
     "text_same": canon(up["input"][0]["content"][0]) == canon(orig["input"][0]["content"][0]),
     "image": up["input"][0]["content"][1]["image_url"][:22],
@@ -56,9 +57,23 @@ chat = {"model": "qwen38", "adapters": "x", "adapter_path": "y", "draft_model": 
         "messages": [{"role": "user", "content": "hi"}], "thinking": {"type": "disabled"},
         "max_completion_tokens": 4000, "stream_options": {"continuous_usage_stats": True},
         "tools": [{"type": "function", "function": {"name": "f"}}], "top_k": 20}
+chat_orig = copy.deepcopy(chat)
 for name, snap in (("vlm", VLM), ("lm", LM)):
     up, meta = T.build_upstream(chat, "chat", snap, "LOOPBACK", "BACKEND-ARG")
-    r["chat_" + name] = {"up": up, "meta": meta}
+    r["chat_" + name] = {"up": up, "meta": meta, "input_untouched": canon(chat) == canon(chat_orig)}
+# 配对：client_usage 为 True / False（上游仍强制 True）、completions 族
+for tag, so in (("usage_on", {"include_usage": True}), ("usage_off", {"include_usage": False})):
+    b = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "stream": True, "stream_options": so}
+    b0 = copy.deepcopy(b)
+    up, meta = T.build_upstream(b, "chat", LM, "LOOPBACK", "B")
+    r[tag] = {"meta": meta, "so": up["stream_options"], "untouched": canon(b) == canon(b0)}
+cp = {"model": "m", "prompt": "hi", "stream_options": {"include_usage": True, "x": 1}}
+cp0 = copy.deepcopy(cp)
+up, meta = T.build_upstream(cp, "completions", LM, "LOOPBACK", "B")
+r["compl"] = {"meta": meta, "so": up["stream_options"], "stream": up["stream"], "untouched": canon(cp) == canon(cp0)}
+cp = {"model": "m", "prompt": "hi"}
+up, meta = T.build_upstream(cp, "completions", LM, "LOOPBACK", "B")
+r["compl_bare"] = {"meta": meta, "so": up["stream_options"], "stream": up["stream"]}
 try:
     T.build_upstream({"model": "m", "messages": [], "thinking_budget": 64}, "chat", LM, "LOOPBACK", "B")
     r["budget"] = None
@@ -88,6 +103,7 @@ def test_build_upstream(payload, sys_py):
     assert (cc["model"], cc["stream"], cc["no_stream_options"]) == ("BACKEND-ARG", True, True)
     assert cc["meta"] == {"client_stream": True, "client_usage": False}
     cx = got["cx"]
+    assert cx["input_untouched"] is True, "responses：不得修改客户端请求体"
     assert cx["items_same"] == [True] * 5 and cx["text_same"] is True and cx["top_level_same"] is True
     assert cx["image"] == "data:image/png;base64,"
     assert cx["reasoning"] == {"summary": "auto", "effort": "xhigh"}, "responses 只映射 effort"
@@ -100,9 +116,19 @@ def test_build_upstream(payload, sys_py):
         assert up["stream_options"] == {"continuous_usage_stats": True, "include_usage": True}
         assert (up["tools"], up["top_k"]) == ([{"type": "function", "function": {"name": "f"}}], 20)
         assert g["meta"] == {"client_stream": False, "client_usage": False}
+        assert g["input_untouched"] is True, f"{name}：media=None 路径不得修改入参（嵌套结构）"
     assert vlm["up"]["enable_thinking"] is False and vlm["up"]["max_tokens"] == 4000
     assert lm["up"]["chat_template_kwargs"] == {"enable_thinking": False} and "max_tokens" not in lm["up"]
     assert got["budget"] == [400, {"error": {"type": "thinking_budget_unsupported",
                                              "message": "thinking_budget is not supported by the mlx_lm backend"}}]
     assert got["media_err"] == "media_source_rejected"
     assert got["legacy_inbound"] == {"model": "BACKEND-ARG", "x": 1}
+    assert got["usage_on"]["meta"] == {"client_stream": True, "client_usage": True}, "客户端要 usage 帧"
+    assert got["usage_off"]["meta"] == {"client_stream": True, "client_usage": False}
+    for k in ("usage_on", "usage_off"):
+        assert got[k]["so"] == {"include_usage": True} and got[k]["untouched"] is True
+    assert got["compl"]["so"] == {"include_usage": True, "x": 1} and got["compl"]["stream"] is True
+    assert got["compl"]["meta"] == {"client_stream": False, "client_usage": True}
+    assert got["compl"]["untouched"] is True
+    assert got["compl_bare"]["so"] == {"include_usage": True} and got["compl_bare"]["stream"] is True
+    assert got["compl_bare"]["meta"] == {"client_stream": False, "client_usage": False}
