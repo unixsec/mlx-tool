@@ -148,6 +148,22 @@ def normalize_peer(addr):
     return ip
 
 
+def net_matches(entry, ip, scope=None):
+    # type: (dict, object, object) -> bool
+    """单条放行网段条目是否覆盖 `ip`：版本一致 + 网段包含 + `scope` 相等
+    （`fe80::/64%en0` 不放行 `fe80::x%utun4`；`entry` 没有 `scope` 时不比较）。
+
+    `classify_peer`（判来源）与 `gateway.fetch.target_allowed`（判代取目标）共用
+    这一份「网段是否覆盖地址」的判断——两处的差别只在各自 for 循环里先筛掉哪些
+    条目（哪些 kind、要不要整段排掉带 scope 的条目），不是这条判断本身分叉出
+    两套逻辑。两处判定分叉过一次就是一次可利用的 SSRF/越权，别再写第二份。
+    """
+    net = ipaddress.ip_network(entry["net"])
+    if net.version != ip.version or ip not in net:
+        return False
+    return not (entry.get("scope") and entry["scope"] != scope)
+
+
 def classify_peer(addr, nets):
     # type: (str, dict) -> object
     """→ `"LOOPBACK"` / `"REMOTE"` / `None`（不在放行集合 ⇒ 调用方回 403）。
@@ -163,12 +179,8 @@ def classify_peer(addr, nets):
     for n in nets.get("allowed") or ():
         if n["kind"] == "loopback":
             continue
-        net = ipaddress.ip_network(n["net"])
-        if net.version != ip.version or ip not in net:
-            continue
-        if n.get("scope") and n["scope"] != scope:
-            continue                           # fe80::/64%en0 不放行 fe80::x%utun4
-        return "REMOTE"
+        if net_matches(n, ip, scope):
+            return "REMOTE"
     return None
 
 
