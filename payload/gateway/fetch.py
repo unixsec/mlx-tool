@@ -37,7 +37,7 @@ _NUMERICISH = re.compile(r"^(?:0x[0-9a-fx.]*|[0-9.]+)$", re.IGNORECASE)
 
 
 class FetchError(Exception):
-    """代取失败。`reason ∈ REASONS`；`detail` 只进日志，不回给客户端。"""
+    """代取失败。`reason ∈ REASONS`；`detail` 不进日志与客户端，只供测试/调试断言。"""
 
     def __init__(self, reason, detail=""):
         # type: (str, str) -> None

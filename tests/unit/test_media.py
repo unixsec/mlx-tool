@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from floor import run_floor  # noqa: E402
 
 PROG = r"""
+TOOL_TYPES = __TOOL_TYPES__
 import base64, copy, json, os, stat, tempfile, time
 from gateway import fetch as F
 from gateway import media as M
@@ -13,7 +14,8 @@ from gateway import media as M
 PNG, WAV, MP4 = b"\x89PNG" + b"p" * 100, b"RIFF" + b"w" * 60, b"\x00\x00\x00\x18ftyp" + b"v" * 80
 CANNED = {"http://img.test/a.png": ("image/png", PNG), "http://aud.test/a.wav": ("audio/wav", WAV),
           "http://vid.test/../x.sh": ("video/quicktime", MP4), "http://vid.test/odd": ("video/x-foo", MP4),
-          "http://vid.test/a.mp4": ("video/mp4", MP4), "http://img.test/b.jpg": ("image/jpeg", PNG)}
+          "http://vid.test/a.mp4": ("video/mp4", MP4), "http://img.test/b.jpg": ("image/jpeg", PNG),
+          "http://10.1.2.3/x.png": ("image/png", PNG)}
 CALLS = []
 def fake_fetch(url, peer, nets, max_bytes, kinds):
     CALLS.append(url)
@@ -129,11 +131,52 @@ out["messages"] = {"b64_same": m[0]["content"][1] == msgs["messages"][0]["conten
                    "tool_text_same": m[2]["content"][0]["content"][0] == msgs["messages"][2]["content"][0]["content"][0]}
 out["anthropic_file"] = go({"model": "m", "messages": [{"role": "user", "content": [
     {"type": "image", "source": {"type": "file", "file_id": "f"}}]}]}, "messages", "LOOPBACK").get("err")
-pair = M.Budget(1 << 20)
+pair = M.Budget(1 << 30)
 ok = go(chat([{"type": "image_url", "image_url": {"url": "http://img.test/a.png"}}]), "chat", "REMOTE", budget=pair)
 held = pair.used
 ok["ticket"].close()
 out["budget_pair"] = [held, pair.used]
+CALLS.clear()
+small = M.Budget(100 * 1024 * 1024)
+pre = go(chat([{"type": "image_url", "image_url": {"url": "http://img.test/a.png"}}]), "chat", "REMOTE",
+         budget=small)
+out["prepay"] = [pre.get("err"), len(CALLS), small.used]
+VID = chat([{"type": "video", "video": "http://vid.test/a.mp4"}])
+vb = M.Budget(1 << 30)
+v = go(VID, "chat", "REMOTE", budget=vb)
+out["video_once"] = [vb.used, v["bytes"]]
+v["ticket"].close()
+# 同一类形态：Responses 任意 item 的 output / content，后端对四类工具输出类型都当图片加载
+EVIL = {"type": "input_image", "image_url": "/etc/passwd"}
+HTTP10 = {"type": "input_image", "image_url": "http://10.1.2.3/x.png"}
+out["tool_types"] = {}
+for t in TOOL_TYPES + ["totally_unknown_item"]:
+    for key in ("output", "content"):
+        item = {"type": t, key: [{"type": "input_text", "text": "x"}, EVIL]}
+        out["tool_types"][t + "." + key] = [go({"model": "m", "input": [item]}, "responses", "LOOPBACK").get("err"),
+                                            go({"model": "m", "input": [item]}, "responses", "REMOTE").get("err")]
+CALLS.clear()
+shell = {"model": "m", "input": [{"type": "shell_call_output", "output": [HTTP10]}]}
+r = go(shell, "responses", "REMOTE")
+out["shell_http"] = [r["ok"]["input"][0]["output"][0]["image_url"][:22], CALLS == ["http://10.1.2.3/x.png"]]
+CALLS.clear()
+cap = {"model": "m", "input": [{"type": "shell_call_output", "output": [HTTP10] * 3}]}
+out["shell_cap"] = [go(cap, "responses", "REMOTE", limits=dict(LIMITS, media_max_parts=2)).get("err", [0])[0], len(CALLS)]
+# 放行谓词与后端逐字一致：不 strip、区分大小写
+strict = {}
+for name, fam, part in (
+        ("img_space", "chat", {"type": "image_url", "image_url": {"url": " data:image/png;base64,AAAA"}}),
+        ("img_upper", "chat", {"type": "image_url", "image_url": {"url": "DATA:image/png;base64,AAAA"}}),
+        ("img_nocomma", "chat", {"type": "image_url", "image_url": {"url": "data:image/png;base64"}}),
+        ("aud_upper", "chat", {"type": "input_audio", "input_audio": {"data": "data:AUDIO/wav;base64,AAAA"}}),
+        ("aud_b64upper", "chat", {"type": "input_audio", "input_audio": {"data": "data:audio/wav;BASE64,AAAA"}}),
+        ("aud_text", "chat", {"type": "input_audio", "input_audio": {"data": "data:text/plain;base64,AAAA"}}),
+        ("a_mt_text", "messages", {"type": "image", "source": {"type": "base64", "media_type": "text/x", "data": "AAAA"}}),
+        ("a_mt_upper", "messages", {"type": "image", "source": {"type": "base64", "media_type": "Image/png", "data": "AAAA"}}),
+        ("a_mt_int", "messages", {"type": "image", "source": {"type": "base64", "media_type": 5, "data": "AAAA"}}),
+        ("a_nodata", "messages", {"type": "image", "source": {"type": "base64", "media_type": "image/png"}})):
+    strict[name] = [go(chat([part]), fam, "LOOPBACK").get("err"), go(chat([part]), fam, "REMOTE").get("err")]
+out["strict"] = strict
 old = store.new_dir(); open(os.path.join(old, "1.mp4"), "wb").write(b"x")
 fresh = store.new_dir(); open(os.path.join(fresh, "1.mp4"), "wb").write(b"x")
 past = time.time() - 7200
@@ -143,8 +186,35 @@ print(json.dumps(out, ensure_ascii=False))
 """
 
 
+STATE_GLOB = "~/.local/share/mlx_server/.venv/lib/python3*/site-packages/mlx_vlm/server/responses_state.py"
+FALLBACK_TOOL_TYPES = ["function_call_output", "shell_call_output", "apply_patch_call_output", "tool_result"]
+
+
+def _deployed_tool_output_types():
+    """从部署 venv 的 responses_state.py 抽「按工具输出处理」的 item 类型字面量；没部署返回 None。"""
+    import glob
+    import os
+    import pathlib
+    import re
+    for path in sorted(glob.glob(os.path.expanduser(STATE_GLOB))):
+        text = pathlib.Path(path).read_text(encoding="utf-8")
+        m = re.search(r'item_type in \(\s*((?:"[a-z_]+",\s*)+)\)\s*:\s*\n\s*output = item\.get\("output"', text)
+        assert m, "responses_state.py 里找不到工具输出类型元组：后端改版了，更新这条守卫"
+        return re.findall(r'"([a-z_]+)"', m.group(1))
+    return None
+
+
+def test_deployed_backend_tool_output_types_are_scanned():
+    import pytest
+    deployed = _deployed_tool_output_types()
+    if deployed is None:
+        pytest.skip("本机没有已部署的 mlx_vlm（~/.local/share/mlx_server/.venv）：无从抽取后端的工具输出类型")
+    assert len(deployed) >= 1, "抽取结果为空（test_media_processing 会拿这组类型逐个构造远端本地路径 item）"
+
+
 def test_media_processing(payload, sys_py):
-    got = run_floor(payload, sys_py, PROG, with_gateway=True, timeout=60)
+    types = _deployed_tool_output_types() or FALLBACK_TOOL_TYPES
+    got = run_floor(payload, sys_py, PROG.replace("__TOOL_TYPES__", repr(list(types))), with_gateway=True, timeout=60)
     for peer in ("LOOPBACK", "REMOTE"):
         g = got[peer]
         assert g["text"] == {"type": "text", "text": "看图 /Users/alex/secret.png"}, "非媒体 part 必须原样"
@@ -187,5 +257,18 @@ def test_media_processing(payload, sys_py):
     assert got["messages"] == {"b64_same": True, "url": ["base64", "image/jpeg", True],
                                "tool_result_img": "base64", "assistant_same": True, "tool_text_same": True}
     assert got["anthropic_file"][0] == 400
+    assert got["prepay"][0][0] == 503 and got["prepay"][0][1]["error"]["type"] == "gateway_busy" \
+        and got["prepay"][1:] == [0, 0], "预算小于 max_bytes ⇒ 代取前就 503，fetcher 零调用"
+    assert got["video_once"] == [88, 88], "代取视频只记一次实际字节（预留已退还差额）"
+    for key, (local, remote) in got["tool_types"].items():
+        assert local is None, f"{key}：本机来源应放行"
+        assert remote and remote[0] == 400 and remote[1]["error"]["type"] == "media_source_rejected", \
+            f"{key}：任何 item 的 output/content 里的本地路径对远端必须被拒，实得 {remote}"
+    assert got["shell_http"] == ["data:image/png;base64,", True], "工具输出里的 http 图片也走代取，不绕过地址校验"
+    assert got["shell_cap"] == [400, 0], "工具输出里的媒体 part 同样计入 media_max_parts"
+    for key, (local, remote) in got["strict"].items():
+        assert local is None, f"{key}：本机来源应放行"
+        assert remote and remote[0] == 400 and remote[1]["error"]["type"] == "media_source_rejected", \
+            f"{key}：网关放行谓词不得比后端宽，实得 {remote}"
     assert got["budget_pair"] == [104, 0], "reserve 与 release 必须成对：请求结束后在途字节归零"
     assert got["sweep"] == [1, False, True], "只清扫超过 1 小时的遗留目录"

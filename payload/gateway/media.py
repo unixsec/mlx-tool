@@ -139,6 +139,12 @@ class Ticket:
             raise MediaError(503, "gateway_busy", "gateway is busy with other media, retry shortly")
         self.bytes += n
 
+    def refund(self, n):
+        # type: (int) -> None
+        n = min(n, self.bytes)
+        self.budget.release(n)
+        self.bytes -= n
+
     def close(self):
         # type: () -> None
         self.budget.release(self.bytes)
@@ -188,8 +194,9 @@ def _slots(body, family):
                 continue
             if item.get("type") in _CHAT_MEDIA:
                 chat_part(f"input[{i}]", item)
-            if item.get("type") == "function_call_output":
-                content_list(f"input[{i}].output", item.get("output"))
+            # 后端对 function_call_output / shell_call_output / apply_patch_call_output / tool_result
+            # 都取 output 或 content 里的部件当图片加载：按类扫描，不按 item.type 白名单
+            content_list(f"input[{i}].output", item.get("output"))
             content_list(f"input[{i}].content", item.get("content"))
     elif family == "messages":
         for i, msg in enumerate(body.get("messages") or []):
@@ -232,15 +239,20 @@ class _Run:
         self.max_bytes = int(limits.get("media_max_mb", 128)) * 1024 * 1024
         self.index = 0
 
-    def fetch(self, url, major, part, charge=True):
+    def fetch(self, url, major, part):
+        """代取前先按上限预留在途字节（否则并发 N×上限都不在账上），取完退还差额，只留实际字节。"""
+        self.ticket.charge(self.max_bytes)
         try:
             got = self.fetcher(url, self.peer_class, self.allowed_nets, self.max_bytes, (major,))
         except _fetch.FetchError as exc:
+            self.ticket.refund(self.max_bytes)
             # detail 可能带路径或带签名的查询串：只取 reason，且 from None 切断异常链，免得 traceback 把它带进日志
             raise MediaError(400, "media_fetch_failed", f"could not fetch {major} for {part}",
                              part=part, reason=exc.reason) from None
-        if charge:
-            self.ticket.charge(len(got["data"]))
+        except BaseException:
+            self.ticket.refund(self.max_bytes)
+            raise
+        self.ticket.refund(max(0, self.max_bytes - len(got["data"])))
         return got
 
     def local(self, part):
@@ -248,8 +260,9 @@ class _Run:
             raise MediaError(400, "media_source_rejected", _LOCAL_MSG, part=part)
         return _SAME
 
-    def temp_file(self, content_type, data, part):
-        self.ticket.charge(len(data))
+    def temp_file(self, content_type, data, part, charge=True):
+        if charge:
+            self.ticket.charge(len(data))
         try:
             if self.ticket.dir is None:
                 self.ticket.dir = self.store.new_dir()
@@ -267,7 +280,12 @@ def _resolve(run, kind, value, part, holder):
         if source.get("type") == "file":
             raise MediaError(400, "media_source_rejected", "file sources are not supported", part=part)
         if source.get("type") == "base64":
-            return _SAME
+            media_type, data = source.get("media_type"), source.get("data")
+            # 后端拼成 data:{media_type};base64,{data}，media_type 不以 image/ 开头就当路径读
+            if (not media_type or (isinstance(media_type, str) and media_type.startswith("image/"))) \
+                    and isinstance(data, str) and data:
+                return _SAME
+            return run.local(part)
         if source.get("type") == "url" and _is_http(source.get("url")):
             got = run.fetch(source["url"], "image", part)
             return {"type": "base64", "media_type": got["content_type"],
@@ -280,19 +298,22 @@ def _resolve(run, kind, value, part, holder):
     if not isinstance(value, str) or not value.strip():
         return run.local(part)                             # 取不到字符串来源：未识别形态不默认放行
     if kind in ("image", "input_image"):
-        if _data_uri(value, "image"):
+        if value.startswith("data:image/") and "," in value:   # 后端逐字谓词：区分大小写，不去空白
             return _SAME
         if _is_http(value):
             got = run.fetch(value, "image", part)
             return f"data:{got['content_type']};base64," + base64.b64encode(got["data"]).decode("ascii")
         return run.local(part)
     if kind == "audio":
-        if _data_uri(value, "audio"):
-            return _SAME
+        stripped = value.strip()
+        if stripped.startswith("data:"):
+            prefix, sep, _ = stripped.partition(",")
+            if sep and ";base64" in prefix and prefix.startswith("data:audio/"):   # 后端逐字谓词
+                return _SAME
+            return run.local(part)                         # 其它 data: 形态后端当路径
         if _is_http(value):
             got = run.fetch(value, "audio", part)
             return f"data:{got['content_type']};base64," + base64.b64encode(got["data"]).decode("ascii")
-        stripped = value.strip()
         if stripped.startswith(AUDIO_REF_PREFIXES) or stripped.lower().endswith(AUDIO_REF_SUFFIXES):
             return run.local(part)
         try:
@@ -310,9 +331,9 @@ def _resolve(run, kind, value, part, holder):
                                  part=part) from None
             return run.temp_file(data_uri[0], data, part)
         if _is_http(value):
-            # 只在落盘时记一次：代取来的字节写进临时文件后内存缓冲随即释放，两处都记会让预算提前一倍触发
-            got = run.fetch(value, "video", part, charge=False)
-            return run.temp_file(got["content_type"], got["data"], part)
+            # 代取时已按实际字节记账；落盘不再记第二次（否则预算提前一倍触发）
+            got = run.fetch(value, "video", part)
+            return run.temp_file(got["content_type"], got["data"], part, charge=False)
         return run.local(part)
     return _SAME
 
