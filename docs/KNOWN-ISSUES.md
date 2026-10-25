@@ -1,61 +1,79 @@
-# v7 已知缺口
+# 已知问题
 
-2026-09-01 用五个独立上下文的 agent 分头审查（空桩普查 / 动词台账 / flag 与配置 /
-接口契约 / 用户旅程），共约 60 条发现。**已修的不在这里**（见 git log），
-这份文件只记**尚未修**的，每条给症状、落点与设计依据 —— 不写「大概在某处」。
+对应当前开发分支（即将发布的 1.1.0，改动见 [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]` 段）。
+只记**尚未修**的缺陷与**有意为之**的限制，每条给症状、影响与绕开的办法。已修的不在这里（见 git log）。
 
 按「用户会不会撞上」排序。
 
-**已修的四条**（`register` 查网关端口 · `api info` 与网关对账 ·
-`--dry-run` 的 argv 可执行 · 回收站 `trash ls/restore/empty` · `chat` 多轮 REPL · 容量判档 `fitness` · 陈旧锁清理 · 三处探针塌陷 · caps.json 落点 · 快照 model_arg · 确认分档 + flag 归属校验 · MLX_BIN_* 注入面 · 层序反向边 · 信号屏蔽窗口 · schema/types 两表 ·
-config 四命令 · Record 段归属 · ui 渲染器归位）
-已从本表移除，见 git log。
-
 ---
 
-## 一、用户会撞上的
+## 一、尚未修的缺陷
+
+### `mlx down --all --dry-run` 会真的停掉全部服务
+
+`--dry-run` 对 `down` 与 `restart` 是登记过的，单个或多个显式目标（`mlx down qwen38 --dry-run`、
+`mlx down api qwen38 --dry-run`）都只打印预览。但 `--all` 这条路径逐个停服务时没有把 dry-run 传下去，
+**每个有运行记录的服务都会被真的停掉**（读代码确认，并在隔离环境里调用 `cmd.svc.run` 复现：
+`down --all` + `dry_run=True` 仍对每个服务调用了 `supervisor.down`）。
+
+绕开：要预览就逐个写目标，不要和 `--all` 一起用。
 
 ### `mlx up` 报「已启动」时后端可能是坏的（仅 mlx_lm）
 
-`wait_ready` 的判据是 `port_owner`（端口上的监听者是不是我们记录的那个 pid）。
-它挡住了「端口被别人占」，但挡不住这一类：**`mlx_lm.server` 先 bind 端口、
-首次请求才加载模型**，所以端口 LISTEN 时模型还没碰过。加载失败也不会让进程
+就绪判据是端口上的监听者是不是我们记录的那个 pid。它挡住了「端口被别人占」，但挡不住这一类：
+**`mlx_lm.server` 先 bind 端口、首次请求才加载模型**，所以端口 LISTEN 时模型还没碰过。加载失败也不会让进程
 立刻退出 —— 它就那样挂着，端口开着，什么也服务不了。
 mlx_vlm 加载完权重才监听，端口 LISTEN 即模型可用，不受此影响。
 
-2026-09-02 实测：`mlx up qwen38`（绑了一个 mlx_lm 不支持的 drafter）报
-`✓ qwen38 已启动 port 8100 pid 94134`，五分钟后 `mlx chat` 仍连不上，
-而 `mlx status` 一直说「在跑」—— **两条命令对同一事实给出相反答案**。
-真因只在后端日志里：`ValueError: Model type qwen3_5_mtp not supported`。
+实测：`mlx up qwen38`（绑了一个 mlx_lm 不支持的 drafter）报已启动，五分钟后 `mlx chat` 仍连不上，
+而 `mlx status` 一直说「在跑」。真因只在后端日志里：`ValueError: Model type qwen3_5_mtp not supported`。
 
-**已缓解**：`chat` / `bench` 的 `backend_unreachable` 文案不再把用户支使去
-`mlx status`（它会说「在跑」），改为指向后端日志路径。
+**已缓解**：`chat` / `bench` 在进程在跑而端口连不上时，文案直接指向后端日志
+（`<数据根>/logs/<服务>.log`），不再把用户支去 `mlx status`。
 
-**未修的本体**：`wait_ready` 仍不验证模型能否加载。落点是加一次
-`GET /v1/models` 的探测 —— 但要先解决超时：27 GB 模型的首次加载远超现在的
-`timeout_sec=20`，而 `up` 又不该阻塞几分钟。可能的形状是「端口就绪即返回，
-但文案说清『首次请求时才加载模型』」，把承诺降到实现做得到的程度。
+**未修的本体**：就绪判定仍不验证模型能否加载。就绪等待上限是 mlx_lm 20 秒、mlx_vlm `20 + 3 × 体积 GB` 秒；
+要验证加载就得等首次加载完成，27 GB 的模型远超 20 秒，而 `up` 又不该阻塞几分钟。
 
-### `--dry-run` 仍未覆盖的动词（**已不再危险，但也预览不了**）
+### `mlx up <模型> --dry-run` 不是零外部命令
 
-2026-09-02 的普查之后，`--dry-run` 的登记面收窄成十个真正实现了预览的动词。
-其余动词现在**拒绝**这个 flag（rc 2，明确说它属于谁），不再静默真执行。
+校验段要判定模型模板的思考默认值与 effort 值域，会起一个渲染子进程（venv 的 python3 + jinja2 沙箱），
+渲染期间每 50 ms 调一次 `/bin/ps` 查它的内存（上限 1 GB、墙钟 5 秒）。`--dry-run` 在校验段之后才返回，
+所以预览一个带聊天模板的模型时，会起 1 个渲染进程和若干个 `ps`（渲染越慢越多；真实安装上记录过约 15 个进程）。
+这些都是只读动作，不改任何状态，但与「dry-run 零外部动作」的说法不符。`mlx model info <id>` 同样会渲染模板。
 
-尚未实现预览、因而敲不进去的：
-`model rm` · `model repair` · `config set/unset/import 之外的子命令` · `chat` ·
-`caps refresh` · `api info` · `bootstrap verify`。
+（机制由读代码确认：`cmd/svc.py` 的后端判定步调用 `templates.inspect_template`，后者轮询 `ps`；
+「约 15 个」这个数字来自开发记录，本次没有在真实安装上复测。）
+
+### `config get <模型> --key=port` 不显示登记的端口
+
+登记时给的 `--port` 记在注册表那条记录的磁盘事实段里，而 `config get` / `config ls` 只合成出厂默认、
+全局 `settings.json` 与该模型自己的配置三层。于是没另设过端口的模型，`mlx config get qwen38 --key=port`
+显示出厂的 8100（来源 default），而模型实际起在登记的端口上（隔离环境实测）。
+实际端口以 `mlx model ls`、`mlx up <id> --dry-run` 为准；`mlx config set <id> --key=port --value=…` 设过之后两边才一致。
+
+### `mlx help model rm` 说「删除前会要求你键入模型 id 确认」
+
+只有带 `--weights` 时才问；不带 `--weights` 直接删登记（这是有意的分档，手册第九节有表）。帮助文案没跟上。
+
+### `--dry-run` 仍未覆盖的动词（不危险，但预览不了）
+
+`--dry-run` 只登记给真正实现了预览的十个动词：`up` `down` `restart` `bench` `install` `uninstall`
+`config import` `model gc` `model install` `model register`。其余动词**拒绝**这个 flag（rc 2，并说明它属于谁），
+不会静默真执行。
 
 其中 **`model rm --dry-run` 最值得补** —— 它是仅次于 `trash empty` 的破坏性动作，
-而「先看看会删什么」正是用户最需要预览的场景。落点：`model_reclaim.run` 的
-`rm` 分支，在 `store.commit`（:107）之前返回，payload 里给出会删的登记行与
-（`--weights` 时）会移进回收站的权重路径。
+而「先看看会删什么」正是用户最需要预览的场景。
 
-补任何一个都要同步改 `cli.tsv:20` 的 `owner_verb` —— 守卫
-`test_dry_run_ownership_equals_implementation` 是**相等断言**，两边不同步会红。
+### `api.inflight_max_mb` 可以配得比 `api.media_max_mb` 小
+
+两个键各有取值域（`inflight_max_mb` 64–65536，`media_max_mb` 1–2048），配置时不做交叉校验。
+每一次代取都要先按 `media_max_mb` 整额预留在途额度，`inflight_max_mb` 比它小时预留永远失败，
+**所有代取（本机来源也一样）都回 503 `gateway_busy`**，看上去像网关一直很忙。
+绕开：保持 `api.inflight_max_mb` ≥ `api.media_max_mb`，改完 `mlx restart api`。
 
 ---
 
-## 一之二、1.1.0 的已知限制（有意为之）
+## 二、有意为之的限制
 
 ### MTP drafter 不支持
 
@@ -82,7 +100,9 @@ mlx_vlm 在并发请求下会静默输出损坏的内容（上游 mlx-vlm #2033�
 
 ### 判定依赖钉住的上游副本
 
-附属 drafter 的 model_type 集合（`share/drafters.tsv`）与 effort 取值顺序取自 mlx-vlm 0.6.17；升级上游后需复核。
+附属 drafter 的 model_type 集合（`share/drafters.tsv`）取自 mlx-vlm 0.6.17；effort 的取值顺序
+（minimal / low / medium / high / xhigh / max）写在网关的 `gateway/effort.py`，模板接受哪些取值则每次渲染模板现场判定。
+升级上游后需复核前两者。
 
 ### 模板渲染沙箱的边界是 jinja2，不是进程隔离
 
@@ -93,19 +113,15 @@ mlx_vlm 在并发请求下会静默输出损坏的内容（上游 mlx-vlm #2033�
 
 ### `mlx up api` 硬依赖 `lsof`
 
-启动前检查端口上有没有外来监听者（spec D24）要调 `lsof`；探不到（`TOOL_UNAVAILABLE` /
-`TIMEOUT` / `PARSE_FAILED`）一律 `Refused(9, "ports.probe_undeterminable")`——
-fail-closed 是 D24 的设计意图，不是缺陷。后果：机器上没有 `/usr/sbin/lsof`，或
-`MLX_BIN_LSOF` 指到了一个不对的路径，网关**完全起不来**，而这在本版之前是可以的。
-更容易踩到的边界：`lsof` 退出非零但 stderr 有内容时判定成 `PS_FAILED`（同样是 `Unknown`，
-同样挡启动）——不止「命令不存在」这一种形状会触发它。
+启动前要检查网关端口上有没有外来监听者，这要调 `/usr/sbin/lsof`；判不出来（命令不存在、超时、输出解析不了，
+或 `lsof` 退出非零且 stderr 有内容）一律拒绝启动（rc 9，「端口 … 的占用状态不可判定」）。
+fail-closed 是有意的。后果：机器上没有 `/usr/sbin/lsof`，或 `MLX_BIN_LSOF` 指到了不对的路径，网关**完全起不来**。
 
 ### `up api --dry-run` 打印的命令行，解释器可能与真启动不同
 
-网关用哪个 python3 是**启动那一刻**才判定的（spec D20：venv 的解释器真的 import
-得动网关就用它，否则回落 `/usr/bin/python3`）；`--dry-run` 打印 argv 时这一步还没跑，
-`argv[0]` 是占位值。照着 `--dry-run` 打印的命令行手工复现，跑起来的解释器可能与
-`mlx up api` 实际用的不是同一个。
+网关用哪个 python3 是**启动那一刻**才判定的（venv 的解释器真的 import 得动网关就用它，否则回落 `/usr/bin/python3`）；
+`--dry-run` 打印 argv 时这一步还没跑，`argv[0]` 是占位值。照着 `--dry-run` 打印的命令行手工复现，
+跑起来的解释器可能与 `mlx up api` 实际用的不是同一个。
 
 ### TLS 关闭时同网段可旁听
 
@@ -129,17 +145,18 @@ fail-closed 是 D24 的设计意图，不是缺陷。后果：机器上没有 `/
 ### 未开放的端点
 
 embeddings、rerank、images、audio、realtime 不经网关（它们只对相应类型的模型有意义，对生成模型调用会再加载一份权重）。
+后端的管理端点（如 `/unload`、`/v1/settings`）同样不经网关。这些路径一律 404 `endpoint_not_supported`，后端收不到请求。
 
 ### 非流式客户端无法保活
 
 非流式请求要等模型生成完才能回一个完整 JSON，这期间没有字节可发。排队、读长上下文或长思考超过客户端自身的 HTTP 超时，
-客户端会断开（网关随即取消生成，`api.log` 记 `client_disconnected`）。长任务请用流式。
+客户端会断开（明文连接上网关随即取消生成，`api.log` 记 `client_disconnected`）。长任务请用流式。
 
 ### TLS 下非流式请求的断连要到写回时才发现（流式也只在写失败时发现）
 
 明文连接上网关每秒探测一次客户端是否还在；TLS 连接不支持这种不读走数据的探测，非流式请求的客户端断开要到网关写回响应时才发现，
 模型会把这次生成跑完。流式请求同样受影响：TLS 下客户端断开只在网关写失败时才发现，上游响应头到达之前（mlx_lm 排队可能数分钟）
-发现不了、上游不会被关；头到达之后静默段最长约 15 秒才因保活写入发现，且对端已关时第一次写可能仍然成功。
+发现不了、上游不会被关；头到达之后靠转发帧或保活写入发现，静默段最长约 16 秒，且对端已关时第一次写可能仍然成功。
 
 ### 流式中途断流时客户端看不到错误
 
@@ -163,35 +180,13 @@ embeddings、rerank、images、audio、realtime 不经网关（它们只对相�
 
 ---
 
-## 二、机制层面的缺口
-
-（本节已清空。2026-09-01 夜间把七条逐条讨论后全部做完，
-见 git log 从 `3bc4a85` 到 `HEAD`。）
-
----
-
 ## 三、未实现的命令
 
-敲了会告诉你「没有这个命令」（rc 2），已从 `verbs.tsv` 摘掉，因此 `mlx help` 不再列它们。
+敲了会告诉你「未知命令」或「没有子命令」（rc 2），`mlx help` 不列它们。
 
 | 命令 | 说明 |
 |---|---|
-| `mlx logs` | 日志查看。多处错误文案会指向数据根的日志路径，`G-PC-05` 守卫为此立过 |
-| `mlx bootstrap render` | 补全脚本与 plist 的渲染器。设计要求补全由动词台账生成（`01-requirements.md:1040` 是 P0），`install.sh` 的 I13 调用点也要一起补 |
+| `mlx logs` | 日志查看。错误文案会直接给出数据根下的日志路径（`logs/<服务>.log`），先用 `tail` 看 |
+| `mlx bootstrap render` | 补全脚本与 launchd plist 的渲染器 |
 | `mlx model convert / quantize` | 格式转换与量化 |
-| `mlx model upgrade / rollback` | 版本升降级（`gate` 模块的模板指纹基线已就位） |
-
----
-
-## 四、一条订正
-
-本文件此前有一条说 `--live` / `--brief` / `--only` / `--tail`
-「在 `cli.tsv` 里登记了、能解析、不报参数错」——**三句都与实测相反**：
-它们本就不在表里，裸写会被正确拒绝。
-
-真正的根因是 `cli.py` 对 `--k=v` 形态**完全不查表**，
-于是 `--tail=50` 确实不被拒、确实让用户以为生效了 —— 但这不限于那四个 flag，
-而是覆盖全部拼写错误、全部未来 flag，并且撞上内部键名时会把解释器打出 traceback。
-**已修**（见 `a64fc62`）。
-
-记下这条是因为它本身就是个教训：我当时按症状写了根因，没去核对表。
+| `mlx model upgrade / rollback` | 版本升降级 |

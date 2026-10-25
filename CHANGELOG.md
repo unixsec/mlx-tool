@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+计划作为 1.1.0 发布；代码里的版本号仍是 1.0.0，发版时一起改。
+
 ### 新增
 
 - **按权重自动选择后端**：每次 `mlx up` 读 `config.json` 判定多模态，走 `mlx_vlm.server` 或 `mlx_lm.server`；
@@ -16,12 +18,15 @@
 - `mlx model info` 显示模态依据、模板默认的思考开关与 effort 值域；`model ls` 增「模态」列；`status` 增「后端」「并发」列
 - `mlx model repair` 清除 1.0.0 旧字段与退役配置键
 - **多来源接入**：网关放行本机、同一 Wi-Fi / 有线网段、Parallels / VMware 共享网络的虚拟机（按硬件端口类型与虚拟机网桥判定，VPN 与雷雳网桥拒绝），可用 `api.allow_cidrs` 追加网段
-- **端点**：`/v1/responses`（含按 id 查询、删除、取消）与 Anthropic `/v1/messages`（多模态后端）；路径可省略 `/v1`
+- **端点**：`/v1/responses`（含 `input_tokens`、按 id 查询 / 删除 / 取消、`input_items`）与 Anthropic `/v1/messages`、`/v1/messages/count_tokens`（多模态后端）；`/v1/completions` 只开给文本后端；路径可省略 `/v1`
+- **CORS**：预检请求在鉴权之前回 204，浏览器里的 Web 客户端可以直接调网关（真正的请求仍要令牌，`POST` 须 `application/json`）
 - **可选 TLS**：`api.tls_cert` / `api.tls_key`，最低 TLS 1.2
 - `mlx api info` 列出各来源的 OpenAI 与 Anthropic base URL、放行网段、令牌与 TLS 状态；`mlx check` 增至 12 项（放行网段、网关端口外来占用、settings.json 权限）
 - **媒体代取**：`http(s)://` 图片、音频、视频由网关取回再交给模型，模型进程不再对外连接；虚拟机与 Wi-Fi 设备只能取公网与放行网段，重定向逐跳校验；视频落临时文件（`<数据根>/run/media/`），请求结束即删。上限 `api.media_max_mb`（128，只限代取字节）、`api.media_max_parts`（32）、`api.inflight_max_mb`（2048，超出 503 `gateway_busy` 并带 `Retry-After: 5`）；视频临时文件写不下返回 507 `media_storage_failed`
 - **保活与断连取消**：流式请求在模型无输出满 15 秒时收到 `: keepalive`；客户端断开即取消生成（日志事件 `client_disconnected`）
 - 回程补 `reasoning_content`（文本模型只给 `reasoning`）；responses 与 messages 事件里的 `model` 同样改回短 id
+- 网关日志落盘：网关以 `python3 -u` 启动，启动信息与每条 http 访问记录（带来源地址）都写进 `<数据根>/logs/api.log`
+- `mlx status` / `mlx api info` 在网关运行记录 `run/api.json` 损坏时不再整屏失败：显示已知部分，并给出恢复步骤
 
 ### 变更
 
@@ -33,13 +38,16 @@
 - **所有来源都要令牌**，本机也不例外（不兼容）。1.0.0 在回环上免鉴权
 - **端点收紧**（不兼容）：此前任意 POST 路径都转发给后端；现在白名单之外一律 404，后端零请求
 - 后端 4xx 状态码透传（本机来源原文、远端来源去掉路径与异常片段）；后端 5xx 与鉴权失败返回 502
-- 网关请求体上限 8 MB → 256 MB（`api.max_body_mb`）；令牌与来源校验在读请求体之前完成
+- 网关请求体上限 8 MB → 256 MB，可用新配置键 `api.max_body_mb` 调（超出 413）；令牌与来源校验在读请求体之前完成
+- **`mlx restart` 先校验、后停止**：校验不过时服务保持原状（此前先停后校验，被拒时服务已经没了）；`--ignore-fitness` 对 `restart` 生效（此前被丢弃）
+- 多目标 `up` / `down` / `restart` 的汇总：失败的目标全是「拒绝」时整体也是拒绝并保留最差的 rc（如 6），有目标真的落地了东西才是失败、并逐字列出要收敛的记录（此前一律报失败、rc 塌成 1）
+- `mlx bootstrap keys`、安装器与 `mlx help bootstrap keys` 给出的查看密钥命令改为能执行的 `mlx config get <键名> --reveal`（此前印的写法把键名放在 `--key=` 里、没有位置参数，照抄 rc 2）
 - `mlx up api` 在令牌为空、TLS 配置不完整或私钥权限过宽、网关端口已被别的进程占用时拒绝启动
 - **网关到模型上游一律流式**：非流式请求由网关聚合成完整 JSON，81920 token 的长输出不再被读超时截断
 - 思考强度 `effort` 按模型模板接受的取值映射（qwen38：`minimal`→`low`，`high` / `max`→`xhigh`），越界不再让后端报错
 - 多模态模型上 `max_completion_tokens` 生效（网关换成后端认的 `max_tokens`）；文本模型收到 `thinking_budget` 返回 400 `thinking_budget_unsupported`；多模态后端的 `enable_thinking` / `reasoning_effort` 由网关写到请求顶层
 - 请求里的 `adapters`、`adapter_path`、`draft_model` 被网关剥离，客户端不能让模型加载别的权重
-- **连不上模型上游由 504 改为 502 `upstream_error`**；日志事件 `sse_stream_aborted` 改名 `upstream_aborted`，与客户端自己断开的 `client_disconnected` 区分；流开始后未见终止帧（半帧、断在帧边界）记 `sse_truncated`；按 id 的查询 / 删除 / 取消端点上后端对 2xx 回非 JSON 体同样是 502，请求体不是 JSON 对象是 400
+- **按请求体 `model` 路由的端点，连不上模型上游由 504 改为 502 `upstream_error`**；按 id 查询 / 删除 / 取消的扇出端点，后端连不上或回 5xx 是 502，10 秒内有后端没回话仍是 504 `upstream_timeout`。日志事件 `sse_stream_aborted` 改名 `upstream_aborted`，与客户端自己断开的 `client_disconnected` 区分；流开始后未见终止帧（半帧、断在帧边界）记 `sse_truncated`；扇出端点上后端对 2xx 回非 JSON 体同样是 502，请求体不是 JSON 对象是 400
 
 ### 移除
 
@@ -47,10 +55,10 @@
 
 ### 升级须知
 
-1. 重跑 `bash deployer/install.sh`（会删除退役的 `share/types.tsv`、装 mlx-vlm、生成密钥）
+1. 重跑 `bash deployer/install.sh`（会删除退役的 `share/types.tsv`、装 mlx-vlm、采集后端能力、生成密钥，并打印网关暴露面警告）
 2. 跑一次 `mlx model repair` 清除旧字段
 3. MTP drafter 不再可用（mlx-vlm #2033）；配过 `draft_model` 指向 MTP 模型的，`mlx config unset <id> --key=draft_model`
-4. 网关与模型进程不再继承 shell 里的 `MLX_BACKEND_API_KEY` / `MLX_GATEWAY_TOKEN`：后端密钥请用 `mlx config set backend.api_key --value=…`（或 `mlx bootstrap keys` 生成）；网关令牌仍可用 `MLX_GATEWAY_TOKEN=… mlx up api` 临时覆盖
+4. 网关与模型进程**不再从父 shell 隐式继承** `MLX_BACKEND_API_KEY` / `MLX_GATEWAY_TOKEN`（起进程时从继承的环境里去掉这两个变量，只传工具从配置算出的值）。后端密钥请用 `mlx config set backend.api_key --value=…`（或 `mlx bootstrap keys` 生成）。网关令牌另有一个**显式**入口：`MLX_GATEWAY_TOKEN=… mlx up api` 时 `mlx` 读这个变量，作为这一次启动的令牌覆盖配置（须满足令牌值域）
 5. 网关现在对局域网与虚拟机开放。只给本机用的：`mlx config set api.bind --value=127.0.0.1`；
    所有客户端都要改为带令牌（`mlx config get api.token --reveal`）
 
