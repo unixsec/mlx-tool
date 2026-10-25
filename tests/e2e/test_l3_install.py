@@ -359,7 +359,7 @@ def test_l3_keys_never_leak_into_files_or_output(installed):
     needles = secrets + [v[:8] for v in secrets]
 
     outputs = []
-    for argv in (("bootstrap", "keys"), ("config", "ls"), ("config", "get", "--key=api.token"),
+    for argv in (("bootstrap", "keys"), ("config", "ls"), ("config", "get", "api.token"),
                  ("config", "diff"), ("up", "qwen", "--dry-run"), ("up", "api", "--dry-run"),
                  ("model", "repair"), ("model", "info", "qwen"), ("status",), ("status", "--json")):
         r = _mlx(code_root, env, *argv)
@@ -367,6 +367,11 @@ def test_l3_keys_never_leak_into_files_or_output(installed):
             # 此前这一步的 rc 没人断言——密钥、settings 都齐全时它必须 rc 0；
             # 不查 rc 就发现不了这一步本身悄悄坏掉（controller ruling，Task 11）。
             assert r.returncode == 0, f"`up api --dry-run` rc={r.returncode}：{r.stdout + r.stderr}"
+        if argv == ("config", "get", "api.token"):
+            # 此前这里跑的是 `config get --key=api.token`——缺位置参数，rc 2，输出只有用法，
+            # 「没泄漏」是因为命令根本没执行到读密钥那一步（docs-refresh X1）
+            assert r.returncode == 0, f"`config get api.token` rc={r.returncode}：{r.stdout + r.stderr}"
+            assert "****" in r.stdout, r.stdout
         outputs.append((" ".join(argv), r.stdout + r.stderr))
     leaked_out = [cmd for cmd, text in outputs if any(n in text for n in needles)]
     Cardinality.check("输出里出现密钥的命令", leaked_out, rel="empty")

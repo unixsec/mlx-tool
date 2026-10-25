@@ -64,7 +64,7 @@ mlx chat qwen38 --prompt="Explain speculative decoding in one sentence"
 ```bash
 mlx up api               # OpenAI-compatible gateway
 mlx api info             # base URLs for this Mac, VMs and Wi-Fi devices
-mlx config get --key=api.token --reveal   # the token every client must send
+mlx config get api.token --reveal   # the token every client must send
 ```
 
 | Field in your client | Value |

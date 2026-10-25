@@ -63,7 +63,7 @@ mlx chat qwen38 --prompt="用一句话说明什么是投机解码"
 ```bash
 mlx up api               # OpenAI 兼容网关
 mlx api info             # 本机、虚拟机、Wi-Fi 设备各自该填的地址
-mlx config get --key=api.token --reveal   # 所有客户端都要带的令牌
+mlx config get api.token --reveal   # 所有客户端都要带的令牌
 ```
 
 | 客户端里填 | 值 |

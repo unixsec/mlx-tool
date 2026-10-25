@@ -128,8 +128,8 @@ help.chat.long	与一个模型对话。不给 `--prompt` 就进入**多轮模式
 help.bootstrap.render.long	渲染补全脚本与自启描述文件到指定目录。
 help.bootstrap.verify.long	按分发清单校验安装产物是否齐全。
 help.bootstrap.keys	生成缺失的密钥（backend.api_key / api.token），只列键名、不输出值
-help.bootstrap.keys.long	为 schema 里标了 secret 的全局键生成随机值，写入 settings.json（权限 0600）。\n已有值的键不动。输出只含键名 —— 值会进终端回滚与安装日志，所以从不打印。\n查看原值：`mlx config get --key=api.token --reveal`；手动改：`mlx config set api.token --value=<新值>`。
-help.bootstrap.keys.example	mlx bootstrap keys\nmlx config get --key=api.token --reveal
+help.bootstrap.keys.long	为 schema 里标了 secret 的全局键生成随机值，写入 settings.json（权限 0600）。\n已有值的键不动。输出只含键名 —— 值会进终端回滚与安装日志，所以从不打印。\n查看原值：`mlx config get api.token --reveal`；手动改：`mlx config set api.token --value=<新值>`。
+help.bootstrap.keys.example	mlx bootstrap keys\nmlx config get api.token --reveal
 help.up.example	mlx up api            # 起网关\nmlx up qwen27b api    # 一次起多个
 help.down.example	mlx down api\nmlx down --all        # 停掉全部有运行记录的服务
 help.status.example	mlx status            # 工具全局 + 每个模型的状态\nmlx status api        # 只看网关\nmlx status --json     # 给脚本用

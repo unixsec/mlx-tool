@@ -235,7 +235,7 @@ sys.exit(0 if os.path.exists(p) and "api.bind" in json.load(open(p)) else 1)' 2>
   say "   · api.bind 已显式设置，保持不变"
 else
   say "   !! 网关默认绑定全部网卡（0.0.0.0）：本机、Parallels 虚拟机、同一 Wi-Fi / 有线网段都能连。"
-  say "      所有来源都要令牌（查看：mlx config get --key=api.token --reveal）；VPN、雷雳网桥等接口一律拒绝。"
+  say "      所有来源都要令牌（查看：mlx config get api.token --reveal）；VPN、雷雳网桥等接口一律拒绝。"
   say "      只给本机用：mlx config set api.bind --value=127.0.0.1"
 fi
 

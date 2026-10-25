@@ -30,10 +30,9 @@
 整条链已在真机上跑通：下载 `mlx-community/Qwen2.5-0.5B-Instruct-4bit` →
 登记 → `mlx up` → `mlx chat` 拿到回答 → `mlx up api` → Cherry Studio 经网关对话。
 
-**还没做的**：`mlx logs`、`mlx model convert / quantize / upgrade / rollback`、
-`mlx trash ls / restore / empty` 尚未实现，敲了会告诉你未实现，不会假装成功。
-`--live` / `--brief` / `--only` / `--tail` 几个 flag 能解析但还没有读取方。
-完整清单与每条的落点见 [KNOWN-ISSUES.md](KNOWN-ISSUES.md)。
+**还没做的**：查看日志的命令、模型格式转换 / 量化 / 升降级都还没有，敲了会报「未知命令」或
+「没有子命令」（rc 2），不会假装成功。日志直接看数据根下的 `logs/<服务>.log`。
+完整清单见 [KNOWN-ISSUES.md](KNOWN-ISSUES.md)。
 
 ---
 
@@ -600,7 +599,7 @@ Cherry Studio / OpenWebUI / 任何 OpenAI 兼容客户端，填这三项：
 | 配置项 | 填什么 | 从哪来 |
 |---|---|---|
 | **API 地址 / Base URL** | 本机填 `http://127.0.0.1:8080/v1`；虚拟机或 Wi-Fi 上的设备填对应那行 | `mlx api info` 的「地址」段 |
-| **API 密钥 / API Key** | 网关令牌 —— **所有来源都要**，本机也不例外 | `mlx config get --key=api.token --reveal` |
+| **API 密钥 / API Key** | 网关令牌 —— **所有来源都要**，本机也不例外 | `mlx config get api.token --reveal` |
 | **模型 ID / Model** | `qwen38` | `mlx api info` 的「可用」行，或 `mlx model ls` |
 
 在 Cherry Studio 里的位置：**设置 → 模型服务 → 添加提供商 → 选「OpenAI 兼容」**，
@@ -647,10 +646,14 @@ $ curl ... -d '{"model":"qwen38","messages":[...],"max_tokens":20}'
 
 接进客户端之前，先确认接口自己是通的：
 
+`mlx config get api.token --reveal` 给人看（键 / 值 / 来源三行）；脚本里取裸值用 `--json`：
+
 ```bash
+TOKEN=$(mlx config get api.token --reveal --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+
 # 1. 列模型 —— 应当能看到你起的那个
 curl -s http://127.0.0.1:8080/v1/models \
-  -H "Authorization: Bearer $(mlx config get --key=api.token --reveal)"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ```json
@@ -660,7 +663,7 @@ curl -s http://127.0.0.1:8080/v1/models \
 ```bash
 # 2. 发一次对话。max_tokens 给够，否则推理模型只会返回 reasoning 没有 content
 curl -s http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $(mlx config get --key=api.token --reveal)" \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen38","messages":[{"role":"user","content":"1+1=?"}],"max_tokens":2048}'
 ```
@@ -668,7 +671,7 @@ curl -s http://127.0.0.1:8080/v1/chat/completions \
 ```bash
 # 3. 流式（多数客户端默认走这条），结尾应当有 data: [DONE]
 curl -sN http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $(mlx config get --key=api.token --reveal)" \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen38","messages":[{"role":"user","content":"数到三"}],"max_tokens":2048,"stream":true}'
 ```
@@ -706,7 +709,7 @@ $ mlx api info
 **令牌**：所有来源都要。客户端填 `Authorization: Bearer <令牌>` 或 `x-api-key: <令牌>`（Anthropic 客户端用后者）。
 
 ```bash
-mlx config get --key=api.token --reveal       # 看原值
+mlx config get api.token --reveal       # 看原值
 mlx config set api.token --value=<新值>        # 轮换（32–128 位字母、数字、_ 或 -）
 mlx restart api
 ```
@@ -1201,7 +1204,7 @@ $ mlx config import --from=bad.json
 
 ```bash
 mlx bootstrap keys                           # 只补空值，输出只列键名
-mlx config get --key=api.token --reveal      # 查看原值
+mlx config get api.token --reveal      # 查看原值
 mlx config set api.token --value=<新值>       # 手动换（值会短暂出现在进程列表里）
 ```
 
@@ -1216,7 +1219,7 @@ revision 不能用 `config set` 改（scope=machine）—— 它是磁盘事实�
 `revision` / `size_mb` 这类是**工具从磁盘读出来的事实**，不是你的设置。
 要改它们只有一条路：改磁盘上的东西，然后 `mlx model repair`。
 
-**已退役的键**（例如 1.0.0 的 `backend`）不再生效，`mlx config ls` 与 `mlx up --dry-run` 会列出它们；
+**已退役的键**（例如 1.0.0 的 `backend`）不再生效，`mlx config ls` 与 `mlx up <id> --dry-run` 会列出它们；
 跑一次 `mlx model repair` 清掉。
 
 ---
@@ -1304,7 +1307,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 | 状态码 | 含义 | 怎么办 |
 |---|---|---|
 | 403 `peer_not_allowed` | 来源地址不在放行网段（常见：经 VPN 连、网桥不是虚拟机网桥） | `mlx api info` 看放行网段；确需放行：`mlx config set api.allow_cidrs --value=<网段>` 后 `mlx restart api` |
-| 401 | 没带令牌或令牌不对（本机也要） | `mlx config get --key=api.token --reveal` |
+| 401 | 没带令牌或令牌不对（本机也要） | `mlx config get api.token --reveal` |
 | 415 | 请求头不是 `Content-Type: application/json` | 客户端改请求头 |
 | 404 `endpoint_not_supported_by_backend` | 该模型的后端不提供这个端点 | 看[端点表](#clients) |
 | 400 `media_fetch_failed` | 网关没取到 URL 里的媒体，`error.reason` 说明原因 | 看[媒体](#media)的原因表 |
@@ -1346,7 +1349,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 ├── lib/mlx_server/             T1 主体（纯标准库；venv → brew → 系统，三级回落）
 ├── gateway/                    T2 网关
 ├── deployer/                   部署器（源码树删了也能卸载）
-├── payload/                    载荷副本（mlx install 重装的源）
+├── payload/                    载荷副本（`mlx install` 重装的源）
 ├── .venv/                      推理用的虚拟环境（hf / mlx / mlx-lm 装在这里）
 └── share/
     ├── constants.env           三根 · 端口 · 标记串（安装器产出）

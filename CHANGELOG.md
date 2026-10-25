@@ -52,7 +52,7 @@
 3. MTP drafter 不再可用（mlx-vlm #2033）；配过 `draft_model` 指向 MTP 模型的，`mlx config unset <id> --key=draft_model`
 4. 网关与模型进程不再继承 shell 里的 `MLX_BACKEND_API_KEY` / `MLX_GATEWAY_TOKEN`：后端密钥请用 `mlx config set backend.api_key --value=…`（或 `mlx bootstrap keys` 生成）；网关令牌仍可用 `MLX_GATEWAY_TOKEN=… mlx up api` 临时覆盖
 5. 网关现在对局域网与虚拟机开放。只给本机用的：`mlx config set api.bind --value=127.0.0.1`；
-   所有客户端都要改为带令牌（`mlx config get --key=api.token --reveal`）
+   所有客户端都要改为带令牌（`mlx config get api.token --reveal`）
 
 ---
 

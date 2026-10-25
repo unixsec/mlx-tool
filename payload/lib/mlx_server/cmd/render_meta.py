@@ -137,7 +137,7 @@ def _bootstrap_keys(p):
     lines += [f"  · 已存在  {k}" for k in p.get("kept") or []]
     if not lines:
         return "  没有需要生成的密钥"
-    lines.append("  查看原值：mlx config get --key=<键名> --reveal")
+    lines.append("  查看原值：mlx config get <键名> --reveal")
     return "\n".join(lines)
 
 

@@ -10,7 +10,8 @@ def test_docs_no_longer_teach_retired_behaviour(repo):
     assert "{#backend}" in guide, "手册缺「自动选择后端」一节"
     assert "#2033" in guide, "手册没说明 MTP drafter 为什么不支持"
     assert "令牌**有意不进配置文件**" not in guide, "api.token 已是配置项，手册仍说不进配置文件"
-    assert "--key=api.token --reveal" in guide
+    assert "mlx config get api.token --reveal" in guide
+    assert "--key=api.token" not in guide, "config get 的全局键是位置参数；--key= 缺位置参数时 rc 2"
     for rel in ("docs/USER-GUIDE.md", "README.md", "README_cn.md"):
         txt = _read(repo, rel)
         assert "--type=text" not in txt, f"{rel} 仍教 --type=text（登记不再需要类型）"
