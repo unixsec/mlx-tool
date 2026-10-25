@@ -1,0 +1,164 @@
+"""T2 · 上游流式中继（spec §4.6、D22）。
+
+读上游放在**读取线程**里（建连、等响应头、`read1` 都在那里阻塞），主循环按 `probe_sec` 从队列取：
+取不到数据时探测客户端 socket，断开就**关闭上游连接** —— 后端的流式生成器在 `finally` 里关闭 token
+迭代器，生成随即取消（mlx_vlm 日志 `Generation cancelled`）；上游静默满 `keepalive_sec` 就发一行
+SSE 注释保活（mlx_vlm 排队与 prefill 期间不发任何字节，客户端会按自己的读超时断开）。
+等上游响应头期间同样探测断连：mlx_lm 排队时连响应头都还没发。
+
+**不在读取线程里 socket 超时轮询**：`http.client` 在分块读到一半时超时，内部状态会乱。
+
+两种断流由不同的地方发现：分块传输（mlx_vlm 的 StreamingResponse）中途断开 ⇒ `read1` 抛
+`IncompleteRead` ⇒ 这里判 `upstream_aborted`；以关连接标记结束的响应（无长度、不分块）中途断开
+在 HTTP 层看起来就是正常结束 ⇒ 这里判 `ok`，由调用方的 `SseDecoder.pending()` 发现半截帧、记 `sse_truncated`。
+"""
+import contextlib
+import http.client
+import json
+import queue
+import select
+import socket
+import threading
+import time
+
+KEEPALIVE_SEC = 15.0
+PROBE_SEC = 1.0
+READ_TIMEOUT_SEC = 600.0
+
+
+def open_upstream(port, path, payload, headers=None, host="127.0.0.1", timeout_sec=READ_TIMEOUT_SEC):
+    # type: (int, str, dict, object, str, float) -> tuple
+    """→ `("stream", conn, resp)` / `("error", status, body)`（发出任何字节前的 HTTP 错误）/ `("failed", detail)`。
+
+    `timeout_sec` 是**单次读等待**（spec：600 s，覆盖排队、prefill 与 token 间隔），没有总时长上限。
+    """
+    conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
+    try:
+        conn.request("POST", path, body=json.dumps(payload).encode(),
+                     headers=dict({"Content-Type": "application/json",
+                                   "Accept": "text/event-stream"}, **(headers or {})))
+        resp = conn.getresponse()
+    except (OSError, http.client.HTTPException) as exc:
+        conn.close()
+        return ("failed", str(exc)[:200])
+    if resp.status >= 400:
+        try:
+            raw = resp.read()
+        except (OSError, http.client.HTTPException):
+            raw = b""
+        conn.close()
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            body = {"error": {"message": raw[:500].decode("utf-8", "replace")}}
+        return ("error", resp.status, body)
+    return ("stream", conn, resp)
+
+
+def client_alive(sock):
+    # type: (object) -> bool
+    """客户端还连着吗。**不读走数据**（`MSG_PEEK`）；可读且读到 0 字节 ⇒ 对端已关闭。"""
+    try:
+        readable, _, _ = select.select([sock], [], [], 0)
+        if not readable:
+            return True
+        return bool(sock.recv(1, socket.MSG_PEEK))
+    except ValueError:
+        return True                      # TLS socket 不支持 peek：靠写失败发现（KNOWN-ISSUES）
+    except OSError:
+        return False
+
+
+def _close(head):
+    # type: (object) -> None
+    """**真正关掉**上游连接。只 `conn.close()` 不够：响应对象经 `makefile` 仍持有 socket 引用，
+    fd 不会关闭；macOS 上发往已 `SHUT_RD` 的数据被静默丢弃、不回 RST —— 后端的写一直成功，
+    永远走不到取消生成的 `finally`。先 shutdown 唤醒阻塞中的读，再关响应对象释放引用，最后关连接。"""
+    if head and head[0] == "stream":
+        conn, resp = head[1], head[2]
+        with contextlib.suppress(OSError):
+            if conn.sock is not None:
+                conn.sock.shutdown(socket.SHUT_RDWR)
+        with contextlib.suppress(OSError, http.client.HTTPException):
+            resp.close()
+        conn.close()
+
+
+def relay(open_fn, on_head, on_chunk, client_alive_fn, keepalive=None,
+          keepalive_sec=KEEPALIVE_SEC, probe_sec=PROBE_SEC, clock=time.monotonic):
+    # type: (object, object, object, object, object, float, float, object) -> dict
+    items = queue.Queue()
+    state = {"head": None, "cancelled": False}
+
+    def reader():
+        head = open_fn()
+        state["head"] = head
+        if state["cancelled"]:
+            _close(head)                 # 客户端在等响应头期间就走了
+        items.put(("head", head))
+        if head[0] != "stream":
+            return
+        resp = head[2]
+        try:
+            while True:
+                chunk = resp.read1(65536)
+                if not chunk:
+                    items.put(("end", None))
+                    return
+                items.put(("chunk", chunk))
+        except Exception as exc:         # noqa: BLE001
+            items.put(("abort", exc))
+
+    threading.Thread(target=reader, daemon=True).start()
+    result = {"outcome": "ok", "head": None, "bytes": 0}
+    last = last_probe = clock()
+    while True:
+        # **按时间间隔探测，不依附于「取不到数据」**：上游持续出 token 时队列永远不空，
+        # 若只在空闲时探测，非流式客户端（帧只进聚合器、不写客户端）断开后后端会一直跑到生成结束
+        if clock() - last_probe >= probe_sec:
+            last_probe = clock()
+            if not client_alive_fn():
+                state["cancelled"] = True
+                _close(state["head"])
+                result["outcome"] = "client_disconnected"
+                return result
+        try:
+            kind, value = items.get(timeout=probe_sec)
+        except queue.Empty:
+            if keepalive is not None and result["head"] is not None and clock() - last >= keepalive_sec:
+                try:
+                    keepalive()
+                except OSError:
+                    state["cancelled"] = True
+                    _close(state["head"])
+                    result["outcome"] = "client_disconnected"
+                    return result
+                last = clock()
+            continue
+        if kind == "head":
+            result["head"] = value
+            on_head(value)
+            if value[0] == "error":
+                result["outcome"] = "upstream_error"
+                return result
+            if value[0] == "failed":
+                result["outcome"] = "upstream_failed"
+                return result
+            last = clock()
+        elif kind == "chunk":
+            try:
+                on_chunk(value)
+            except OSError:
+                state["cancelled"] = True
+                _close(result["head"])
+                result["outcome"] = "client_disconnected"
+                return result
+            result["bytes"] += len(value)
+            last = clock()
+        elif kind == "end":
+            _close(result["head"])
+            return result
+        else:
+            _close(result["head"])
+            result["outcome"] = "upstream_aborted"
+            return result
