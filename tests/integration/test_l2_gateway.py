@@ -148,7 +148,7 @@ def test_l2_sse_decoder_reassembles_across_chunks(payload, sys_py):
         frames = []
         for i in range(0, len(raw), 7):            # 故意切在帧中间
             frames += d.feed(raw[i:i + 7])
-        out = [rewrite_frame(f, "qwen").decode() for f in frames]
+        out = [rewrite_frame(f, "qwen", "LOOPBACK").decode() for f in frames]
         print(json.dumps({"frames": out, "pending": d.pending().decode()}))
     ''')
     assert len(got["frames"]) == 2, f"跨块分帧失败：{got['frames']}"

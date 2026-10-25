@@ -60,6 +60,7 @@ r["messages"] = msg
 r["messages_error"] = agg("messages", "mlx_vlm_messages_stream_error")
 
 def rewrite_all(key, **kw):
+    kw.setdefault("peer_class", "LOOPBACK")             # frames.rewrite 缺省是 REMOTE（fail closed），这里显式要原文
     return b"".join(FR.rewrite(f, "qwen", **kw) for f in frames_of(F[key])).decode("utf-8")
 lm_local = rewrite_all("mlx_lm_chat_stream")
 lm_nousage = rewrite_all("mlx_lm_chat_stream", drop_usage=True)
@@ -83,11 +84,11 @@ r["patch"] = {"model": patched["model"], "rc": patched["choices"][0]["message"].
               "responses_model": FR.patch_body(F["mlx_vlm_responses_completed"], "qwen")["model"],
               "messages_model": FR.patch_body(F["mlx_vlm_messages_nonstream"], "qwen")["model"]}
 from gateway import translate
-r["compat"] = translate.rewrite_frame(b'data: {"model": "x", "choices": []}\n\n', "qwen").decode()
+r["compat"] = translate.rewrite_frame(b'data: {"model": "x", "choices": []}\n\n', "qwen", "LOOPBACK").decode()
 _ef = b'data: {"error": {"message": "open /Users/alex/m/w.bin failed"}}\n\n'
 r["compat_err"] = {"remote": "/Users/" in translate.rewrite_frame(_ef, "qwen", "REMOTE").decode(),
                    "loopback": "/Users/" in translate.rewrite_frame(_ef, "qwen", "LOOPBACK").decode(),
-                   "default": "/Users/" in translate.rewrite_frame(_ef, "qwen").decode(),
+                   "default": "/Users/" in FR.rewrite(_ef, "qwen").decode(),
                    "unknown_class": "/Users/" in translate.rewrite_frame(_ef, "qwen", None).decode()}
 print(json.dumps(r, ensure_ascii=False))
 """
@@ -120,5 +121,81 @@ def test_aggregate_and_rewrite(payload, sys_py):
     assert got["patch"] == {"model": "qwen", "rc": "先想一想。", "input_untouched": True,
                             "responses_model": "qwen", "messages_model": "qwen"}
     assert got["compat"] == 'data: {"model": "qwen", "choices": []}\n\n'
-    assert got["compat_err"] == {"remote": False, "loopback": True, "default": True, "unknown_class": False}, \
-        "流已开始后的错误帧：远端（及未知来源）净化，本机原文"
+    assert got["compat_err"] == {"remote": False, "loopback": True, "default": False, "unknown_class": False}, \
+        "流已开始后的错误帧：远端（及未知来源、漏传缺省）净化，本机原文"
+
+
+PROG2 = r"""
+import json
+from gateway import frames as FR
+from gateway.aggregate import Aggregator
+P = "/Users/a/secret/w.bin"
+def fr(obj, event=None):
+    return (("event: %s\n" % event if event else "") + "data: " + (obj if isinstance(obj, str) else json.dumps(obj)) + "\n\n").encode()
+shapes = {
+    "response_failed": fr({"type": "response.failed", "response": {"model": "B", "error": {"message": "open " + P}}}, "response.failed"),
+    "response_error_only": fr({"type": "response.in_progress", "response": {"model": "B", "error": {"message": "open " + P}}}),
+    "error_with_choices": fr({"error": {"message": "open " + P}, "choices": []}),
+    "detail": fr({"id": "x", "detail": "open " + P}),
+    "top_message": fr({"id": "x", "message": "open " + P}),
+    "list_json": fr(["open " + P]),
+    "string_json": fr("open " + P),
+    "non_json": ("data: open " + P + " failed\n\n").encode(),
+}
+r = {}
+for k, f in shapes.items():
+    r[k] = {c: P in FR.rewrite(f, "qwen", c).decode() for c in ("REMOTE", "LOOPBACK")}
+ok = fr({"id": "c", "model": "B", "choices": [{"index": 0, "delta": {"content": "see " + P}}]})
+ms = fr({"type": "message_start", "message": {"model": "B", "role": "assistant"}}, "message_start")
+r["ok_same"] = FR.rewrite(ok, "qwen", "REMOTE") == FR.rewrite(ok, "qwen", "LOOPBACK")
+r["ms_model"] = '"model": "qwen"' in FR.rewrite(ms, "qwen", "REMOTE").decode()
+# 聚合：arguments 三片、无 index 续帧
+def chunk(tc):
+    return fr({"id": "c", "model": "B", "choices": [{"index": 0, "delta": {"tool_calls": [tc]}}]})
+a = Aggregator("chat")
+for f in (chunk({"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": '{"ci'}}),
+          chunk({"index": 0, "function": {"arguments": 'ty": "北'}}),
+          chunk({"index": 0, "function": {"arguments": '京"}'}}),
+          fr({"id": "c", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}), fr("[DONE]".join(["", ""]))):
+    a.feed(f)
+r["args3"] = a.result()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+a = Aggregator("chat")      # 无 index：首片建调用，后续无 index 的续帧并入新条目（回退路径：按到达序号当 index）
+a.feed(chunk({"id": "call_1", "function": {"name": "f", "arguments": "{}"}}))
+a.feed(chunk({"id": "call_2", "function": {"name": "g", "arguments": "{}"}}))
+a.feed(fr({"id": "c", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}))
+tcs = a.result()["choices"][0]["message"]["tool_calls"]
+r["noindex"] = [(t["id"], t["function"]["name"]) for t in tcs]
+a = Aggregator("messages")
+def mf(o):
+    return fr(o, o["type"])
+for o in ({"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}},
+          {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "t", "name": "f", "input": {}}},
+          {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"ci'}},
+          {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'ty": "北'}},
+          {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '京"}'}},
+          {"type": "content_block_stop", "index": 0},
+          {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+          {"type": "message_stop"}):
+    a.feed(mf(o))
+r["partial3"] = a.result()["content"][0]["input"]
+from gateway import translate
+try:
+    translate.rewrite_frame(ok, "qwen")
+    r["peer_class_required"] = False
+except TypeError:
+    r["peer_class_required"] = True
+print(json.dumps(r, ensure_ascii=False))
+"""
+
+
+def test_remote_error_shapes_fail_closed_and_multichunk_aggregation(payload, sys_py):
+    got = run_floor(payload, sys_py, PROG2, with_gateway=True)
+    for shape in ("response_failed", "response_error_only", "error_with_choices", "detail", "top_message",
+                  "list_json", "string_json", "non_json"):
+        assert got[shape] == {"REMOTE": False, "LOOPBACK": True}, f"{shape}：远端必须净化、本机原文：{got[shape]}"
+    assert got["peer_class_required"] is True, "translate.rewrite_frame 的 peer_class 必填，不得有 fail-open 缺省"
+    assert got["ok_same"] is True, "正常内容帧（含正文里的路径）不因来源而改变"
+    assert got["ms_model"] is True, "message_start 的 message 是 dict，属正常帧，model 仍改写"
+    assert got["args3"] == '{"city": "北京"}', "tool_calls arguments 分片必须累加"
+    assert got["noindex"] == [["call_1", "f"], ["call_2", "g"]], "无 index 的调用按到达序各自成条"
+    assert got["partial3"] == {"city": "北京"}, "input_json_delta partial_json 分片必须累加"

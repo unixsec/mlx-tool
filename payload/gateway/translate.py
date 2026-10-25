@@ -44,11 +44,11 @@ def outbound(body, short_id):
     return patch_body(body, short_id)
 
 
-def rewrite_frame(frame, short_id, peer_class="LOOPBACK"):
+def rewrite_frame(frame, short_id, peer_class):
     # type: (bytes, str, str) -> bytes
     """流式逐帧改写。**在 Frame 上改，不对 chunk 做字节级替换**（INV-12）。完整实现见 `frames.rewrite`。
 
-    `peer_class` 可选（缺省 LOOPBACK，与原双参调用等价）：非 LOOPBACK 来源的流中错误帧经 `sanitize`。
+    `peer_class` 必填（无缺省，免得漏传 fail open）：非 LOOPBACK 来源的错误内容帧经 `sanitize`。
     """
     from .frames import rewrite
     return rewrite(frame, short_id, peer_class)

@@ -7,7 +7,7 @@
 """
 import json
 
-from .frames import parse
+from .frames import is_error_frame, parse
 
 
 class AggregateError(Exception):
@@ -50,8 +50,8 @@ class Aggregator:
 
     # ── chat / completions ──────────────────────────────────────────
     def _feed_chat(self, event, obj):
-        if "error" in obj and "choices" not in obj:
-            err = obj["error"]
+        if is_error_frame(event, obj):
+            err = obj.get("error") or obj.get("detail") or obj.get("message") or "upstream error"
             self.error = err if isinstance(err, str) else json.dumps(err, ensure_ascii=False)
             return
         if self._base is None:

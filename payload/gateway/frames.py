@@ -40,25 +40,52 @@ def _patch(obj, short_id):
     return obj
 
 
-def rewrite(frame, short_id, peer_class="LOOPBACK", drop_usage=False):
+_ERROR_EVENTS = ("error", "response.failed")
+
+
+def is_error_frame(event, obj):
+    # type: (object, object) -> bool
+    """帧是否带上游错误内容（rewrite 的净化判据与 Aggregator 的出错判据共用）。
+
+    白名单口径：只有「正常内容帧」不算 —— dict、无 `error` / `detail` / 字符串型顶层 `message`、
+    事件与 `type` 都不是 error / response.failed、`response.error` 为空。
+    （Anthropic `message_start` 的 `message` 是 dict，属正常内容，不算。）
+    """
+    if not isinstance(obj, dict):
+        return True
+    if event in _ERROR_EVENTS or obj.get("type") in _ERROR_EVENTS:
+        return True
+    if "error" in obj or "detail" in obj or isinstance(obj.get("message"), str):
+        return True
+    inner = obj.get("response")
+    return isinstance(inner, dict) and bool(inner.get("error"))
+
+
+def rewrite(frame, short_id, peer_class="REMOTE", drop_usage=False):
     # type: (bytes, str, str, bool) -> bytes
+    """缺省 `peer_class="REMOTE"`：漏传时 fail closed。只有 LOOPBACK 看到上游原文。"""
+    from .translate import sanitize
     event, data = parse(frame)
     if data is None or data.strip() == "[DONE]":
         return frame
+    head = "event: " + event + "\n" if event else ""
     try:
         obj = json.loads(data)
     except ValueError:
-        return frame                                   # 不可解析的帧原样过，不猜
-    if not isinstance(obj, dict):
+        if peer_class == "LOOPBACK":
+            return frame                               # 不可解析的帧原样过，不猜
+        return (head + "data: " + sanitize(data) + "\n\n").encode("utf-8")
+    if isinstance(obj, dict):
+        if drop_usage and obj.get("choices") == [] and obj.get("usage") is not None \
+                and not is_error_frame(event, obj):
+            return b""
+        if peer_class != "LOOPBACK" and is_error_frame(event, obj):
+            obj = sanitize(obj)
+        _patch(obj, short_id)
+    elif peer_class == "LOOPBACK":
         return frame
-    if drop_usage and obj.get("choices") == [] and obj.get("usage") is not None:
-        return b""
-    is_error = event == "error" or ("error" in obj and "choices" not in obj)
-    if is_error and peer_class != "LOOPBACK":
-        from .translate import sanitize
+    else:
         obj = sanitize(obj)
-    _patch(obj, short_id)
-    head = "event: " + event + "\n" if event else ""
     return (head + "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8")
 
 
