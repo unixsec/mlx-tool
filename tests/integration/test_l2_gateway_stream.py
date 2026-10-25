@@ -246,7 +246,7 @@ def test_log_event_reaches_redirected_file_immediately(payload, sys_py):
 
 # ── 计划 3 Task 8 携带裁决的补充断言（控制器 carry 注记 C 段）─────────────────────────────
 EXTRA_PROG = r"""
-import base64, http.client, json, os, select, socket, tempfile, threading, time
+import base64, http.client, io, json, os, select, socket, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from gateway.app import Gateway
 from gateway.server import GatewayServer, make_handler
@@ -270,7 +270,12 @@ class Up(BaseHTTPRequestHandler):
                     CLOSED[self.server.key] = time.monotonic()
                     return
             return
-        text = STRUCT_ERR if self.server.fixture == "struct" else F[self.server.fixture]
+        if self.server.fixture == "struct":
+            text = STRUCT_ERR
+        elif self.server.fixture == "noterm":           # 整帧写完就关连接、不发 [DONE]（后端崩溃形态）
+            text = F["mlx_lm_chat_stream"].replace("data: [DONE]\n\n", "")
+        else:
+            text = F[self.server.fixture]
         self.send_response(200); self.send_header("Content-Type", "text/event-stream")
         self.send_header("Connection", "close"); self.end_headers()
         self.wfile.write(text.encode("utf-8")); self.wfile.flush()
@@ -292,7 +297,9 @@ VLM = dict(LM, backend="mlx_vlm", endpoints=["chat", "responses", "messages"],
 MODELS = {"auth": (dict(LM, backend_auth=True), "mlx_lm_chat_stream"),
           "err": (VLM, "mlx_vlm_chat_stream_error"), "struct": (VLM, "struct"),
           "inb": (LM, "mlx_lm_chat_stream"),
-          "slow_s": (LM, "slowhead"), "slow_n": (LM, "slowhead")}
+          "slow_s": (LM, "slowhead"), "slow_n": (LM, "slowhead"),
+          "noterm": (LM, "noterm"), "resp": (VLM, "mlx_vlm_responses_stream"),
+          "msgs": (VLM, "mlx_vlm_messages_stream")}
 PORTS = {k: upstream(k, fx) for k, (_, fx) in MODELS.items()}
 class R:
     def __init__(s, i, p): s.id, s.machine, s.user = i, {"port": p}, {}
@@ -352,6 +359,11 @@ st, text = call(LOCAL, "/v1/chat/completions", {"model": "inb", "thinking_budget
 r["inbound_after_media"] = [st, json.loads(text)["error"]["type"], "inb" in SEEN, os.listdir(MEDIA_ROOT)]
 st, text = call(LOCAL, "/v1/chat/completions", {"model": "inb", "stream": True, "thinking_budget": 64,
     "messages": [{"role": "user", "content": [{"type": "video", "video": video}]}]})
+# 流式路径的这条回复先于 do_POST 的 finally 发出（finally 是这条路径唯一的清理点）：等 handler 线程收尾再看
+for _ in range(40):
+    if not os.listdir(MEDIA_ROOT):
+        break
+    time.sleep(0.025)
 r["inbound_after_media_stream"] = [st, json.loads(text)["error"]["type"], "inb" in SEEN, os.listdir(MEDIA_ROOT)]
 st, text = call(LOCAL, "/v1/responses/resp_1", method="GET")
 r["fanout_non_json"] = [st, json.loads(text)["error"]["type"]]
@@ -367,6 +379,24 @@ def disconnect_before_head(model, stream):
             break
         time.sleep(0.05)
     return round(CLOSED[model] - t0, 2) if model in CLOSED else None
+def truncation_logged(path, body):
+    buf, real = io.StringIO(), sys.stderr
+    sys.stderr = buf                                   # error 级事件写 fd 2：截下来检查
+    try:
+        st, text = call(LOCAL, path, body)
+        time.sleep(0.2)                                # handler 线程在回完流后才记日志
+    finally:
+        sys.stderr = real
+    events = [json.loads(x) for x in buf.getvalue().splitlines() if x.startswith("{")]
+    return [st, [e["event"] for e in events if e.get("event") == "sse_truncated"],
+            any("messages" in e or "content" in e for e in events)]
+r["truncated_no_done"] = truncation_logged("/v1/chat/completions",
+                                           {"model": "noterm", "stream": True, "messages": MSG})
+r["complete_chat"] = truncation_logged("/v1/chat/completions",
+                                       {"model": "auth", "stream": True, "messages": MSG})
+r["complete_responses"] = truncation_logged("/v1/responses", {"model": "resp", "stream": True, "input": "hi"})
+r["complete_messages"] = truncation_logged("/v1/messages", {"model": "msgs", "stream": True, "max_tokens": 8,
+                                                            "messages": MSG})
 r["head_wait_disconnect"] = [disconnect_before_head("slow_s", True), disconnect_before_head("slow_n", False)]
 print(json.dumps(r, ensure_ascii=False))
 """
@@ -387,6 +417,10 @@ def test_gateway_carry_rulings(payload, sys_py):
     assert got["inbound_after_media_stream"] == [400, "thinking_budget_unsupported", False, []], \
         "流式客户端同一情形：临时目录由请求处理的 finally 删除"
     assert got["fanout_non_json"] == [502, "upstream_error"], "扇出上游 200 但体不是 JSON ⇒ 502，不是 504 超时"
+    assert got["truncated_no_done"] == [200, ["sse_truncated"], False], \
+        "上游断在帧边界、没发终止帧 ⇒ 记 sse_truncated（日志不含请求体）"
+    for key in ("complete_chat", "complete_responses", "complete_messages"):
+        assert got[key] == [200, [], False], f"{key}：带终止帧的正常流不得记 sse_truncated：{got[key]}"
     for t in got["head_wait_disconnect"]:
         assert t is not None and t < 1.5, \
             f"上游迟迟不发响应头时客户端离开：靠 client_alive 探测在 1.5 s 内关上游（无写可失败）：{got['head_wait_disconnect']}"

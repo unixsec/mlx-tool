@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from mlx_server.wire import SseDecoder
 
-from . import frames, guard, media, relay, translate
+from . import aggregate, frames, guard, media, relay, translate
 from .app import log_event
 
 DEFAULT_MAX_BODY_MB = 256          # `api.max_body_mb` 出厂值（spec D22：多图与长上下文请求体）
@@ -478,7 +478,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             # 网关为聚合强制开了 usage；客户端自己没要 ⇒ 丢掉 usage 帧
             drop_usage = family in ("chat", "completions") and not meta["client_usage"]
             dec = SseDecoder()
-            state = {"started": False}
+            state = {"started": False, "terminal": False}
 
             def on_head(head):
                 if head[0] == "stream":
@@ -487,6 +487,8 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
 
             def on_chunk(chunk):
                 for frame in dec.feed(chunk):
+                    if not state["terminal"] and aggregate.is_terminal(family, frame):
+                        state["terminal"] = True
                     out = frames.rewrite(frame, short_id, peer_class, drop_usage)
                     if out:
                         self.wfile.write(out)
@@ -519,6 +521,10 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                           pending_bytes=len(dec.pending()))
             elif res is False:
                 log_event("error", "upstream_aborted", model=short_id)
+            elif not state["terminal"]:
+                # 以关连接标界的上游（mlx_lm 是 HTTP/1.0）断在**帧边界**：relay 判 ok、没有半帧，
+                # 只有「没见过终止帧」能说明后端没把流写完（崩溃 / OOM 最常见的形态）
+                log_event("error", "sse_truncated", model=short_id, pending_bytes=0)
             return None
 
     return Handler

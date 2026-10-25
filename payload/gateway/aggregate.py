@@ -9,6 +9,37 @@ import json
 
 from .frames import is_error_frame, parse
 
+# 各端点族的终止事件（`type` 优先，缺省取 SSE `event:`）。`[DONE]` 对任何族都算终止。
+# **终止判据只有这一份**：Aggregator 的 `done` 与流式直出的截断判定（server 层 `sse_truncated`）共用。
+_TERMINAL_KINDS = {"responses": ("response.completed", "response.failed"),
+                   "messages": ("message_stop",)}
+
+
+def _terminal(family, event, data, obj):
+    # type: (str, object, str, object) -> bool
+    if data.strip() == "[DONE]":
+        return True
+    kinds = _TERMINAL_KINDS.get(family)
+    if not kinds or not isinstance(obj, dict):
+        return False
+    return (obj.get("type") or event) in kinds
+
+
+def is_terminal(family, frame):
+    # type: (str, bytes) -> bool
+    """这一帧是否是该端点族的流终止帧。以关连接标界的上游断在帧边界时，HTTP 层与分帧器都看不出截断，
+    只能靠「流结束时是否见过终止帧」判定。"""
+    event, data = parse(frame)
+    if data is None:
+        return False
+    obj = None
+    if data.strip() != "[DONE]":
+        try:
+            obj = json.loads(data)
+        except ValueError:
+            return False
+    return _terminal(family, event, data, obj)
+
 
 class AggregateError(Exception):
     """上游中途出错或流被截断。消息可能含上游原文 —— 回给客户端前按来源净化。"""
@@ -45,6 +76,8 @@ class Aggregator:
             obj = json.loads(data)
         except ValueError:
             return
+        if _terminal(self.family, event, data, obj):
+            self.done = True
         if isinstance(obj, dict):
             getattr(self, "_feed_" + self.family)(event, obj)
 
@@ -120,7 +153,6 @@ class Aggregator:
         kind = obj.get("type") or event
         if kind == "response.completed":
             self._completed = obj.get("response")
-            self.done = True
         elif kind in ("error", "response.failed"):
             err = obj.get("error") or (obj.get("response") or {}).get("error") or {}
             self.error = err.get("message") if isinstance(err, dict) else str(err)
@@ -163,7 +195,7 @@ class Aggregator:
             if isinstance(obj.get("usage"), dict):
                 self._message["usage"] = dict(self._message.get("usage") or {}, **obj["usage"])
         elif kind == "message_stop":
-            self.done = True
+            pass                                        # done 由 feed 的统一终止判据置位
 
     def result(self):
         # type: () -> dict
