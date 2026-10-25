@@ -28,7 +28,7 @@ PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 FAKE_SSE = r'''
-import json, sys, time
+import json, os, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOG = sys.argv[2]
 def note(**kw):
@@ -46,7 +46,12 @@ class H(BaseHTTPRequestHandler):
         content = (body.get("messages") or [{}])[-1].get("content")
         text = content if isinstance(content, str) else next(
             (p.get("text") for p in content or [] if p.get("type") == "text"), "")
-        note(event="request", text=text, body=body)
+        # 代取落盘的文件此刻必须真在磁盘上：后端读得到才算写入侧没有空转
+        vids = [p.get("video") for p in content if isinstance(p, dict) and p.get("type") == "video"] \
+            if isinstance(content, list) else []
+        note(event="request", text=text, body=body,
+             video_files=[[v, os.path.exists(v), os.path.getsize(v) if os.path.exists(v) else None]
+                          for v in vids if isinstance(v, str) and v.startswith("/")])
         self.send_response(200); self.send_header("Content-Type", "text/event-stream")
         self.send_header("Connection", "close"); self.end_headers(); self.wfile.flush()
         try:
@@ -303,6 +308,8 @@ def test_remote_fetch_rules_and_media_cleanup(stack, payload, sys_py):
         path = sent(reqs, "video")
         media_dir = os.path.realpath(stack["media_dir"])
         assert st == 200 and os.path.realpath(path).startswith(media_dir) and path.endswith(".mp4"), path
+        assert reqs[0]["video_files"] == [[path, True, 12 + 256]], \
+            f"后端收到请求时临时文件应已落盘且字节数一致：{reqs[0]['video_files']}"
         end = time.time() + 3
         while os.path.isdir(media_dir) and os.listdir(media_dir) and time.time() < end:
             time.sleep(0.1)
