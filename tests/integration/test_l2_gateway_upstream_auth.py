@@ -10,11 +10,10 @@
   · `backend_auth: False` 的模型（txt）两条路径上游都**没有** Authorization 头；
   · 客户端自带的 Authorization 值从未出现在上游收到的**任何**请求头值里
     （不只 `Authorization`）；
-  · 流式用例上游收到的请求体里 `stream` 确实是 `true`，非流式用例为假/缺省——
-    否则「流式分支带鉴权头」这个结论可能只是巧合（两条分支其实都被当成了
-    同一种请求处理），得靠变异验证才能证明，而不是像这样直接断言走线上的
-    事实（C9）。
+  · 上游一律收到 `stream: true`（spec D22）；两条网关路径的区分落在回给客户端的
+    形状上：流式客户端拿到 SSE，非流式客户端拿到聚合后的 JSON（C9：直接断言走线上的事实）。
 """
+import json
 import random
 import string
 import sys
@@ -153,12 +152,17 @@ def test_gateway_attaches_backend_auth_upstream_only_streaming_and_nonstreaming(
     for auth in txt_auths:
         assert auth is None, f"txt（backend_auth=False）不该带鉴权头，实得 {auth!r}"
 
-    # **确实走了流式路径**（C9）：不只靠「删掉转发参数会变异出错」间接证明，
-    # 直接看上游收到的请求体——流式用例 `stream` 为 true，非流式为假/缺省。
-    assert by_probe["vis:True"]["stream"] is True, by_probe["vis:True"]
-    assert by_probe["txt:True"]["stream"] is True, by_probe["txt:True"]
-    assert not by_probe["vis:False"]["stream"], by_probe["vis:False"]
-    assert not by_probe["txt:False"]["stream"], by_probe["txt:False"]
+    # **上游一律流式**（计划 3 / spec D22）：四种组合上游收到的 `stream` 都是 true。
+    for probe, rec in by_probe.items():
+        assert rec["stream"] is True, f"{probe}：上游应一律收到流式请求：{rec}"
+    # **确实走了两条不同的网关路径**（C9）：上游请求已经一样了，区分只剩回给客户端的形状——
+    # 流式客户端拿到逐帧直出的 SSE，非流式客户端拿到聚合后的 JSON。
+    for model in ("vis", "txt"):
+        streamed = got["results"][f"{model}_True"]["raw"]
+        aggregated = got["results"][f"{model}_False"]["raw"]
+        assert streamed.lstrip().startswith("data:") and "[DONE]" in streamed, streamed[:200]
+        body = json.loads(aggregated)
+        assert body["choices"][0]["message"]["content"] == "hi!", aggregated[:200]
 
     # 泄漏检查扩到**上游收到的任何请求头的值**，不只 Authorization——
     # 客户端令牌不该以任何名义（比如被错误转发进别的头）出现在上游看到的东西里。

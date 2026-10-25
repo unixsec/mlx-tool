@@ -32,6 +32,14 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
         # 两个 mlx 后端都回显请求里的 model 值 —— 这正是网关必须改回短 id 的原因
+        # 网关对上游一律发流式（spec D22）：按 stream 回 SSE，与真实后端一致
+        if body.get("stream"):
+            frame = json.dumps({"model": body.get("model"), "choices": [
+                {"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]})
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "close"); self.end_headers()
+            self.wfile.write(("data: " + frame + "\\n\\ndata: [DONE]\\n\\n").encode())
+            return
         out = json.dumps({"model": body.get("model"),
                           "choices": [{"message": {"content": "ok"}}]}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")

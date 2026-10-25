@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from floor import WORLD, run_floor  # noqa: E402
+from floor import AS_STREAM, WORLD, run_floor  # noqa: E402
 
 KEY = "K" * 43
 TOK = "T" * 43
@@ -62,7 +62,7 @@ def test_api_spec_carries_keys_masked_and_record_stores_only_fingerprints(payloa
     assert got["env"]["dry"]["sources"]["api.token"] == "cli", "shell 里的 MLX_GATEWAY_TOKEN 应覆盖配置"
 
 
-GW_PROG = r'''
+GW_PROG = AS_STREAM + r'''
 import json
 from gateway.app import Gateway
 from mlx_server.result import Ok
@@ -82,11 +82,11 @@ def fwd(port, path, body, headers=None):
     return (200, {"model": body["model"]})
 g = Gateway(None, facade, token="@TOK@", backend_key="@KEY@"); g.refresh_routes()
 for m in ("vlm", "txt"):
-    g.handle("POST", "/v1/chat/completions", body={"model": m}, forward=fwd,
+    g.handle("POST", "/v1/chat/completions", body={"model": m}, forward=fwd, stream=as_stream(fwd),
              headers={"Content-Type": "application/json", "Authorization": "Bearer @TOK@"})
 g2 = Gateway(None, facade, token="@TOK@"); g2.refresh_routes()
 three_arg = g2.handle("POST", "/v1/chat/completions", body={"model": "txt"},
-                      forward=lambda p, pa, b: (200, {"model": b["model"]}),
+                      stream=as_stream(lambda p, pa, b: (200, {"model": b["model"]})),
                       headers={"Content-Type": "application/json",
                                "Authorization": "Bearer @TOK@"})
 print(json.dumps({"cap": cap, "three_arg_status": three_arg[0],

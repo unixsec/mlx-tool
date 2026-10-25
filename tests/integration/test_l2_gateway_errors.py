@@ -3,12 +3,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from floor import run_floor  # noqa: E402
+from floor import AS_STREAM, run_floor  # noqa: E402
 
 NET = Path(__file__).resolve().parents[1] / "fixtures" / "net"
 TOK = "t" * 43
 
-PROG = r"""
+PROG = AS_STREAM + r"""
 import io, json, sys, threading, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from gateway import peers
@@ -46,9 +46,9 @@ H = {"Content-Type": "application/json", "Authorization": "Bearer @TOK@"}
 fwd400 = lambda p, pa, b, **kw: (400, LEAK)
 fwd401 = lambda p, pa, b, **kw: (401, {"detail": "Unauthorized"})
 err = io.StringIO(); real_err, sys.stderr = sys.stderr, err
-out = {"remote": g.handle("POST", "/v1/chat/completions", H, {"model": "qwen"}, fwd400, peer="172.20.10.5"),
-       "local": g.handle("POST", "/v1/chat/completions", H, {"model": "qwen"}, fwd400),
-       "auth": g.handle("POST", "/v1/chat/completions", H, {"model": "qwen"}, fwd401)[0],
+out = {"remote": g.handle("POST", "/v1/chat/completions", H, {"model": "qwen"}, stream=as_stream(fwd400), peer="172.20.10.5"),
+       "local": g.handle("POST", "/v1/chat/completions", H, {"model": "qwen"}, stream=as_stream(fwd400)),
+       "auth": g.handle("POST", "/v1/chat/completions", H, {"model": "qwen"}, stream=as_stream(fwd401))[0],
        # 扇出分支（GET /v1/responses/<id>）单独走一条 peer_class，不与按体路由那条共用变量——
        # 光测按体路由那条不能证明扇出分支也把真实来源接对了（Important 3）。
        "fanout_remote": g.handle("GET", "/v1/responses/anything", H, None, fwd400, peer="172.20.10.5"),

@@ -79,3 +79,36 @@ def put_caps(packages):
         fh.write(json.dumps({"fingerprint": "{}", "packages": packages,
                              "collected_at": "t"}))
 '''
+
+
+# 把「返回 (status, body)」的非流式转发桩包成流式上游（网关对上游一律流式，spec D22）。
+# 200 ⇒ 按路径生成该端点族的最小事件序列（chat / completions：`data: <body>` + `[DONE]`；
+# responses：`response.completed`；messages：`message_start` + `message_stop`），
+# **故意在帧中间切成两块**（真实上游不保证分块对齐帧边界）；≥ 400 ⇒ 原样返回；None ⇒ 传输失败。
+AS_STREAM = r"""
+import json as _as_stream_json
+def as_stream(json_forward):
+    def stream(port, path, payload, on_chunk, **kw):
+        kw.pop("client_alive", None)
+        out = json_forward(port, path, payload, **kw)
+        if out is None:
+            return False
+        status, body = out
+        if status >= 400:
+            return (status, body)
+        dumps = lambda o: _as_stream_json.dumps(o, ensure_ascii=False)
+        route = path.split("?")[0]
+        if route.endswith("/messages"):
+            text = ("event: message_start\ndata: " + dumps({"type": "message_start", "message": body})
+                    + '\n\nevent: message_stop\ndata: {"type": "message_stop"}\n\n')
+        elif route.endswith("/responses"):
+            text = ("event: response.completed\ndata: "
+                    + dumps({"type": "response.completed", "response": body}) + "\n\n")
+        else:
+            text = "data: " + dumps(body) + "\n\ndata: [DONE]\n\n"
+        raw = text.encode("utf-8")
+        on_chunk(raw[:7])
+        on_chunk(raw[7:])
+        return True
+    return stream
+"""

@@ -447,8 +447,8 @@ print(json.dumps(out))
 """
 
 
-def test_upstream_transport_failure_becomes_504_not_zero_bytes(payload, sys_py):
-    """收尾评审 Critical 3：`forward` 的契约是「传输失败 → `None` → 504」，
+def test_upstream_transport_failure_becomes_502_not_zero_bytes(payload, sys_py):
+    """收尾评审 Critical 3：`forward` 的契约是「传输失败 → `None`」，
     而它的 except 面按**名字**列举，漏了两族：
 
     · `http.client.BadStatusLine` / `IncompleteRead` 是 `HTTPException`，
@@ -460,6 +460,9 @@ def test_upstream_transport_failure_becomes_504_not_zero_bytes(payload, sys_py):
 
     `forward_stream` 同样需要 `HTTPException`（读超时与连接重置本已被 `OSError`
     接住，只有 `BadStatusLine` 会逃）。
+
+    端到端（计划 3 裁决 M4）：上游一律流式后，连不上上游 / 上游回垃圾是 **502**
+    `upstream_error`，不再是 504 —— 那不是超时。
     """
     got = run_floor(payload, sys_py, UPSTREAM, with_gateway=True, timeout=60, TOK=TOK)
     assert got["forward_bad_status"] is None, (
@@ -469,7 +472,7 @@ def test_upstream_transport_failure_becomes_504_not_zero_bytes(payload, sys_py):
         f"{got['forward_read_timeout']}")
     assert got["stream_bad_status"] is False, (
         f"forward_stream 的 BadStatusLine 逃逸了：{got['stream_bad_status']}")
-    assert "504" in got["end_to_end"], f"端到端应收到 504 而不是零字节：{got['end_to_end']}"
+    assert "502" in got["end_to_end"], f"端到端应收到 502 而不是零字节：{got['end_to_end']}"
 
 
 EXPECT100_OVERSIZE = PRE + r"""

@@ -3,11 +3,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from floor import WORLD, run_floor  # noqa: E402
+from floor import AS_STREAM, WORLD, run_floor  # noqa: E402
 
 TOK = "t" * 43
 
-GW = r"""
+GW = AS_STREAM + r"""
 import json
 from gateway.app import Gateway
 from mlx_server.result import Ok
@@ -33,7 +33,7 @@ def fwd(port, path, body, method="POST", timeout_sec=600, headers=None, host="12
     return canned.get((port, method, path),
                       (200, {"id": "resp_1", "model": (body or {}).get("model") or "BACKEND"}))
 def post(path, model):
-    return g.handle("POST", path, headers=H, body={"model": model}, forward=fwd)
+    return g.handle("POST", path, headers=H, body={"model": model}, forward=fwd, stream=as_stream(fwd))
 r = {}
 st, _ = post("/chat/completions", "txt")
 r["chat_no_v1"] = [st, calls[-1]]

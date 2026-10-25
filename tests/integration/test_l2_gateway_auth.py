@@ -3,12 +3,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from floor import run_floor  # noqa: E402
+from floor import AS_STREAM, run_floor  # noqa: E402
 
 NET = Path(__file__).resolve().parents[1] / "fixtures" / "net"
 TOK = "t" * 43
 
-PROG = r"""
+PROG = AS_STREAM + r"""
 import json
 from gateway import peers
 from gateway.app import Gateway
@@ -36,7 +36,7 @@ AUTHS = {"none": {}, "bearer_ok": {"Authorization": "Bearer @TOK@"},
 OPS = {
     "get_models": lambda h, peer: g.handle("GET", "/v1/models", headers=h, peer=peer)[0],
     "post_chat": lambda h, peer: g.handle("POST", "/v1/chat/completions", headers=dict(JSON, **h),
-                                          body={"model": "qwen"}, forward=fwd, peer=peer)[0],
+                                          body={"model": "qwen"}, forward=fwd, stream=as_stream(fwd), peer=peer)[0],
     "post_stream": lambda h, peer: (lambda k: "forward" if k[0] == "forward" else k[1][0])(
         g.prepare("/v1/chat/completions", dict(JSON, **h), {"model": "qwen", "stream": True},
                   method="POST", peer=peer)),
@@ -52,10 +52,10 @@ for peer in ("127.0.0.1", "172.20.10.5", "10.14.0.7"):
             matrix["%s|%s|%s" % (peer, op, name)] = fn(h, peer)
 denied = g.handle("GET", "/v1/models", headers=AUTHS["bearer_ok"], peer="10.14.0.7")
 hz = g.handle("GET", "/healthz", peer="172.20.10.5")
-ctype = g.handle("POST", "/v1/chat/completions", peer="127.0.0.1", forward=fwd,
+ctype = g.handle("POST", "/v1/chat/completions", peer="127.0.0.1", forward=fwd, stream=as_stream(fwd),
                  headers={"Content-Type": "text/plain", "Authorization": "Bearer @TOK@"},
                  body={"model": "qwen"})[0]
-ctype_param = g.handle("POST", "/v1/chat/completions", peer="127.0.0.1", forward=fwd,
+ctype_param = g.handle("POST", "/v1/chat/completions", peer="127.0.0.1", forward=fwd, stream=as_stream(fwd),
                        headers={"Content-Type": "application/json; charset=utf-8",
                                 "Authorization": "Bearer @TOK@"}, body={"model": "qwen"})[0]
 spoof = g.handle("GET", "/v1/models", peer="10.14.0.7",

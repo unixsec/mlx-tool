@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cardinality import Cardinality  # noqa: E402
+from floor import AS_STREAM  # noqa: E402
 
 
 def _floor(payload, sys_py, body):
@@ -41,6 +42,7 @@ TOK = "t" * 43
 AUTH = {"Authorization": "Bearer " + TOK}
 JSON_AUTH = dict(AUTH, **{"Content-Type": "application/json"})
 '''
+PRE += AS_STREAM
 
 
 def test_l2_models_ids_come_from_route_keys(payload, sys_py):
@@ -71,7 +73,7 @@ def test_l2_three_way_id_consistency(payload, sys_py):
         for m in body["data"]:
             st, rb = g.handle("POST", "/v1/chat/completions", body={"model": m["id"]},
                               headers=JSON_AUTH,
-                              forward=lambda p, pa, b: (200, {"model": b["model"]}))
+                              stream=as_stream(lambda p, pa, b: (200, {"model": b["model"]})))
             results.append([m["id"], st, rb.get("model")])
         print(json.dumps({"results": results}))
     ''')
@@ -127,7 +129,7 @@ def test_l2_upstream_error_body_not_forwarded(payload, sys_py):
         g = Gateway(None, facade(), token=TOK); g.refresh_routes()
         st, body = g.handle("POST", "/v1/chat/completions", body={"model": "qwen"},
                             headers=JSON_AUTH,
-                            forward=lambda p, pa, b: (500, {"internal": "SECRET_MARKER"}))
+                            stream=as_stream(lambda p, pa, b: (500, {"internal": "SECRET_MARKER"})))
         print(json.dumps({"status": st, "raw": json.dumps(body)}))
     ''')
     assert got["status"] == 502

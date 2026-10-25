@@ -2,7 +2,8 @@
 
 理由：本地单用户场景下 `ThreadingHTTPServer` 完全够用，而零依赖让网关
 在 venv 坏掉时**仍能起来** —— 与 T1 「venv 坏了 mlx check 也能跑」同一条哲学。
-流式转发用 `urllib` 的分块读，不需要 httpx。
+所有判定在 `Gateway`（`precheck` / `prepare` / `handle`）；本层只做 HTTP 搬运、
+流式直出（经 `relay`：`read1`、保活、断连即取消上游）与连接生命周期。
 """
 import http.client
 import json
@@ -17,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from mlx_server.wire import SseDecoder
 
-from . import guard, translate
+from . import frames, guard, media, relay, translate
 from .app import log_event
 
 DEFAULT_MAX_BODY_MB = 256          # `api.max_body_mb` 出厂值（spec D22：多图与长上下文请求体）
@@ -83,14 +84,23 @@ def tls_context(cert_path, key_path):
 
 
 def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None, method="POST"):
-    """把请求转给本机后端。返回 `(status, body)`；传输失败返回 `None`。`payload is None` ⇒ 无请求体。"""
+    """**非流式**转发 —— 只服务按 id 扇出的端点（GET / DELETE / cancel）；按 body 路由的端点
+    一律经 `forward_stream`。返回 `(status, body)`；传输失败返回 `None`。`payload is None` ⇒ 无请求体。
+
+    2xx 的体不是 JSON ⇒ `(502, {})`：后端回了话、只是回的不是约定的形状，这**不是**超时
+    （此前 `json.loads` 的 `ValueError` 落进传输失败分支，客户端看到的是 504 upstream_timeout）。
+    """
     data = None if payload is None else json.dumps(payload).encode()
     base = {"Content-Type": "application/json"} if data is not None else {}
     req = urllib.request.Request(f"http://{host}:{port}{path}", data=data, method=method,
                                  headers=dict(base, **(headers or {})))
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as r:  # noqa: S310
-            return (r.status, json.loads(r.read() or b"{}"))
+            status, raw = r.status, r.read()
+        try:
+            return (status, json.loads(raw or b"{}"))
+        except ValueError:
+            return (502, {})
     except urllib.error.HTTPError as e:
         try:
             return (e.code, json.loads(e.read() or b"{}"))
@@ -110,43 +120,33 @@ def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None
         return None
 
 
-def forward_stream(port, path, payload, on_chunk, host="127.0.0.1", timeout_sec=600,
-                    headers=None):
-    """流式转发。**逐块喂给 `on_chunk`，由调用方分帧改写** ——
+def forward_stream(port, path, payload, on_chunk, host="127.0.0.1",
+                   timeout_sec=relay.READ_TIMEOUT_SEC, headers=None, client_alive=None,
+                   keepalive=None, on_head=None, keepalive_sec=relay.KEEPALIVE_SEC,
+                   probe_sec=relay.PROBE_SEC):
+    """流式转发（经 `relay`：读取线程 `read1`、按 `probe_sec` 探测客户端、静默满 `keepalive_sec` 保活）。
 
-    本函数不碰字节内容（INV-12：改写只发生在 Frame 上，不对 chunk 做替换）。
-    返回 `True` 正常结束 · `False` 传输失败 · `(status, body)` 上游在任何字节之前回了 HTTP 错误。
+    本函数不碰字节内容（INV-12：改写只发生在 Frame 上，由调用方的 `on_chunk` 分帧改写）。
+    → `True` 正常结束 · `False` 上游连不上或中途断开 · `(status, body)` 上游在任何字节之前回了
+    HTTP 错误 · `"client_disconnected"`（上游已关闭）。以关连接标界的响应中途断开在 HTTP 层看起来
+    就是正常结束 ⇒ 这里给 `True`，调用方须用 `SseDecoder.pending()` 判截断。
     """
-    req = urllib.request.Request(
-        f"http://{host}:{port}{path}",
-        data=json.dumps(dict(payload, stream=True)).encode(), method="POST",
-        headers=dict({"Content-Type": "application/json", "Accept": "text/event-stream"},
-                     **(headers or {})),
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as r:  # noqa: S310
-            while True:
-                chunk = r.read(4096)
-                if not chunk:
-                    return True
-                on_chunk(chunk)
-    except urllib.error.HTTPError as e:
-        # **必须先于 URLError 捕获**（它是 URLError 的子类）。此前被当成传输失败，
-        # 后端对流式请求回的 400 到了客户端变成 504 upstream_timeout（spec §0.7-8）
-        try:
-            return (e.code, json.loads(e.read() or b"{}"))
-        except ValueError:
-            return (e.code, {})
-    except (OSError, http.client.HTTPException):
-        # `HTTPException` 与 `forward` 同一条理由：`BadStatusLine` 不是 `OSError`，
-        # 实测在两个解释器上都从这里逃逸（读超时与连接重置本已被 `OSError` 接住）。
-        return False
+    res = relay.relay(
+        lambda register: relay.open_upstream(port, path, payload, headers=headers, host=host,
+                                             timeout_sec=timeout_sec, register=register),
+        on_head or (lambda head: None), on_chunk, client_alive or (lambda: True),
+        keepalive=keepalive, keepalive_sec=keepalive_sec, probe_sec=probe_sec)
+    if res["outcome"] == "upstream_error":
+        return (res["head"][1], res["head"][2])
+    if res["outcome"] == "client_disconnected":
+        return "client_disconnected"
+    return res["outcome"] == "ok"
 
 
 def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_context=None):
-    """把 `Gateway` 包成 handler。**所有判定都在 `Gateway.handle` 里**，
+    """把 `Gateway` 包成 handler。**所有判定都在 `Gateway` 里**，
 
-    本层只做 HTTP 的搬运：读体、写头、写体。
+    本层只做 HTTP 的搬运：读体、写头、写体、流式直出与连接生命周期。
     """
 
     class Handler(BaseHTTPRequestHandler):
@@ -229,6 +229,10 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.send_header("Access-Control-Allow-Methods", guard.CORS_ALLOW_METHODS)
                 self.send_header("Access-Control-Allow-Headers", guard.CORS_ALLOW_HEADERS)
                 self.send_header("Access-Control-Max-Age", guard.CORS_MAX_AGE)
+            if status == 503 and isinstance(body, dict) and isinstance(body.get("error"), dict) \
+                    and body["error"].get("type") == "gateway_busy":
+                # `MediaError.reply()` 不带响应头：在途预算满时由这里补上重试提示（spec §4.4）
+                self.send_header("Retry-After", "5")
             if body is not None:
                 self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
@@ -391,76 +395,130 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             return super().handle_expect_100()
 
         def do_POST(self):       # noqa: N802
+            peer = self.client_address[0]
             _peer_class, _path, _query, _hit, early = gw.precheck(
-                "POST", self.path, dict(self.headers), self.client_address[0])
+                "POST", self.path, dict(self.headers), peer)
             if early:
                 self.close_connection = True       # 请求体没读，这条连接不能再复用
                 return self._reply(*early)
-            body, err = self._read_body()
+            # 裁决 M3：先按头判 Transfer-Encoding / Content-Length / 413，再把声明的体积计入在途预算
+            err = self._declared_body_error()
             if err:
-                return self._reply(*err)
-            path = self.path
-            # **流式要走另一条转发路径。** 此前不分流：`stream: true` 的请求
-            # 被原样转给后端，后端回 SSE，而 `forward` 用 json.loads 解析它 ⇒
-            # ValueError ⇒ None ⇒ 客户端收到 504 upstream_timeout。
-            # Cherry Studio 这类客户端**默认开流式**，等于接进去第一条消息就失败。
-            if body and body.get("stream"):
-                return self._stream(path, body)
-            st, out = gw.handle("POST", path, dict(self.headers), body,
-                                forward=forward, peer=self.client_address[0])
-            self._reply(st, out)
+                return self._reply(*err)           # close_connection 已由 _declared_body_error 置位
+            n, _err = self._parse_content_length()
+            # Ticket 覆盖请求的**全部**退出路径：入站管线已落盘/计费后才抛错、中继、聚合、客户端断开
+            ticket = gw.new_ticket()
+            try:
+                try:
+                    ticket.charge(n)
+                except media.MediaError as exc:
+                    self.close_connection = True   # 体没读
+                    return self._reply(*exc.reply())
+                body, err = self._read_body()
+                if err:
+                    return self._reply(*err)
+                if body is not None and not isinstance(body, dict):
+                    # 下游一律按对象取 `.model` / `.stream`：数组、字符串体在这里拒，不让它打穿工作线程
+                    return self._reply(400, {"error": {"message": "body must be a JSON object",
+                                                       "type": "invalid_request"}})
+                # **流式要走另一条直出路径**（Cherry Studio 这类客户端默认开流式）
+                if body and body.get("stream"):
+                    return self._stream(body, ticket)
+                out = gw.handle("POST", self.path, dict(self.headers), body, forward=forward,
+                                peer=peer, stream=self._upstream, client_alive=self._alive,
+                                ticket=ticket)
+                # 上游已结束 ⇒ 后端不再读临时文件：**先删再回**，客户端拿到响应时目录已不在
+                ticket.close()
+                if out is None:                    # 客户端已断开，没有人可回
+                    self.close_connection = True
+                    return None
+                return self._reply(*out)
+            finally:
+                ticket.close()
 
-        def _stream(self, path, body):
-            """流式转发：逐帧改写后立刻写给客户端。
+        def _alive(self):
+            return relay.client_alive(self.connection)
 
-            分帧交给 `wire.SseDecoder`（INV-12：SSE 分帧**只有一份实现**，
-            不在这里另写一个），改写交给 `translate.rewrite_frame`
-            （只在完整 Frame 上改，不对 chunk 做字节级替换）。
-            鉴权与路由解析走 `gw.prepare` —— 与非流式同一处判定。
+        def _upstream(self, port, path, payload, on_chunk, headers=None, client_alive=None):
+            return forward_stream(port, path, payload, on_chunk, headers=headers,
+                                  client_alive=client_alive, keepalive_sec=gw.keepalive_sec,
+                                  probe_sec=gw.probe_sec)
+
+        def _stream_headers(self):
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            # 不发 Content-Length（长度未知）⇒ 用连接关闭标界
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+
+        def _stream(self, body, ticket):
+            """流式客户端：逐帧改写后立刻写出，上游静默时保活，客户端断开即关上游。
+
+            分帧交给 `wire.SseDecoder`（INV-12：SSE 分帧**只有一份实现**），改写交给
+            `frames.rewrite`（只在完整 Frame 上改，**显式传 peer_class**：远端来源的帧内错误净化）。
+            鉴权与路由解析走 `gw.prepare` —— 与非流式同一处判定。**收到上游 200 头之后**才下发
+            响应头；此前上游的任何失败都还能回一个正常的错误响应。
             """
-            kind, *rest = gw.prepare(path, dict(self.headers), body, method="POST",
-                                     peer=self.client_address[0])
+            peer = self.client_address[0]
+            kind, *rest = gw.prepare(self.path, dict(self.headers), body, method="POST", peer=peer)
             if kind == "reply":
                 return self._reply(*rest[0])
             if kind == "fanout":                 # 按 id 的端点没有流式形态，按非流式处理
-                st, out = gw.handle("POST", path, dict(self.headers), body, forward=forward,
-                                    peer=self.client_address[0])
-                return self._reply(st, out)
-            port, model_arg, short_id, peer_class, upstream = rest
-
+                return self._reply(*gw.handle("POST", self.path, dict(self.headers), body,
+                                              forward=forward, peer=peer))
+            port, model_arg, short_id, peer_class, upstream, family, snap = rest
+            try:
+                up_body, meta = translate.build_upstream(body, family, snap, peer_class, model_arg,
+                                                         gw.media_context(ticket))
+            except (media.MediaError, translate.InboundError) as exc:
+                return self._reply(*exc.reply())
+            # 网关为聚合强制开了 usage；客户端自己没要 ⇒ 丢掉 usage 帧
+            drop_usage = family in ("chat", "completions") and not meta["client_usage"]
             dec = SseDecoder()
             state = {"started": False}
 
-            def on_chunk(chunk):
-                if not state["started"]:
-                    self.send_response(200)
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.send_header("Cache-Control", "no-cache")
-                    # 不发 Content-Length（长度未知）⇒ 用连接关闭标界
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-                    self.close_connection = True
+            def on_head(head):
+                if head[0] == "stream":
+                    self._stream_headers()
                     state["started"] = True
-                for frame in dec.feed(chunk):
-                    self.wfile.write(translate.rewrite_frame(frame, short_id, peer_class))
-                    self.wfile.flush()
 
-            hdrs = gw.upstream_headers(short_id)
-            ok = forward_stream(port, upstream, translate.inbound(body, model_arg), on_chunk,
-                                **({"headers": hdrs} if hdrs else {}))
-            if isinstance(ok, tuple):
-                return self._reply(*gw.upstream_reply(ok[0], ok[1], peer_class, short_id))
+            def on_chunk(chunk):
+                for frame in dec.feed(chunk):
+                    out = frames.rewrite(frame, short_id, peer_class, drop_usage)
+                    if out:
+                        self.wfile.write(out)
+                self.wfile.flush()
+
+            def keepalive():
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+
+            hdrs = gw.upstream_headers(short_id, snap)
+            res = forward_stream(port, upstream, up_body, on_chunk, headers=hdrs or None,
+                                 client_alive=self._alive, keepalive=keepalive, on_head=on_head,
+                                 keepalive_sec=gw.keepalive_sec, probe_sec=gw.probe_sec)
+            ticket.close()                       # 可重复调用；do_POST 的 finally 兜底
+            if isinstance(res, tuple):
+                return self._reply(*gw.upstream_reply(res[0], res[1], peer_class, short_id))
+            if res == "client_disconnected":
+                log_event("info", "client_disconnected", model=short_id)
+                self.close_connection = True
+                return None
             if not state["started"]:
-                # 一个字节都没来 ⇒ 还能正常回一个错误响应
+                # 一个字节都没来 ⇒ 还能正常回一个错误响应（M4：连不上上游是 502，不是 504）
+                log_event("error", "upstream_aborted", model=short_id)
                 return self._reply(*translate.build_error(
-                    504, "upstream_timeout", "backend did not answer in time"))
-            if dec.pending():
-                # 未终结的帧**不得当作正常结束**（SseDecoder.pending 的契约）
+                    502, "upstream_error", "backend connection failed"))
+            if dec.pending().strip():
+                # 未终结的帧**不得当作正常结束**（SseDecoder.pending 的契约）：以关连接标界的
+                # 响应中途断开，relay 在 HTTP 层判不出来，只能在这里发现
                 log_event("error", "sse_truncated", model=short_id,
                           pending_bytes=len(dec.pending()))
-            elif not ok:
-                log_event("error", "sse_stream_aborted", model=short_id)
+            elif res is False:
+                log_event("error", "upstream_aborted", model=short_id)
             return None
 
     return Handler
@@ -468,7 +526,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
 
 def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0,
           max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_context=None):
-    """起服务器 + 后台路由与网段刷新。**阻塞** —— 调用方是 `gateway.__main__`。"""
+    """起服务器 + 后台路由、网段与临时媒体刷新。**阻塞** —— 调用方是 `gateway.__main__`。"""
     httpd = GatewayServer((host, port), make_handler(gw, max_body_bytes, tls_context))
 
     stop = threading.Event()
@@ -488,9 +546,14 @@ def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0,
                     gw.nets.tick()
             except Exception as e:                      # noqa: BLE001
                 log_event("error", "nets_refresh_failed", detail=str(e)[:200])
+            try:
+                gw.media_store.sweep()                  # 超过 1 h 的遗留临时媒体目录
+            except Exception as e:                      # noqa: BLE001
+                log_event("error", "media_sweep_failed", detail=str(e)[:200])
 
     if gw.nets is not None:
         gw.nets.refresh()
+    gw.media_store.sweep()                              # 上次崩溃留下的临时媒体
     gw.refresh_routes()
     t = threading.Thread(target=refresher, daemon=True)
     t.start()
