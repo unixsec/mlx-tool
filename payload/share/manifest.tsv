@@ -33,6 +33,8 @@ gateway/effort.py	代码	删除
 gateway/routes.py	代码	删除
 gateway/guard.py	代码	删除
 gateway/translate.py	代码	删除
+gateway/frames.py	代码	删除
+gateway/aggregate.py	代码	删除
 gateway/endpoints.py	代码	删除
 gateway/app.py	代码	删除
 gateway/peers.py	代码	删除

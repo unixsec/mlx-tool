@@ -6,7 +6,6 @@
 体对本机来源原文、对远端来源净化（去绝对路径与异常片段）；后端 5xx 与鉴权失败
 映射为 502，体不透传。
 """
-import json
 import re
 
 
@@ -40,31 +39,19 @@ def inbound(body, model_arg):
 
 def outbound(body, short_id):
     # type: (dict, str) -> dict
-    """回程改写：后端回显的 model 值 → 短 id（`R-API-21` 三向一致）。"""
-    out = dict(body or {})
-    if "model" in out:
-        out["model"] = short_id
-    return out
+    """回程改写：`model` 各位置改回短 id，补 `reasoning_content`（`R-API-21` 三向一致）。"""
+    from .frames import patch_body
+    return patch_body(body, short_id)
 
 
-def rewrite_frame(frame, short_id):
-    # type: (bytes, str) -> bytes
-    """流式逐帧改写。**在 Frame 上改，不对 chunk 做字节级替换**（INV-12）。
+def rewrite_frame(frame, short_id, peer_class="LOOPBACK"):
+    # type: (bytes, str, str) -> bytes
+    """流式逐帧改写。**在 Frame 上改，不对 chunk 做字节级替换**（INV-12）。完整实现见 `frames.rewrite`。
 
-    坏样本：对 chunk 做 `.replace()` ⇒ 跨块的 model 字段被改一半。
+    `peer_class` 可选（缺省 LOOPBACK，与原双参调用等价）：非 LOOPBACK 来源的流中错误帧经 `sanitize`。
     """
-    if not frame.startswith(b"data: "):
-        return frame
-    payload = frame[len(b"data: "):].strip()
-    if payload == b"[DONE]":
-        return frame                       # 结束标记原样过
-    try:
-        obj = json.loads(payload)
-    except ValueError:
-        return frame                       # 不可解析的帧原样过，不猜
-    if "model" in obj:
-        obj["model"] = short_id
-    return b"data: " + json.dumps(obj, ensure_ascii=False).encode() + b"\n\n"
+    from .frames import rewrite
+    return rewrite(frame, short_id, peer_class)
 
 
 def build_error(status, err_type, message=None, request_id=None):

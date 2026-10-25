@@ -443,7 +443,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                     self.close_connection = True
                     state["started"] = True
                 for frame in dec.feed(chunk):
-                    self.wfile.write(translate.rewrite_frame(frame, short_id))
+                    self.wfile.write(translate.rewrite_frame(frame, short_id, peer_class))
                     self.wfile.flush()
 
             hdrs = gw.upstream_headers(short_id)
