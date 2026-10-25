@@ -631,7 +631,7 @@ $ curl ... -d '{"model":"qwen38","messages":[...],"max_tokens":20}'
 在客户端里，前一种显示为**空白回复且没有任何报错** —— OpenAI 兼容格式里
 `content` 为空是合法响应，客户端无从判断出了什么事。**建议设 2048 以上。**
 
-服务端的默认上限已经是 81920（`max_tokens`）；这里说的是**客户端请求里自己带的** `max_tokens`。
+服务端 `max_tokens` 的默认值已经是 81920（见[思考与输出长度](#thinking)）；这里说的是**客户端请求里自己带的** `max_tokens`。
 
 ### 网关只转发正在跑的模型
 
@@ -762,8 +762,84 @@ wire_api = "responses"
 
 路径带不带 `/v1` 都行。Codex 与 Claude Code 分别只用 responses 与 messages，所以只能配多模态后端的模型。
 
-**本版暂不支持**：由网关代取 `http(s)://` 图片（请传 `data:` URL）；`reasoning_effort` 超出模型模板接受的取值时后端报错
-（qwen38 只接受 `low` / `medium` / `xhigh`）。
+### 图片、音频、视频 {#media}
+
+| 你发的 | 本机来源 | 虚拟机 / Wi-Fi 设备 |
+|---|---|---|
+| `data:image/…`、`data:audio/…;base64,`、Anthropic `source.type=base64` | 原样交给模型 | 同左 |
+| `data:video/…` | 网关解码成临时文件交给模型，请求结束即删 | 同左 |
+| `http(s)://` 图片、音频（含 Anthropic `source.type=url`） | 网关取回，改写成 `data:` 交给模型 | 同左，目标地址受限（见下） |
+| `http(s)://` 视频 | 网关取回存成临时文件，请求结束即删 | 同左，目标地址受限 |
+| 本机文件路径、`file://` | 原样交给模型 | 400 `media_source_rejected` |
+| `file_id`、Anthropic `source.type=file` | 400 `media_source_rejected` | 同左 |
+
+模型进程自己不对外连接，`http(s)://` 媒体一律由网关代取。**目标地址规则**（本机来源不受限，以下只针对虚拟机与 Wi-Fi 设备）：
+
+- 私网、CGNAT、链路本地、回环、组播与保留地址，除非落在 `mlx api info` 列出的**放行网段**内，一律拒绝；
+- **任何公网地址一律放行**。因此经 VPN 可达的公网段地址，远端来源也能让网关去取（已知限制，见 [KNOWN-ISSUES](KNOWN-ISSUES.md)）；
+- 目标等于本机自身的地址（包括公网形态）拒绝；IPv4-mapped、NAT64、6to4 先还原成 IPv4 再判断，Teredo 拒绝；
+- 重定向最多 3 跳，每一跳都重新检查；主机名写成数字形式（如 `2130706433`）按 `address_denied` 处理。
+
+代取失败返回 400 `media_fetch_failed`，`error.reason` 说明原因：
+
+| `reason` | 含义 |
+|---|---|
+| `address_denied` | 目标地址不允许，或主机名写成了数字形式 |
+| `dns_failed` / `connect_failed` / `timeout` | 解析不了、连不上、30 秒内没取完 |
+| `redirect_limit` | 重定向超过 3 跳 |
+| `too_large` | 超过 `api.media_max_mb` |
+| `bad_content_type` | 响应不是 `image/*`、`audio/*`、`video/*` |
+| `encoding_rejected` | 对方坚持压缩传输 |
+| `http_error` | 对方返回了非 2xx 状态码 |
+
+| 配置键 | 默认（域） | 管什么，超出时 |
+|---|---|---|
+| `api.media_max_mb` | 128（1–2048） | **只限网关代取的字节**：单个媒体超出 → 400 `media_fetch_failed`（`too_large`）。请求里内联的 `data:` 媒体不受它管 |
+| `api.max_body_mb` | 256（1–2048） | 整个请求体（内联 `data:` 媒体算在里面）：超出 → 413 `invalid_request`，在读请求体之前就拒 |
+| `api.media_max_parts` | 32（1–256） | 一个请求里的媒体个数：超出 → 400 `too_many_media_parts`，一个都不代取 |
+| `api.inflight_max_mb` | 2048（64–65536） | 全网关同时在处理的请求体、代取内容与临时文件之和：超出 → 503 `gateway_busy`，带 `Retry-After: 5` |
+
+`api.inflight_max_mb` 不能小于 `api.media_max_mb`：每次代取都要先按 `media_max_mb` 预留额度，预留不下就拒，
+小于它时**所有远端代取都会 503 `gateway_busy`**。遇到这种情况调大 `api.inflight_max_mb`（或调小 `api.media_max_mb`）。
+改完 `mlx restart api` 生效。
+
+网关日志 `api.log` 的 `media_fetched` 事件记主机名、原因与字节数，**不记完整 URL**（查询串里常有签名）。
+视频临时文件落在 `<数据根>/run/media/<uuid4>/`（目录权限 0700），请求结束即删；网关启动时与运行中会清扫超过 1 小时的残留。
+写不下时返回 507 `media_storage_failed`。
+
+### 思考与输出长度 {#thinking}
+
+**关思考**，任选一种写法：`"enable_thinking": false`、`"chat_template_kwargs": {"enable_thinking": false}`、
+`"thinking": {"type": "disabled"}`、`"reasoning_effort": "none"`（`off` / `disabled` / `false` / `0` 同义）。
+多模态模型的后端（mlx_vlm）不读 `chat_template_kwargs`，网关把 `enable_thinking` / `reasoning_effort` 改写到请求顶层再转给它。
+
+**思考强度**：chat 认 `reasoning_effort`（也认 `chat_template_kwargs.reasoning_effort`、`reasoning.effort`），
+responses 认 `reasoning.effort`。模型模板只接受部分取值时，网关换成**不低于它的最小可用值**，没有就用最大值：
+
+| 你发的 | qwen38 实际用（模板接受 `low` / `medium` / `xhigh`） |
+|---|---|
+| `minimal` | `low` |
+| `low` / `medium` | 原样 |
+| `high` / `max` | `xhigh` |
+
+`mlx model info <id>` 显示模板接受的取值；模板不认强度的模型，网关不下发这个字段。
+
+**输出长度**：`max_tokens` 默认 81920（可改，域 1–1048576），不是上限；请求里自己带的值照常生效。
+`max_tokens` 与 `max_completion_tokens` 都认 —— 多模态模型的后端只读 `max_tokens`，网关自动换过去。
+`thinking_budget` 只有多模态模型支持，发给文本模型返回 400 `thinking_budget_unsupported`。
+请求里的 `adapters`、`adapter_path`、`draft_model` 会被网关剥离，客户端不能让模型加载别的权重。
+
+### 流式与长任务 {#streaming}
+
+网关对模型**一律用流式**取结果：
+
+- **流式请求**：边生成边转发。收到模型的 200 响应头之后，上游静默满 15 秒（排队、读长上下文、长时间思考），网关发一行 `: keepalive`（SSE 注释，客户端会忽略），连接不会被中间设备当成空闲掐断。收到响应头之前模型不可达或出错，客户端拿到的是一个正常的 JSON 错误响应。
+- **非流式请求**：网关收齐后拼成一个完整 JSON 返回。这期间没有字节可发，**无法保活，客户端自己的 HTTP 超时可能先到** —— 长输出、Agent 类任务请用流式（Claude Code、Codex、Cherry Studio 默认都是流式）。
+- **客户端断开**（关页面、Ctrl-C、超时）：网关关闭到模型的连接，模型停止生成、腾出并发位；`api.log` 记 `client_disconnected`。明文连接每秒探测一次客户端是否还在；TLS 连接上非流式请求要到写回响应时才发现断连，模型会把这次生成跑完（流式不受影响）。
+- **模型一侧出问题**：连不上模型、或流中途被模型断开，`api.log` 记 `upstream_aborted`（与 `client_disconnected` 是两回事）；响应头还没发出时客户端收到 502 `upstream_error`（1.0.0 是 504）。
+- 同时请求超过模型的 `max_concurrency`（默认 8）时排队；排队中的流式请求同样收到保活。
+- 没在请求里写 `stream_options.include_usage` 的流式客户端收不到 usage 帧（网关内部为聚合打开了它，但不下发）。
+- 文本模型的流式帧只带 `reasoning`，网关补上多数客户端读的 `reasoning_content`。
 
 ---
 
@@ -1221,7 +1297,7 @@ curl 通而 `mlx chat` 不通，说明注册表里登记的端口与实际监听
 mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟。超时按体积算（`20 + 3 × 体积 GB` 秒），
 报错里会说明「可能只是还没加载完」—— 先 `mlx status <id>` 看它是否已在跑，不要重复 `up`。
 
-### 客户端收到 403 / 401 / 415
+### 客户端收到 4xx / 503 / 507
 
 | 状态码 | 含义 | 怎么办 |
 |---|---|---|
@@ -1229,6 +1305,15 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 | 401 | 没带令牌或令牌不对（本机也要） | `mlx config get --key=api.token --reveal` |
 | 415 | 请求头不是 `Content-Type: application/json` | 客户端改请求头 |
 | 404 `endpoint_not_supported_by_backend` | 该模型的后端不提供这个端点 | 看[端点表](#clients) |
+| 400 `media_fetch_failed` | 网关没取到 URL 里的媒体，`error.reason` 说明原因 | 看[媒体](#media)的原因表 |
+| 400 `media_source_rejected` | 虚拟机或 Wi-Fi 设备发了本机路径 / `file://`，或用了 `file_id` | 改用 `data:` 或 `http(s)://` |
+| 400 `too_many_media_parts` | 一个请求里的媒体超过 `api.media_max_parts` | 拆成多个请求，或调大该键 |
+| 400 `thinking_budget_unsupported` | 文本模型不支持 `thinking_budget` | 去掉该字段，改用 `reasoning_effort` |
+| 400 `invalid_request` | 请求体不是 JSON 对象（数组、字符串）或不是合法 JSON | 客户端改请求体 |
+| 413 `invalid_request` | 请求体超过 `api.max_body_mb`（默认 256 MB，内联 `data:` 媒体也算） | 改用 `http(s)://` 让网关代取，或调大该键后 `mlx restart api` |
+| 502 `upstream_error` | 连不上模型 / 流中途断开（`api.log` 记 `upstream_aborted`），或按 id 查询 / 删除 / 取消时后端对 2xx 回了非 JSON | 看 `logs/<模型>.log`，`mlx status` 看它是否还在跑 |
+| 503 `gateway_busy` | 同时在处理的媒体太多（`api.inflight_max_mb`），或该键小于 `api.media_max_mb` | 按 `Retry-After` 5 秒后重试；或调大该键后 `mlx restart api` |
+| 507 `media_storage_failed` | 视频临时文件写不下 | 看数据根所在磁盘的剩余空间 |
 
 ### 退出码
 
@@ -1276,6 +1361,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 ├── trash/                      回收站（`model rm --weights` / `model gc` 移到这里）
 │   └── origins.tsv             每份被回收物的原始路径
 ├── run/<service>.json          运行记录（pid/pgid/port/started_at）
+├── run/media/<uuid4>/          网关代取的视频临时文件（0700，请求结束即删，残留超 1 小时启动时清扫）
 ├── logs/<service>.log
 └── backups/                    改动你 shell rc 前的备份
 

@@ -19,6 +19,9 @@
 - **端点**：`/v1/responses`（含按 id 查询、删除、取消）与 Anthropic `/v1/messages`（多模态后端）；路径可省略 `/v1`
 - **可选 TLS**：`api.tls_cert` / `api.tls_key`，最低 TLS 1.2
 - `mlx api info` 列出各来源的 OpenAI 与 Anthropic base URL、放行网段、令牌与 TLS 状态；`mlx check` 增至 12 项（放行网段、网关端口外来占用、settings.json 权限）
+- **媒体代取**：`http(s)://` 图片、音频、视频由网关取回再交给模型，模型进程不再对外连接；虚拟机与 Wi-Fi 设备只能取公网与放行网段，重定向逐跳校验；视频落临时文件（`<数据根>/run/media/`），请求结束即删。上限 `api.media_max_mb`（128，只限代取字节）、`api.media_max_parts`（32）、`api.inflight_max_mb`（2048，超出 503 `gateway_busy` 并带 `Retry-After: 5`）；视频临时文件写不下返回 507 `media_storage_failed`
+- **保活与断连取消**：流式请求在模型无输出满 15 秒时收到 `: keepalive`；客户端断开即取消生成（日志事件 `client_disconnected`）
+- 回程补 `reasoning_content`（文本模型只给 `reasoning`）；responses 与 messages 事件里的 `model` 同样改回短 id
 
 ### 变更
 
@@ -32,6 +35,11 @@
 - 后端 4xx 状态码透传（本机来源原文、远端来源去掉路径与异常片段）；后端 5xx 与鉴权失败返回 502
 - 网关请求体上限 8 MB → 256 MB（`api.max_body_mb`）；令牌与来源校验在读请求体之前完成
 - `mlx up api` 在令牌为空、TLS 配置不完整或私钥权限过宽、网关端口已被别的进程占用时拒绝启动
+- **网关到模型上游一律流式**：非流式请求由网关聚合成完整 JSON，81920 token 的长输出不再被读超时截断
+- 思考强度 `effort` 按模型模板接受的取值映射（qwen38：`minimal`→`low`，`high` / `max`→`xhigh`），越界不再让后端报错
+- 多模态模型上 `max_completion_tokens` 生效（网关换成后端认的 `max_tokens`）；文本模型收到 `thinking_budget` 返回 400 `thinking_budget_unsupported`；多模态后端的 `enable_thinking` / `reasoning_effort` 由网关写到请求顶层
+- 请求里的 `adapters`、`adapter_path`、`draft_model` 被网关剥离，客户端不能让模型加载别的权重
+- **连不上模型上游由 504 改为 502 `upstream_error`**；日志事件 `sse_stream_aborted` 改名 `upstream_aborted`，与客户端自己断开的 `client_disconnected` 区分；按 id 的查询 / 删除 / 取消端点上后端对 2xx 回非 JSON 体同样是 502，请求体不是 JSON 对象是 400
 
 ### 移除
 
