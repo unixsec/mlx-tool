@@ -39,6 +39,7 @@ gateway/endpoints.py	代码	删除
 gateway/app.py	代码	删除
 gateway/peers.py	代码	删除
 gateway/fetch.py	代码	删除
+gateway/media.py	代码	删除
 gateway/relay.py	代码	删除
 gateway/server.py	代码	删除
 gateway/__main__.py	代码	删除
