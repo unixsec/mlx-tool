@@ -14,6 +14,7 @@
 判出不同结果，而这正是 SSRF 检查与来源放行检查互相拖后腿的那种缺陷，参见
 `gateway.peers.net_matches` 的文档。
 """
+import contextlib
 import http.client
 import ipaddress
 import re
@@ -29,6 +30,8 @@ REASONS = ("address_denied", "dns_failed", "connect_failed", "redirect_limit", "
            "bad_content_type", "timeout", "encoding_rejected", "http_error")
 WALL_SEC = 30.0
 MAX_REDIRECTS = 3
+DNS_MAX_THREADS = 8        # 同时挂着的解析线程上限：超时放弃的线程仍占位，直到 getaddrinfo 自己返回
+_DNS_SLOTS = threading.BoundedSemaphore(DNS_MAX_THREADS)
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
 _NUMERICISH = re.compile(r"^(?:0x[0-9a-fx.]*|[0-9.]+)$", re.IGNORECASE)
 
@@ -105,15 +108,24 @@ def _resolve_by_deadline(resolver, host, port, remaining):
     # type: (object, str, int, float) -> list
     """解析放守护线程，按剩余墙钟 join；超时放弃线程（它只会自己结束），不阻塞调用方。"""
     box = {}
+    if not _DNS_SLOTS.acquire(blocking=False):
+        raise FetchError("timeout", "DNS 并发已满")   # 慢解析堆满了名额：当作超时，不再新开线程
+    slots = _DNS_SLOTS
 
     def work():
         try:
             box["ok"] = resolver(host, port)
         except BaseException as exc:  # noqa: BLE001 —— 原样交回调用线程处理
             box["err"] = exc
+        finally:
+            slots.release()
 
     t = threading.Thread(target=work, daemon=True)
-    t.start()
+    try:
+        t.start()
+    except BaseException:
+        slots.release()
+        raise
     t.join(max(0.01, remaining))
     if t.is_alive():
         raise FetchError("timeout", "DNS")
@@ -156,6 +168,15 @@ def default_connect(ip, port, scheme, host, timeout, ssl_context=None):
     return conn
 
 
+def _kill(sock):
+    # type: (object) -> None
+    """看门狗动作：从另一线程切断连接，让阻塞中的 recv/握手立刻返回或抛错。"""
+    with contextlib.suppress(OSError, ValueError):
+        sock.shutdown(socket.SHUT_RDWR)
+    with contextlib.suppress(OSError, ValueError):
+        sock.close()
+
+
 def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "video"),
           resolver=None, connect=None, ssl_context=None, wall_sec=WALL_SEC, clock=time.monotonic):
     # type: (str, str, list, int, tuple, object, object, object, float, object) -> dict
@@ -182,10 +203,21 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
         if remaining <= 0:
             raise FetchError("timeout", host)
         conn = None
+        dog = None
+        fired = threading.Event()
         try:
             try:
                 conn = connect(ips[0], port, scheme, host, remaining, ssl_context)
                 sock = getattr(conn, "sock", None)   # getresponse 遇 will_close 会把 conn.sock 置空，先留住
+                if sock is not None:
+                    # 看门狗：发请求、读响应头、读体整段都受总墙钟约束（头部逐字节滴灌时
+                    # 每次 recv 都在超时内返回，单靠 socket 超时切不断）
+                    def _fire(s=sock, ev=fired):
+                        ev.set()
+                        _kill(s)
+                    dog = threading.Timer(max(0.01, deadline - clock()), _fire)
+                    dog.daemon = True
+                    dog.start()
                 target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
                 host_header = (f"[{host}]" if ":" in host else host) + (
                     "" if port == default_port else f":{port}")
@@ -198,6 +230,8 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
             except socket.timeout as exc:
                 raise FetchError("timeout", host) from exc
             except (OSError, http.client.HTTPException) as exc:
+                if fired.is_set() or clock() >= deadline:
+                    raise FetchError("timeout", host) from exc
                 raise FetchError("connect_failed", str(exc)[:80]) from exc
             if resp.status in (301, 302, 303, 307, 308):
                 location = resp.getheader("Location")
@@ -231,6 +265,8 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
                 except socket.timeout as exc:
                     raise FetchError("timeout", host) from exc
                 except (OSError, http.client.HTTPException) as exc:
+                    if fired.is_set() or clock() >= deadline:
+                        raise FetchError("timeout", host) from exc
                     raise FetchError("connect_failed", str(exc)[:80]) from exc
                 if not chunk:
                     break
@@ -238,10 +274,14 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
                 if total > max_bytes:
                     raise FetchError("too_large", str(total))
                 chunks.append(chunk)
+            if fired.is_set():                      # 被看门狗切断后读到的 EOF 不是完整正文
+                raise FetchError("timeout", host)
             if length and length.isdigit() and total != int(length):
                 raise FetchError("http_error", f"正文被截断 {total}/{length}")
             return {"content_type": ctype, "data": b"".join(chunks), "host": host}
         finally:
+            if dog is not None:
+                dog.cancel()
             if conn is not None:
                 conn.close()
     raise FetchError("redirect_limit", str(MAX_REDIRECTS))

@@ -49,6 +49,13 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", "1000"); self.end_headers()
             self.wfile.write(b"x" * 10); self.wfile.flush(); time.sleep(5); return
+        if p == "/hdrdrip":                   # 响应头逐字节滴灌（0.2 s/字节）
+            try:
+                for b in b"HTTP/1.0 200 OK\r\nContent-Type: image/png\r\nX-Pad: " + b"a" * 500:
+                    self.wfile.write(bytes([b])); self.wfile.flush(); time.sleep(0.2)
+            except OSError:
+                pass
+            return
         if p == "/trunc":                     # 声明 1000 字节只发 10 字节就关
             self.send_response(200); self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", "1000"); self.end_headers()
@@ -147,6 +154,17 @@ t0 = time.monotonic(); d = run("http://slowdns.test/img.png", resolver=slow_dns,
 r["slow_dns"] = [d, time.monotonic() - t0 < 2.0]
 t0 = time.monotonic(); d = run("http://8.8.8.8/stall", wall_sec=1.0)[0]
 r["stall"] = [d, time.monotonic() - t0 < 1.5]      # 读中途停住：socket 超时要按剩余墙钟收紧
+t0 = time.monotonic(); d = run("http://8.8.8.8/hdrdrip", wall_sec=1.0)[0]
+r["hdrdrip"] = [d, time.monotonic() - t0 < 1.5]    # 头部滴灌由看门狗切断
+SLOTS0 = F._DNS_SLOTS; F._DNS_SLOTS = threading.BoundedSemaphore(2)
+def hang_dns(host, port): time.sleep(2.0); return ["8.8.8.8"]
+fast_calls = []
+def fast_dns(host, port): fast_calls.append(host); return ["8.8.8.8"]
+two = [run("http://h%d.test/img.png" % i, resolver=hang_dns, wall_sec=0.3)[0] for i in range(2)]
+t0 = time.monotonic(); third = run("http://h3.test/img.png", resolver=fast_dns)[0]
+r["dns_slots"] = [two, third, list(fast_calls), time.monotonic() - t0 < 0.5]
+time.sleep(2.2); r["dns_slots_freed"] = run("http://h4.test/img.png", resolver=fast_dns)[0]
+F._DNS_SLOTS = SLOTS0
 r["trunc"] = run("http://8.8.8.8/trunc")[0]
 r["reset"] = run("http://8.8.8.8/reset")[0]
 BADURLS = ["http://8.8.8.8:99999/x", "http://8.8.8.8:abc/x", "http://[::1/x", "http://8.8.8.8:0/x"]
@@ -207,3 +225,6 @@ def test_fetch_rules(payload, sys_py):
     assert got["badredirect"] == ["address_denied"] * 4, "重定向 Location 同样"
     assert got["self_addr"] == ["address_denied", "ok", "ok"], "本机自身地址（即便公网形态）远端来源不可达；本机来源不限"
     assert got["stall"] == ["timeout", True], "每次 recv 的超时按剩余墙钟收紧，不是沿用建连时的整段"
+    assert got["hdrdrip"] == ["timeout", True], "响应头滴灌要被总墙钟看门狗切断"
+    assert got["dns_slots"] == [["timeout", "timeout"], "timeout", [], True], "名额满：立刻 timeout 且不再调用解析器"
+    assert got["dns_slots_freed"] == "ok", "解析线程结束后名额释放"
