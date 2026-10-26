@@ -700,7 +700,7 @@ print(json.dumps({"line": line, "elapsed": elapsed, "after": g.budget.used,
 
 
 def test_dripping_body_upload_hits_total_deadline(payload, sys_py):
-    """安全复核（5216db8 之后）：只有单次 recv 的静默上限时，每次间隔小于它的滴灌能无限期
+    """安全复核（fceb9fe 之后）：只有单次 recv 的静默上限时，每次间隔小于它的滴灌能无限期
     占住已计费的在途预算。读体按到货字节挣时间额度：滴灌者超过总时限后 408、预算退还。"""
     got = run_floor(payload, sys_py, DRIP_BODY, with_gateway=True, timeout=60, TOK=TOK)
     assert got["line"] == "HTTP/1.1 408 Request Timeout", f"滴灌超过总时限应 408：{got}"
