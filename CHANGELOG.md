@@ -56,6 +56,10 @@
 - `mlx config get` / `config ls` 对模型目标报的端口改为 `up` 实际使用的值（登记端口，来源 machine；模型自己设过则为 user），
   不再显示出厂 8100；全局 `port` 设置不再盖到模型上（与 `up` 一致）
 - `mlx help model rm` 不再说「删除前会要求键入模型 id」：只有带 `--weights` 才确认；`mlx help restart` 改为说明哪些在停之前校验、哪些在停之后才查
+- `mlx config set` / `config import` 按键的层级校验：全局级键（`api.*`、`backend.api_key`、`fit.*`）不能写到模型上，
+  模型级键（`modality`、`draft_model`、`num_draft_tokens`）不能写成全局，否则 rc 6 `config.level_mismatch`——此前写得进去，
+  但 `up` 与 `config get` 都会忽略，是死旋钮；`config get/ls <拼错的模型id>` 报「模型不存在」，不再按网关显示端口。
+  `config unset` 仍可清理旧版留下的值
 
 ### 移除
 

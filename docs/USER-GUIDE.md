@@ -1364,6 +1364,14 @@ mlx config diff                            # 只看你改过的
 
 `mlx config get <模型> --key=port` 显示的就是 `up` 会用的端口：模型自己设过的值（来源 user），否则是登记时给的端口（来源 machine）。
 
+`config get port`（不带模型、即网关）显示的是安装时写进 `constants.env` 的**网关端口**，来源 `cli`；
+`settings.json` 里的全局 `port` 对网关不生效。
+
+每个键有**作用范围**（见下表）：作用范围为「全局」的键（`api.*`、`backend.api_key`、`fit.*`）
+只能写全局，为「模型」的键（`modality`、`draft_model`、`num_draft_tokens`）只能写在某个模型上，「全局或模型」的两处都行。
+写错层会被拒绝（rc 6，`config.level_mismatch`），因为写错层的值读侧与 `up` 都会忽略。
+`mlx config import` 同理：模型级键会列入「被拒」。读不存在的模型 id（`config get <拼错的id> --key=port`）报「模型不存在」。
+
 全部配置键（`mlx config ls` 列出同一批；默认与取值域来自 `share/schema.tsv`）：
 
 | 键 | 默认（域） | 作用范围 | 管什么 | 改完重启 |
