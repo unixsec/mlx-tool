@@ -100,9 +100,9 @@ mlx config get api.token --reveal   # 所有客户端都要带的令牌
 | 🔌 **一个网关接多种客户端** | `mlx up api` 把所有在跑的模型收敛到一个端点后面：`/v1/chat/completions`、`/v1/completions`（文本模型）、`/v1/responses` 与 Anthropic `/v1/messages`（多模态模型）、`/v1/models`，另有免鉴权的 `GET /healthz`。`/v1` 前缀可省。后端不支持的端点回 404，模型零请求。 |
 | 🛡️ **暴露面写在明处** | 网关只放行回环、Wi-Fi / 有线网段与虚拟机网桥 —— VPN、雷雳网桥拒绝 —— 且每个请求都要令牌。TLS 可选（`api.tls_cert` / `api.tls_key`）。 |
 | 🖼️ **媒体、思考、长输出** | `http(s)://` 图片、音频、视频由网关代取（远端来源不能借它访问放行网段之外的私网地址）。思考开关与强度按模型模板接受的取值归一。网关对模型一律流式取结果，给流式客户端发 `: keepalive`，客户端断开即取消生成。详见手册的[媒体](docs/USER-GUIDE.md#media)、[思考](docs/USER-GUIDE.md#thinking)与[流式](docs/USER-GUIDE.md#streaming)几节。 |
-| 🛑 **先拒绝，而不是先破坏** | 结果带类型：`Done` / `Refused` / `Failed`，而 `Refused` **保证零资源已创建** —— 由静态守卫强制，不靠自觉。起一个内存装不下的模型会被拒绝并列出数字。`mlx restart` 先校验，校验全过才停服务。 |
+| 🛑 **先拒绝，而不是先破坏** | 结果带类型：`Done` / `Refused` / `Failed`，而 `Refused` **保证零资源已创建** —— 由静态守卫强制，不靠自觉。起一个内存装不下的模型会被拒绝并列出数字。`mlx restart` 停服务之前先查登记、权重、配置与后端；容量、后端包漂移与网关端口占用只能停了之后才查。 |
 | 🎯 **三态探针** | `Ok(v)` / `Unknown(kind, reason)`。"判不出来"绝不静默塌成"否" —— 命令 fail-closed 并指名是哪个输入不确定。 |
-| 📋 **表就是事实来源** | `payload/share/` 下七张 TSV 表定义命令、参数、全部面向用户的文案、配置键、后端、可挂的 drafter 与分发清单。解析器、`mlx help`、shell 补全全部由它们生成。 |
+| 📋 **表就是事实来源** | `payload/share/` 下七张 TSV 表定义命令、参数、全部面向用户的文案、配置键、后端、可挂的 drafter 与分发清单。解析器与 `mlx help` 都由它们生成。 |
 | ♻️ **删除可恢复** | `model rm --weights` 把权重移进回收站。`model trash ls` / `restore` / `empty` —— 确认强度按**这个动作到底有多不可逆**分档。 |
 | 🧪 **抓到过真缺陷的守卫** | 测试跑在沙箱里的真实安装产物上。多数守卫都带着注释，说明它当初该抓住上一版的哪个具体缺陷 —— 其中一条会把本仓库文档里的每一条 `mlx …` 示例过一遍解析器。 |
 

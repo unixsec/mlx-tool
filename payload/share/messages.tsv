@@ -57,7 +57,7 @@ svc.ready_timeout	{service} 在超时内没有就绪（端口 {port}）。进程
 self.cancelled	要继续，重跑 `mlx {action}` 并在提示处键入 yes
 help.up	起一个服务（模型 id 或 api）。已在跑则幂等返回
 help.down	停一个服务；--all 停掉全部有运行记录的服务
-help.restart	先校验、通过后再停再起；校验被拒时服务保持原样
+help.restart	先校验再停再起；容量、能力漂移与网关端口占用在停止之后才查，被拒时服务已停
 help.status	不带目标：工具自身状态（三根·版本·PATH·清单）；带目标：那个服务的状态
 help.chat	与一个模型多轮对话（`--prompt=<问题>` 只发一轮）
 help.bench	跑一次基准，输出吞吐与提示词指纹
@@ -102,7 +102,7 @@ repair.facts_undeterminable	读不到磁盘事实，拒绝重建 —— 不用�
 repair.commit_failed	重建 {id} 时写入失败，原文件逐字节未变（{detail}）
 help.up.long	把一个服务起起来。<目标> 是 `mlx model ls` 里的模型 id，或 `api`（网关）。\n起进程后**会等就绪**再返回：进程若在就绪前退出（最常见是端口被占），\n返回 rc 10 并附上日志尾部，而不是报「已启动」。\n已经在跑的服务再起一次是幂等的。
 help.down.long	停一个服务。停一个没在跑的服务返回 0（幂等，不是错误）。\n终止走阶梯：先 TERM 整个进程组、验证端口释放、再删运行记录，顺序不可反。\n若端口上监听的已经是别的进程（pid 被复用），**不动手**，只清理过期记录。
-help.restart.long	重启一个服务。顺序是：先按 up 的规则校验（目标、登记、权重、配置、令牌/TLS 等）→ 全部通过才停掉旧进程 → 再起新进程。\n校验被拒绝时旧服务原样保留、不会被停。端口占用等只能在停止之后才查得出的问题，会在停止之后报告。\n`--ignore-fitness` 与 up 同义，会带到起动阶段。
+help.restart.long	重启一个服务。顺序是：先按 up 的规则校验（目标、登记、权重、生效配置、后端判定含令牌/TLS、登记端口冲突）→ 全部通过才停掉旧进程 → 再起新进程。\n这些校验被拒绝时旧服务原样保留、不会被停。\n容量判档、后端能力漂移（如升级后端包后没 `mlx caps refresh`）只能在停止之后才查；对 api，网关端口上有没有别的进程在监听也在停止之后查。这几条被拒时服务**已经停了**。\n`--ignore-fitness` 与 up 同义，会带到起动阶段。
 help.status.long	不带目标时报工具自身：三根路径、版本、PATH 是否生效、分发清单完整性，\n以及**每个模型的状态**（仓库全名 / 就绪与否 / 端口 / PID / 内存 / 体积）和网关行。\n带目标时只报那一个服务。\n「PATH 生效」那一行是「装完了但 mlx 找不到」这个最常见故障的诊断入口。
 help.check.long	十二项健康检查，每项独立求值后聚合。失败项的 detail 给的是**下一步做什么**，\n不是一个裸的 False。退出码：0 全通过 · 64 含无法判定 · 65 含失败，\n而十二行主产物在失败时也不会丢 —— 那正是你最需要它的时候。
 help.version.long	工具版本、系统解释器与 venv 解释器、依赖三包、能力采集时间。排查时先看它。
@@ -142,7 +142,7 @@ help.config.diff.long	只列出与默认值不同的键 —— 一眼看出你�
 help.config.export.long	把当前配置导出成可移植的包，用于换机或备份。
 help.config.import.long	从导出包恢复配置，逐条事务提交；任一条失败都会指名已提交的部分。
 help.config.unset.long	撤销一个键的用户层取值，让它回落到下一层（machine 或 default）。
-weights.no_downloader	下载器不可用 —— venv 里没有 hf 命令。{repo} 未下载，记录已登记为「已登记未下载」
+weights.no_downloader	下载器不可用 —— venv 里没有 hf 命令。{repo} 未下载，登记已写入但没有权重（`mlx model ls` 显示「已登记」，没给 --port 时显示「已登记未下载」）
 weights.place_failed	{repo} 下载完了但没能放进权重根（{detail}）
 svc.weights_missing	{id} 的权重不在盘上（仓库 {repo}）。先下载：`mlx model install {id} --repo={repo}`，或跑 `mlx model repair` 让工具重新扫盘
 store.unparseable	注册表整文件不可解析，工具**不做空表重建**（那会丢掉全部登记信息）。先备份 `models.jsonl`，再删掉它让工具重建空表，然后用 `mlx model register` 重新登记；**权重文件不受影响**。详情：{detail}

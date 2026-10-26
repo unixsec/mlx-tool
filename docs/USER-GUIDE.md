@@ -65,6 +65,8 @@ Python 3.13.x            # 有这一行就够了，安装器会自己挑
 venv 坏掉时你还得能用 `mlx check` 诊断它。Homebrew 的 Python 是给 venv 用的，
 venv 只服务**下载权重**与**跑推理**这两件事。
 
+<a id="install"></a>
+
 ### 1.2 装
 
 ```
@@ -120,6 +122,8 @@ MLX_ROOT_WEIGHTS=/Volumes/ext/mlx \
 ```
 
 不想让它动你的 rc：加 `MLX_RC_FILES=/dev/null`，然后自己把 `<代码根>/bin` 加进 PATH。
+
+<a id="status"></a>
 
 ### 1.4 验证
 
@@ -260,7 +264,7 @@ mlx model install qwen05b \
 下载失败时它**不会假装成功**：
 
 ```
-下载器不可用 —— venv 里没有 hf 命令。<repo> 未下载，记录已登记为「已登记未下载」
+下载器不可用 —— venv 里没有 hf 命令。<repo> 未下载，登记已写入但没有权重（`mlx model ls` 显示「已登记」，没给 --port 时显示「已登记未下载」）
   已落地（需收敛）：models.jsonl:qwen05b
   rc=3
 ```
@@ -346,6 +350,8 @@ mlx model info qwen05b
 
 ---
 
+<a id="register"></a><a id="ls"></a>
+
 ## 四 · 登记模型
 
 下载好的权重要**登记**进注册表，工具才认得它。登记时给它一个**短名**——
@@ -385,7 +391,9 @@ $ mlx model ls
 
 - `就绪` —— 权重在盘上，记录也完整
 - `已登记` —— 记录有了，但权重的版本（`revision`）还没回填：权重找不到，或刚登记还没 `repair`
-- `已登记未下载` —— 记录里还没有任何磁盘事实（比如 `model install` 下载失败时，记录会停在这里）
+- `已登记未下载` —— 记录里还没有任何磁盘事实，连端口都没有：只在 `model install` / `register` 没给 `--port` 且没找到权重时出现（`model install` 带 `--port` 下载失败，显示的是「已登记」）
+
+<a id="repair"></a>
 
 如果状态是「已登记」而你确信权重下好了，多半是目录布局不对。跑一次：
 
@@ -402,6 +410,8 @@ $ mlx model repair
 `model repair` 按磁盘事实重建记录，**只填空不覆盖**，并告诉你两边对不上的地方。
 
 ---
+
+<a id="up"></a>
 
 ## 五 · 启动模型
 
@@ -477,6 +487,8 @@ qwen05b 的权重不在盘上（仓库 mlx-community/Qwen2.5-0.5B-Instruct-4bit�
 
 rc 6 意味着**零资源创建** —— 没起进程、没写 run 记录，没有要你收敛的东西。
 
+<a id="restart"></a>
+
 ### 起多个 · 重启
 
 ```bash
@@ -486,8 +498,15 @@ mlx restart qwen05b           # 先校验，校验全过才停，再起
 
 同时起多个时端口必须各不相同 —— 登记那一步就会拦住重复端口（rc 7）。
 
-**`restart` 被拒绝时服务不会被停掉**：它先把 `up` 的全部校验跑一遍（权重在不在、装不装得下、密钥与 TLS 配置等），
-有一条不过就原样返回拒绝，在跑的服务保持原状；全过了才停、再起。`--ignore-fitness` 对 `restart` 同样有效。
+**`restart` 分两段检查**：
+
+- **停之前**查的：目标与登记、权重在不在、生效配置、后端判定（后端包在不在、密钥、drafter、网关的令牌与 TLS 配置）、登记端口有没有冲突。
+  这些有一条不过就原样返回拒绝，在跑的服务保持原状。
+- **停之后**才查的：容量够不够（在跑的这个模型自己就占着内存，只能停了再算）、后端能力有没有漂移
+  （比如升级了后端包却没 `mlx caps refresh`）、网关端口有没有被别的进程占着。这几条被拒时，**服务已经停了**，
+  照拒绝文案处理后再 `mlx up <id>`。
+
+`--ignore-fitness` 对 `restart` 同样有效。
 
 **多个目标的结论**：每个目标一行。全部成功 rc 0；失败的目标全是「拒绝」（零资源创建）时，整体也是拒绝，
 rc 取其中最差的那个（例如 6 = 模型不存在）；只要有目标真的落地了东西（起了进程又失败），整体是失败，
@@ -552,6 +571,8 @@ mlx up qwen38 --dry-run      # argv 里应出现 --draft-model qwen38-draft --nu
 
 模型起来之后有两条用法：命令行对话、跑一次基准。
 
+<a id="chat"></a>
+
 ### 对话
 
 **多轮**（不给 `--prompt` 就进这个模式，一行一句，`/exit` 或 Ctrl-D 结束）：
@@ -591,6 +612,8 @@ mlx chat qwen05b --session=qwen05b-1788188855174 --prompt="再展开讲讲统一
 
 不带 `--prompt` 而带 `--session=<id>`，就是接着那个会话进入多轮模式：`mlx chat qwen05b --session=<id>`。
 
+<a id="bench"></a>
+
 ### 跑基准
 
 ```bash
@@ -627,6 +650,8 @@ qwen05b 的进程在跑，但连不上它的端口 8150 —— 多半是模型�
 `mlx chat` 给的是同样两句。rc 3 = 外部依赖不可用。
 
 ---
+
+<a id="info"></a>
 
 ## 七 · 接入 Cherry Studio 等外部工具
 
@@ -973,6 +998,8 @@ responses 与 messages 认 `reasoning.effort`（顶层 `reasoning_effort` 同样
 
 ---
 
+<a id="down"></a>
+
 ## 八 · 停用模型
 
 ```
@@ -993,6 +1020,8 @@ mlx restart qwen27b     # 先校验，通过了才停、再起
 `down --all --dry-run` 同样只预览，列出有运行记录、会被停掉的全部服务。
 
 ---
+
+<a id="rm"></a>
 
 ## 九 · 卸载模型
 
@@ -1024,6 +1053,8 @@ $ mlx model rm qwen27b --weights
 不带 `--weights` 不问，直接删登记，并说明权重原样保留。`model rm` 没有 `--dry-run`。
 
 不带 tty 的场景（脚本、CI）下确认读不到输入，按设计**视为拒绝**，零删除。
+
+<a id="gc"></a>
 
 回收孤儿权重（磁盘上有、但没有任何登记引用的）：
 
@@ -1135,6 +1166,8 @@ MLX_ROOT_WEIGHTS=<你的权重根> \
 
 ---
 
+<a id="uninstall"></a>
+
 ## 十一 · 卸载工具
 
 ```bash
@@ -1189,6 +1222,8 @@ mlx uninstall
 
 ---
 
+<a id="help"></a><a id="version"></a><a id="show"></a><a id="refresh"></a><a id="verify"></a>
+
 ## 十二 · 命令速查
 
 ```
@@ -1215,8 +1250,8 @@ usage: mlx <命令> [<参数>] [--flag]
 | `mlx version` | 工具版本、当前解释器、venv 解释器、venv 里的后端包与能力采集时间 |
 | `mlx caps refresh` / `mlx caps show` | 重新采集 / 查看 venv 里装了哪些后端包（`up` 按它判断后端可不可用，装完包要 refresh） |
 | `mlx bootstrap keys` | 只补空的密钥，输出只列键名（见[密钥](#keys)） |
-| `mlx bootstrap verify` | 按分发清单逐项校验安装产物，`verified` 是齐全的项数，`extra` 是清单外多出来的 |
-| `mlx config validate` | 每个配置键一行：当前值与来源，取值非法的标成 failed |
+| `mlx bootstrap verify` | 按分发清单逐项校验安装产物：齐全时 `verified` 是清单项数；缺文件时 rc 6 并列出缺的。输出里的 `extra` 目前恒为空（本版不检查清单外多出来的文件） |
+| `mlx config validate` | 每个配置键一行：当前值与来源。配置是整体合成的：**只要有一个键非法，合成整体失败，所有键都标 failed**、detail 里写着是哪个键哪种错（rc 65） |
 | `mlx status <id>` / `mlx status --all` | 只看一个服务 / 看所有有运行记录的服务 |
 | `mlx check --json` | 机读的检查结果 |
 
@@ -1275,6 +1310,8 @@ $ mlx ls
 
 它们都会给出**确切的正确命令**，不是干巴巴的「未知命令」。
 
+<a id="check"></a>
+
 ### 默认给人看，`--json` 才给机器看
 
 ```
@@ -1301,16 +1338,18 @@ $ mlx check
 
 ---
 
+<a id="get"></a><a id="set"></a><a id="validate"></a>
+
 ## 十二之二 · 配置 {#config}
 
 配置有**三层**，高层覆盖低层：出厂默认 < 全局（`settings.json`）< 单个模型。
 
 ```bash
 mlx config ls                              # 全部键：当前值 + 来自哪一层
-mlx config get port                        # 单个键
-mlx config set port --value=8200           # 写全局层
-mlx config set qwen05b --key=port --value=8177   # 写这个模型（覆盖全局）
-mlx config unset port                      # 撤销，回落到下一层
+mlx config get max_tokens                  # 单个键
+mlx config set max_tokens --value=4096     # 写全局层（对所有模型生效）
+mlx config set qwen05b --key=max_tokens --value=2048   # 写这个模型（覆盖全局）
+mlx config unset max_tokens                # 撤销，回落到下一层
 mlx config diff                            # 只看你改过的
 ```
 
@@ -1329,7 +1368,7 @@ mlx config diff                            # 只看你改过的
 
 | 键 | 默认（域） | 作用范围 | 管什么 | 改完重启 |
 |---|---|---|---|---|
-| `port` | 8100（1–65535） | 全局或模型 | 模型监听端口；登记时的 `--port` 优先 | 该模型 |
+| `port` | 8100（1–65535） | 模型 | 模型监听端口：模型自己设过的值 > 登记时的 `--port` > 出厂 8100。**全局 `port` 设置对模型不起作用**（`mlx config set port --value=…` 写进去也不会被 `up` 采用） | 该模型 |
 | `max_tokens` | 81920（1–1048576） | 全局或模型 | 后端默认输出长度（请求里自带的值照常生效） | 该模型 |
 | `max_concurrency` | 8（1–256） | 全局或模型 | 后端同时处理的请求数 | 该模型 |
 | `modality` | auto（auto / text / vision） | 模型 | 模态覆盖，见[自动选择后端](#backend) | 该模型 |
@@ -1354,8 +1393,7 @@ mlx config diff                            # 只看你改过的
 $ mlx config diff
   键           当前值      来自      出厂值
   ──────────   ──────────  ────────  ────────
-  max_tokens   2048        machine   81920
-  port         8200        machine   8100
+  max_tokens   4096        machine   81920
 ```
 
 ### 搬到另一台机器
@@ -1371,7 +1409,7 @@ mlx config import --from=mlx-config.json
 
 ```
 $ mlx config import --from=bad.json
-  ✓ 已导入  port
+  ✓ 已导入  max_tokens
   ✗ 拒绝    nosuchkey：未知键
   ✗ 拒绝    revision：不可写（scope != user）
 ```
@@ -1437,7 +1475,7 @@ ls ~/lab/models/mlx/hub/                         # 看目录名对不对
 mlx model repair                                 # 让工具按磁盘事实重建
 ```
 
-状态是「已登记未下载」的，通常是 `model install` 下载失败留下的记录：补下完权重后同样跑 `mlx model repair`。
+`model install` 下载失败留下的记录显示「已登记」（没给 `--port` 时是「已登记未下载」）：补下完权重后同样跑 `mlx model repair`。
 
 ### `venv` 检查项失败
 
@@ -1515,6 +1553,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 | 503 `gateway_busy` | 同时在处理的媒体太多（`api.inflight_max_mb`），或该键小于 `api.media_max_mb` | 按 `Retry-After` 5 秒后重试；或调大该键后 `mlx restart api` |
 | 503 `auth` | 网关没有令牌（正常情况下 `mlx up api` 会拒绝这样起） | `mlx bootstrap keys` 后 `mlx restart api` |
 | 503 `route_lost` | 请求路由到的模型在这一刻停了 | `mlx up <id>` 后重试 |
+| 503 `unavailable` | `GET /v1/models` 时网关刚起、路由表还在建立（不回空列表，免得客户端以为没有模型） | 等几秒重试 |
 | 504 `upstream_timeout` | 按 id 的 responses 端点，10 秒内有后端没回话 | 看该模型是否卡住（`logs/<模型>.log`） |
 | 507 `media_storage_failed` | 视频临时文件写不下 | 看数据根所在磁盘的剩余空间 |
 
@@ -1553,7 +1592,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 └── share/
     ├── constants.env           三根 · 端口 · 标记串（安装器产出）
     ├── verbs.tsv               动词台账 —— 解析/分派/help 都读它
-    ├── cli.tsv                 参数面 —— 解析/补全/help 都读它
+    ├── cli.tsv                 参数面 —— 解析/help 都读它
     ├── schema.tsv              配置键：类型、取值域、默认值、改完重启什么
     ├── backends.tsv            两个后端（mlx_lm / mlx_vlm）的启动参数与端点
     ├── drafters.tsv            附属 drafter 的 model_type 集合
