@@ -111,11 +111,10 @@ def _layers(ctx, target, deps=None):
             glob["port"] = int(port)
     if glob:
         out["machine"] = glob
-    if target:
-        if rec is not None:
-            per = {k: v for k, v in rec.user.items() if k in domain}
-            if per:
-                out["user"] = per
+    if rec is not None:                  # rec 仅在有 target 且登记存在时非 None
+        per = {k: v for k, v in rec.user.items() if k in domain}
+        if per:
+            out["user"] = per
     return out
 
 
