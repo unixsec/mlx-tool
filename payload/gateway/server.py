@@ -36,6 +36,7 @@ _MAX_CL_DIGITS = 20                # `Content-Length` 最长位数，见 `_parse
 #   · BODY_MAX_SEC = 1200 s：绝对上限。256 MB（出厂 max_body_mb）按最低速率需 1024 s + 30 s，仍在上限内；
 #   · BODY_IDLE_SEC = 60 s：单次 recv 的静默上限（与上面取较紧者）。
 BODY_IDLE_SEC = 60.0
+RETRY_AFTER_SEC = 5                # 503 gateway_busy 的重试提示（spec §4.4）；手册的值由文档守卫绑定到这里
 BODY_MIN_SEC = 30.0
 BODY_MIN_RATE = 256 * 1024
 BODY_MAX_SEC = 1200.0
@@ -299,7 +300,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             if status == 503 and isinstance(body, dict) and isinstance(body.get("error"), dict) \
                     and body["error"].get("type") == "gateway_busy":
                 # `MediaError.reply()` 不带响应头：在途预算满时由这里补上重试提示（spec §4.4）
-                self.send_header("Retry-After", "5")
+                self.send_header("Retry-After", str(RETRY_AFTER_SEC))
             if body is not None:
                 self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))

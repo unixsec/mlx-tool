@@ -11,7 +11,7 @@ _PAYLOAD = Path(__file__).resolve().parents[2] / "payload"
 for _p in (_PAYLOAD, _PAYLOAD / "lib"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
-from gateway import effort, fetch, media, relay  # noqa: E402
+from gateway import effort, fetch, media, relay, server  # noqa: E402
 
 
 def _read(repo, rel):
@@ -131,9 +131,20 @@ def test_guide_numbers_come_from_code(repo):
     lo, hi = dom.split("-")
     assert f"`max_tokens` 默认 {default}（可改，域 {lo}–{hi}）" in g
     # 常量
-    assert f"上游静默满 {int(relay.KEEPALIVE_SEC)} 秒" in _line(g, ": keepalive")
+    # **按结构位置比对值**，不查全文子串（终审 D G1/G2/G4）：全文任意一处命中就算过，
+    # 另一处写错的值照样绿
+    ka_line = _line(g, ": keepalive")
+    ka, probe = int(relay.KEEPALIVE_SEC), int(relay.PROBE_SEC)
+    assert f"上游静默满 {ka} 秒" in ka_line
+    assert f"实际间隔在 {ka}～{ka + probe} 秒之间" in ka_line, f"保活实际间隔与常量不符：{ka_line}"
     assert f"{int(fetch.WALL_SEC)} 秒内没取完" in _line(g, "`timeout`")
-    assert f"最多 {fetch.MAX_REDIRECTS} 跳" in g
+    assert f"重定向最多 {fetch.MAX_REDIRECTS} 跳" in _line(g, "重定向最多"), "代取规则段的跳数"
+    redirect_row = _line(g, "| `redirect_limit` |")
+    assert f"超过 {fetch.MAX_REDIRECTS} 跳" in redirect_row, f"reason 表跳数与代码不符：{redirect_row}"
+    busy_row = _line(g, "| `api.inflight_max_mb` |")
+    assert f"`Retry-After: {server.RETRY_AFTER_SEC}`" in busy_row, f"配置表 Retry-After 值不符：{busy_row}"
+    trouble_row = _line(g, "| 503 `gateway_busy` |")
+    assert f"按 `Retry-After` {server.RETRY_AFTER_SEC} 秒" in trouble_row, f"排查表 Retry-After 值不符：{trouble_row}"
     assert f"超过 {int(media.SWEEP_AGE_SEC // 3600)} 小时的残留" in _line(g, "run/media/<uuid4>/")
 
 
