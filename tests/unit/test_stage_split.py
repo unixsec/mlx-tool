@@ -427,27 +427,36 @@ def test_dry_run_ownership_equals_implementation(payload: Path):
 # 两个因子都从表里读；新增动词 / 新增 `--all` 属主自动进入。
 
 def _dry_run_cases(payload: Path):
-    """派生 `(动词路径, 目标形态, argv)`。表是唯一来源。"""
+    """派生 `(动词路径, 目标形态, argv)`。表是唯一来源。
+
+    形态 none / single / multi / all 由 verbs.tsv 的 positionals 与 cli.tsv 的 `--all`
+    属主推出；**不被接受的形态**（`all_rejected`）= 声明了 `--dry-run` 却不在 `--all`
+    属主里的动词 + `--all`，期望被解析层拒绝（rc 2）且零变化。
+    """
     def rows(name):
         return [ln.split("\t") for ln in (payload / "share" / name).read_text().splitlines()
                 if ln and not ln.startswith("#")]
     verb_rows = {((r[1] + " " if r[1] else "") + r[0]).strip(): r for r in rows("verbs.tsv")}
     owners = {r[0]: [v.strip() for v in r[1].split(",")] for r in rows("cli.tsv")}
-    # 别名行（`model install` 的 parent 在第 2 列）已在上面拼成路径
     cases = []
     for path in owners["--dry-run"]:
-        row = verb_rows[path]
-        pos = row[4]
+        pos = verb_rows[path][4]
         base = path.split()
-        has_all = path in owners.get("--all", [])
+        n0 = len(cases)
+        if pos not in ("0", "?", "1", "+"):
+            # 未知形态不得静默产出零用例（那会让这个动词从守卫里消失）
+            raise AssertionError(f"{path}: positionals={pos!r} 不在 0/?/1/+，守卫不知道怎么驱动它")
         if pos in ("0", "?"):
             cases.append((path, "none", base))
         if pos in ("1", "+", "?"):
             cases.append((path, "single", base + ["qwen"]))
         if pos == "+":
             cases.append((path, "multi", base + ["qwen", "glm"]))
-        if has_all:
+        if path in owners.get("--all", []):
             cases.append((path, "all", base + ["--all"]))
+        else:
+            cases.append((path, "all_rejected", base + ["--all"]))
+        assert len(cases) - n0 >= 2, f"{path}: 没有派生出任何可驱动形态"
     return [(p, f, a + ["--dry-run"]) for p, f, a in cases]
 
 
@@ -465,15 +474,29 @@ from mlx_server import entry, proc, supervisor
 
 root = tempfile.mkdtemp()
 code, data, wts, venv = (os.path.join(root, d) for d in ("code", "data", "w", "venv"))
+home = os.path.join(root, "home")
 share = os.path.join(root, "share")
 shutil.copytree("@PAYLOAD@/share", share)
-for d in (code, data, wts, os.path.join(venv, "bin"), os.path.join(data, "run")):
+for d in (code, data, wts, home, os.path.join(venv, "bin"), os.path.join(data, "run"),
+          os.path.join(code, "deployer")):
     os.makedirs(d, exist_ok=True)
+# 部署器：真被执行就会留下可检测的痕迹（数据根里多一个文件）
+for _n in ("install.sh", "uninstall.sh"):
+    _f = os.path.join(code, "deployer", _n)
+    open(_f, "w").write('#!/bin/sh\ntouch "$MLX_ROOT_DATA/DEPLOYER-RAN-' + _n + '"\n')
+    os.chmod(_f, 0o755)
+# config import 的源：一个**可写的合法键**，保证预览后的 commit 循环非空
 src = os.path.join(root, "import-src.json")
-open(src, "w").write("{}")
+open(src, "w").write('{"max_tokens": 4096}')
+# 一个**没登记的权重**（孤儿）带内容：model gc 预览后若照常 trash，它会被搬走
+_orphan = os.path.join(wts, "hub", "models--org--orphan", "snapshots", "main")
+os.makedirs(_orphan)
+open(os.path.join(_orphan, "model.safetensors"), "wb").write(b"\0" * 8192)
+open(os.path.join(_orphan, "config.json"), "w").write("{}")
 os.environ.update({"MLX_ROOT_CODE": code, "MLX_ROOT_DATA": data, "MLX_ROOT_WEIGHTS": wts,
                    "MLX_SHARE_ROOT": share, "MLX_GATEWAY_PORT": "8340",
-                   "MLX_PORT_RANGE": "8100-8199", "MLX_VENV": venv})
+                   "MLX_PORT_RANGE": "8100-8199", "MLX_VENV": venv,
+                   "HOME": home, "MLX_RC_FILES": os.path.join(home, "zshrc")})
 
 # 两个登记模型 + 两个**真在跑**的进程（不是死 pid：死 pid 的 down 只删记录，
 # 走不到 kill 分支，那会让「没杀」由「本来就没东西可杀」空真满足）。
@@ -496,7 +519,7 @@ with open(os.path.join(data, "models.jsonl"), "w") as fh:
 
 def tree():
     out = {}
-    for top in (code, data, wts, venv):
+    for top in (code, data, wts, venv, home):          # home：根外的沙箱 $HOME 也量
         for dp, dn, fn in os.walk(top):
             for n in dn:
                 out[os.path.relpath(os.path.join(dp, n), root) + "/"] = None
@@ -534,25 +557,39 @@ for n in ("system", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", 
             return f
         setattr(os, n, mk2())
 
+# 记下每次 dispatch 的结论：用例要拿**预览的正证据**，不只是「什么都没动」
+seen = {}
+_orig_dispatch = entry._dispatch
+def _dispatch(*a, **k):
+    o = _orig_dispatch(*a, **k)
+    seen["payload"] = json.dumps(getattr(o, "payload", None), ensure_ascii=False, default=str)
+    return o
+entry._dispatch = _dispatch
+
 class _Sink:
     def write(self, s): return len(s)
     def flush(self): pass
 
-results = []
-for path, form, argv in json.loads('''@CASES@'''):
-    argv = [a.replace("@IMPORT_SRC@", src) for a in argv]
-    extra = [a.replace("@IMPORT_SRC@", src) for a in json.loads('''@EXTRA@''').get(path, [])]
-    full = ["mlx"] + argv[:-1] + extra + argv[-1:]
+CASES = json.loads(open("@CASES_FILE@").read())
+EXTRA = json.loads(open("@EXTRA_FILE@").read())
+results, prev_dead = [], set()
+for path, form, argv in CASES:
+    sub = lambda t: t.replace("@IMPORT_SRC@", src)
+    extra = [sub(a) for a in EXTRA.get(path, [])]
+    full = ["mlx"] + [sub(a) for a in argv[:-1]] + extra + argv[-1:]
     before = tree()
     del kills[:], spawns[:]
+    seen.clear()
     rc = entry.main(full, out=_Sink(), err=_Sink())
     after = tree()
+    dead = {m for m, p in procs.items() if p.poll() is not None}
     results.append({"case": " ".join(full[1:]), "path": path, "form": form, "rc": rc,
                     "changed": sorted(k for k in set(before) | set(after)
                                       if before.get(k, "-") != after.get(k, "-")),
                     "kills": list(kills), "spawns": list(spawns),
-                    "dead": [m for m, p in procs.items() if p.poll() is not None]})
-    # 复位：被误杀的进程不可复位，所以第一次出现就够了
+                    "dead": sorted(dead - prev_dead),     # 只报**本用例**新增的
+                    "payload": seen.get("payload", "")})
+    prev_dead = dead
 for p in procs.values():
     try:
         os.killpg(p.pid, signal.SIGKILL)
@@ -561,35 +598,73 @@ for p in procs.values():
 print(json.dumps(results))
 """
 
+# 每个声明 `--dry-run` 的动词，预览的**正证据**（返回 payload 里必须出现的片段）。
+# 键必须 == 派生集（多一个、少一个都红）；片段取自各动词真实预览形态，
+# 且对应「预览后的变更路径非空」的那一格（gc 有孤儿、import 有可写键）。
+_DRY_RUN_EVIDENCE = {
+    "up": '"argv"',
+    "down": "svc_down_dry_run",
+    "restart": "svc_down_dry_run",
+    "bench": "would_send",
+    "install": "would_run",
+    "uninstall": "would_run",
+    "config import": '"planned": ["max_tokens"]',
+    "model gc": '"targets": ["org/orphan"]',
+    "model install": "would_commit",
+    "model register": "would_commit",
+}
 
-def test_dry_run_changes_no_state_for_every_verb_and_target_form(payload: Path, sys_py: str):
-    """每个声明 `--dry-run` 的动词 × 它接受的每种目标形态：零状态变化。
+# 允许「被拒而非预览」的用例：`(动词, 形态) -> 理由`。键必须 ∈ 派生用例集。
+# 当前为空 —— 每个正向用例都必须真走到预览。
+_DRY_RUN_ALLOWED_REFUSAL = {}
 
-    「零状态变化」的求值器是**作用于真实产物**的三个独立量：
-    ① 数据/代码/权重根的全树内容哈希前后一致；
+
+def test_dry_run_changes_no_state_for_every_verb_and_target_form(payload: Path, sys_py: str,
+                                                                 tmp_path: Path):
+    """每个声明 `--dry-run` 的动词 × 它接受的每种目标形态：零状态变化，且真的走到了预览。
+
+    「零状态变化」的求值器是**作用于真实产物**的独立量：
+    ① 数据/代码/权重/venv 根与沙箱 $HOME 的全树内容哈希前后一致；
     ② `os.kill/killpg` 没有发过非 0 信号，除只读探测外没有进程被创建；
     ③ 夹具里真在跑的进程还活着。
+    夹具让每个动词的**预览后变更路径非空**（部署器在位、导入源有可写键、
+    有未登记的孤儿权重、两个真在跑的服务），否则「没动」可能只是「本来就没东西可动」。
+    正向用例必须 rc 0 且 payload 含该动词的预览证据；不被接受的形态必须被解析层拒绝。
     """
     from floor import run_floor
     cases = _dry_run_cases(payload)
     derived_verbs = {p for p, _, _ in cases}
     assert {"up", "down", "restart"} <= derived_verbs, f"派生没读对：{derived_verbs}"
+    assert set(_DRY_RUN_EVIDENCE) == derived_verbs, (
+        f"预览证据表与派生动词集不一致：{set(_DRY_RUN_EVIDENCE) ^ derived_verbs}")
     stale = set(_DRY_RUN_EXTRA_ARGS) - derived_verbs
     assert not stale, f"参数补丁指向不再声明 --dry-run 的动词：{stale}"
-    # 阴性：`--all` 只派生给表里登记过它的动词
+    keys = {(p, f) for p, f, _ in cases}
+    assert set(_DRY_RUN_ALLOWED_REFUSAL) <= keys, "白名单含不存在的用例"
+    # `--all` 只被表里登记过它的动词接受；其余的走 all_rejected
     assert {p for p, f, _ in cases if f == "all"} == {"down"}, cases
+    assert ("restart", "all_rejected") in keys, "负向用例没派生出来"
 
+    cf, ef = tmp_path / "cases.json", tmp_path / "extra.json"
+    cf.write_text(json.dumps(cases, ensure_ascii=False))
+    ef.write_text(json.dumps(_DRY_RUN_EXTRA_ARGS))
     got = run_floor(payload, sys_py, _DRY_RUN_PROG, timeout=240,
-                    CASES=json.dumps(cases, ensure_ascii=False),
-                    EXTRA=json.dumps(_DRY_RUN_EXTRA_ARGS))
+                    CASES_FILE=cf, EXTRA_FILE=ef)
     assert len(got) == len(cases)
     bad = [g for g in got if g["changed"] or g["kills"] or g["spawns"] or g["dead"]]
     assert not bad, "--dry-run 改了状态：\n" + "\n".join(
         f"  mlx {g['case']} → rc={g['rc']} 改动={g['changed']} 信号={g['kills']} "
-        f"起进程={g['spawns']} 被杀的服务={g['dead']}" for g in bad)
+        f"起进程={g['spawns']} 新增被杀的服务={g['dead']}" for g in bad[:8])
 
-    # **非空真**：服务类动词必须真的走到了预览分支（rc 0），而不是被解析/校验拒绝后
-    # 「什么都没动」。其余动词若被拒（缺必填项等）不算失败，但至少一半要 rc 0。
-    svc = [g for g in got if g["path"] in ("up", "down", "restart")]
-    assert svc and all(g["rc"] == 0 for g in svc), [(g["case"], g["rc"]) for g in svc]
-    assert sum(g["rc"] == 0 for g in got) * 2 >= len(got), [(g["case"], g["rc"]) for g in got]
+    not_previewed = []
+    for g in got:
+        ev = _DRY_RUN_EVIDENCE[g["path"]]
+        if g["form"] == "all_rejected":
+            if g["rc"] != 2:
+                not_previewed.append(f"mlx {g['case']}: 应被解析层拒绝(rc 2)，实得 rc={g['rc']}")
+        elif (g["path"], g["form"]) in _DRY_RUN_ALLOWED_REFUSAL:
+            continue
+        elif g["rc"] != 0 or ev not in g["payload"]:
+            not_previewed.append(f"mlx {g['case']}: rc={g['rc']}，预览证据 {ev!r} "
+                                 f"{'在' if ev in g['payload'] else '不在'} payload：{g['payload'][:120]}")
+    assert not not_previewed, "用例没走到预览（零变化可能是空转）：\n  " + "\n  ".join(not_previewed)
