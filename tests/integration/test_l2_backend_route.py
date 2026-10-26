@@ -69,7 +69,9 @@ deps.update({
     "spawn": lambda spec, cwd: exec_calls.append("spawn") or None,
     "wait_ready": lambda spec, port, timeout_sec: exec_calls.append("wait_ready") or None,
 })
-_tmpdir = tempfile.gettempdir()
+# **本用例私有的临时目录**：共享的系统 tmp 里别的进程（并发测试、另一个 check.sh）也在渲染模板，
+# 差集会把它们的文件算到这里（终审 D §4.1 抖动）。mkstemp 在本进程里调，改 tempfile.tempdir 即可。
+tempfile.tempdir = _tmpdir = tempfile.mkdtemp(prefix="route-tmp-")
 before_tmp = sorted(glob.glob(os.path.join(_tmpdir, "mlxtpl.*")))
 r = up("v")
 after_tmp = sorted(glob.glob(os.path.join(_tmpdir, "mlxtpl.*")))
