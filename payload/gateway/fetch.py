@@ -15,6 +15,7 @@
 `gateway.peers.net_matches` 的文档。
 """
 import contextlib
+import errno
 import http.client
 import ipaddress
 import re
@@ -85,6 +86,20 @@ def own_set(allowed_nets, own_addrs):
     return out
 
 
+def bindable(ip):
+    # type: (object) -> bool
+    """内核认不认 `ip` 是本机地址：`bind((ip, 0))` 成功即是。不依赖网段视图 ——
+    视图取不到（回退模式）或地址刚变化、还没到刷新周期时，快照里的本机地址不全，这里补上。
+    只有 `EADDRNOTAVAIL` 算「不是本机」；其余错误（fd 耗尽等）按本机处理，宁拒勿放。"""
+    family = socket.AF_INET if ip.version == 4 else socket.AF_INET6
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as s:
+            s.bind((str(ip), 0))
+    except OSError as exc:
+        return exc.errno != errno.EADDRNOTAVAIL
+    return True
+
+
 def target_allowed(ip, peer_class, allowed_nets, own_addrs=None):
     # type: (object, str, list, object) -> bool
     """D23：本机来源不限；远端来源只放行**公网**与**当前放行网段**。
@@ -112,12 +127,12 @@ def target_allowed(ip, peer_class, allowed_nets, own_addrs=None):
     if ip in own_set(allowed_nets, own_addrs):   # 本机自身地址（含公网形态、含被排除接口上的）不作代取目标
         return False
     if ip.is_global:
-        return True
+        return not bindable(ip)
     for n in allowed_nets or ():
         if n.get("kind") == "loopback" or n.get("scope"):
             continue                              # 回环与链路本地网段不作为代取目标
         if peers.net_matches(n, ip):
-            return True
+            return not bindable(ip)
     return False
 
 

@@ -372,3 +372,53 @@ def test_own_addresses_denied_on_this_machine(payload, sys_py):
     if got["skip"]:
         pytest.skip("本机取不到网络接口")
     assert got["leaks"] == 0, f"本机 {got['n']} 个地址形态里有 {got['leaks']} 个没被拒"
+
+
+# 网段视图取不到（回退模式 / 地址刚变化、还没到刷新周期）时快照里没有本机地址：
+# 放行网段照旧覆盖本机，`own_addrs` 为空。本机地址仍须拒 —— 判据是内核能否 bind 上它，
+# 不是快照。对照：同网段里绑不上的地址照常放行；bind 出意外错误时按本机处理（拒）。
+FALLBACK = r"""
+import errno, ipaddress, json, socket
+from gateway import fetch as F
+from gateway import peers as P
+load = P.command_loader({"networksetup": "/usr/sbin/networksetup", "ifconfig": "/sbin/ifconfig"})
+try:
+    _, IF = load()
+except Exception:
+    print(json.dumps({"skip": True})); raise SystemExit
+own = set()
+for info in P.parse_ifconfig(IF).values():
+    for a in [x[0] for x in info["inet"]] + [x[0] for x in info["inet6"]]:
+        ip = ipaddress.ip_address(a.split("%")[0])
+        if not (ip.is_loopback or ip.is_link_local):
+            own.add(ip)
+n, leaks, ctrl = 0, [], []
+for ip in sorted(own, key=str):
+    net = ipaddress.ip_network("%s/%d" % (ip, 24 if ip.version == 4 else 64), strict=False)
+    nets = [{"net": str(net), "iface": "en9", "kind": "ethernet", "scope": None, "addr": None}]
+    n += 1
+    if F.target_allowed(ip, "REMOTE", nets, []):
+        leaks.append(str(ip))
+    other = next(h for h in (net.network_address + k for k in range(2, 50)) if h not in own)
+    ctrl.append(F.target_allowed(other, "REMOTE", nets, []))
+class Boom:
+    def __init__(self, *a): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def bind(self, addr): raise OSError(errno.EMFILE, "too many open files")
+real, F.socket.socket = F.socket.socket, Boom
+boom = F.target_allowed(ipaddress.ip_address("10.211.55.3"), "REMOTE",
+                        [{"net": "10.211.55.0/24", "iface": "en9", "kind": "ethernet", "scope": None, "addr": None}], [])
+F.socket.socket = real
+print(json.dumps({"skip": n == 0, "n": n, "leaks": leaks, "ctrl": ctrl, "boom": boom}))
+"""
+
+
+@pytest.mark.parametrize("interp", INTERPRETERS, ids=["py39", "venv"])
+def test_own_addresses_denied_without_net_view(payload, interp):
+    got = run_floor(payload, interp, FALLBACK, with_gateway=True, timeout=60)
+    if got["skip"]:
+        pytest.skip("本机没有回环与链路本地之外的地址")
+    assert got["leaks"] == [], f"快照缺本机地址时，这些本机地址被当作可代取目标：{got['leaks']}"
+    assert got["ctrl"] == [True] * got["n"], "同网段的非本机地址被误拒：判据退化成了一律拒"
+    assert got["boom"] is False, "bind 出意外错误时必须按本机地址拒（fail closed）"
