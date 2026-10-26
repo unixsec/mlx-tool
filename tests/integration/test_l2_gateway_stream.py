@@ -256,6 +256,14 @@ SEEN, SNAP_CALLS, CLOSED = {}, {}, {}
 STRUCT_ERR = ('data: {"error": {"message": "open /Users/alex/x/config.json failed", '
               '"type": "server_error", "code": "/model/load"}}\n\n')
 
+RESP_FAILED = ('event: response.failed\ndata: {"type": "response.failed", "response": {"id": "resp_1", '
+               '"status": "failed", "error": {"code": "server_error", "message": "boom"}}}\n\n')
+def drop_last(text):
+    # 去掉最后一帧（终止帧），保留其前的完整帧：上游断在帧边界
+    frames = text.split("\n\n")
+    assert frames[-1] == ""
+    return "\n\n".join(frames[:-2]) + "\n\n"
+
 class Up(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *a): pass
@@ -274,6 +282,12 @@ class Up(BaseHTTPRequestHandler):
             text = STRUCT_ERR
         elif self.server.fixture == "noterm":           # 整帧写完就关连接、不发 [DONE]（后端崩溃形态）
             text = F["mlx_lm_chat_stream"].replace("data: [DONE]\n\n", "")
+        elif self.server.fixture == "noterm_resp":      # responses 断在 response.completed 之前（帧边界）
+            text = drop_last(F["mlx_vlm_responses_stream"])
+        elif self.server.fixture == "noterm_msgs":      # messages 断在 message_stop 之前（帧边界）
+            text = drop_last(F["mlx_vlm_messages_stream"])
+        elif self.server.fixture == "failed_resp":      # 以 response.failed 正常收尾
+            text = drop_last(F["mlx_vlm_responses_stream"]) + RESP_FAILED
         else:
             text = F[self.server.fixture]
         self.send_response(200); self.send_header("Content-Type", "text/event-stream")
@@ -299,7 +313,9 @@ MODELS = {"auth": (dict(LM, backend_auth=True), "mlx_lm_chat_stream"),
           "inb": (LM, "mlx_lm_chat_stream"),
           "slow_s": (LM, "slowhead"), "slow_n": (LM, "slowhead"),
           "noterm": (LM, "noterm"), "resp": (VLM, "mlx_vlm_responses_stream"),
-          "msgs": (VLM, "mlx_vlm_messages_stream")}
+          "msgs": (VLM, "mlx_vlm_messages_stream"),
+          "noterm_resp": (VLM, "noterm_resp"), "noterm_msgs": (VLM, "noterm_msgs"),
+          "failed_resp": (VLM, "failed_resp")}
 PORTS = {k: upstream(k, fx) for k, (_, fx) in MODELS.items()}
 class R:
     def __init__(s, i, p): s.id, s.machine, s.user = i, {"port": p}, {}
@@ -397,6 +413,12 @@ r["complete_chat"] = truncation_logged("/v1/chat/completions",
 r["complete_responses"] = truncation_logged("/v1/responses", {"model": "resp", "stream": True, "input": "hi"})
 r["complete_messages"] = truncation_logged("/v1/messages", {"model": "msgs", "stream": True, "max_tokens": 8,
                                                             "messages": MSG})
+# 截断判定的正向用例覆盖**每个**带终止帧的端点族（终审 D I-1：此前只有 chat 一族）
+for fam, path, model, extra in (("responses", "/v1/responses", "noterm_resp", {"input": "hi"}),
+                                ("messages", "/v1/messages", "noterm_msgs", {"max_tokens": 8, "messages": MSG})):
+    r["trunc_%s_stream" % fam] = truncation_logged(path, dict({"model": model, "stream": True}, **extra))
+    r["trunc_%s_nonstream" % fam] = truncation_logged(path, dict({"model": model}, **extra))
+r["failed_resp_stream"] = truncation_logged("/v1/responses", {"model": "failed_resp", "stream": True, "input": "hi"})
 r["head_wait_disconnect"] = [disconnect_before_head("slow_s", True), disconnect_before_head("slow_n", False)]
 print(json.dumps(r, ensure_ascii=False))
 """
@@ -421,6 +443,13 @@ def test_gateway_carry_rulings(payload, sys_py):
         "上游断在帧边界、没发终止帧 ⇒ 记 sse_truncated（日志不含请求体）"
     for key in ("complete_chat", "complete_responses", "complete_messages"):
         assert got[key] == [200, [], False], f"{key}：带终止帧的正常流不得记 sse_truncated：{got[key]}"
+    for fam in ("responses", "messages"):
+        st, nst = got[f"trunc_{fam}_stream"], got[f"trunc_{fam}_nonstream"]
+        assert st == [200, ["sse_truncated"], False], f"{fam} 流式：上游断在终止帧前 ⇒ sse_truncated：{st}"
+        assert nst == [502, ["sse_truncated"], False], \
+            f"{fam} 非流式：上游断在终止帧前 ⇒ 502 + sse_truncated，不得回 200 残缺体：{nst}"
+    assert got["failed_resp_stream"] == [200, [], False], \
+        f"以 response.failed 收尾的流是终止了的流，不得记 sse_truncated：{got['failed_resp_stream']}"
     for t in got["head_wait_disconnect"]:
         assert t is not None and t < 1.5, \
             f"上游迟迟不发响应头时客户端离开：靠 client_alive 探测在 1.5 s 内关上游（无写可失败）：{got['head_wait_disconnect']}"

@@ -305,14 +305,21 @@ class Gateway:
                 # 连不上上游或流中途断开（M4：502，不再是 504；与 client_disconnected 区分）
                 log_event("error", "upstream_aborted", model=short_id)
                 return translate.build_error(502, "upstream_error", "backend connection failed")
+            # 截断：半帧，或流结束时既没见过终止帧也没有错误帧（与流式直出同一判据，spec §4.6
+            # 「已开始流式后上游中断 ⇒ sse_truncated」——客户端要不要流式不改变这件事的名字）
+            pending = len(dec.pending()) if dec.pending().strip() else 0
+            truncated = not bad and (pending > 0 or (not agg.done and agg.error is None))
             try:
                 if bad:
                     raise aggregate.AggregateError("upstream sent a malformed frame")
-                if dec.pending().strip():
+                if pending:
                     raise aggregate.AggregateError("upstream stream truncated mid-frame")
                 result = agg.result()
             except aggregate.AggregateError as exc:
-                log_event("error", "upstream_aborted", model=short_id)
+                if truncated:
+                    log_event("error", "sse_truncated", model=short_id, pending_bytes=pending)
+                else:
+                    log_event("error", "upstream_aborted", model=short_id)
                 return aggregate_error_reply(exc, peer_class)
             return (200, frames.patch_body(result, short_id))
         finally:

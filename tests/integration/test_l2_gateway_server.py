@@ -445,6 +445,10 @@ head = ("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer 
         "Content-Type: application/json\r\nContent-Length: 17\r\n"
         "Connection: close\r\n\r\n").encode()
 out["end_to_end"] = raw_request(srv3.server_address[1], head, b'{"model":"qwen"}\n')[0]
+# 流式客户端同一情形（终审 D I-3）：上游在回头之前就失败 ⇒ 同样 502，不是 0 字节
+sbody = b'{"model":"qwen","stream":true}\n'
+shead = head.replace(b"Content-Length: 17", b"Content-Length: %d" % len(sbody))
+out["end_to_end_stream"] = raw_request(srv3.server_address[1], shead, sbody)[0]
 print(json.dumps(out))
 """
 
@@ -475,6 +479,7 @@ def test_upstream_transport_failure_becomes_502_not_zero_bytes(payload, sys_py):
     assert got["stream_bad_status"] is False, (
         f"forward_stream 的 BadStatusLine 逃逸了：{got['stream_bad_status']}")
     assert "502" in got["end_to_end"], f"端到端应收到 502 而不是零字节：{got['end_to_end']}"
+    assert "502" in got["end_to_end_stream"], f"流式端到端同样应收到 502：{got['end_to_end_stream']}"
 
 
 EXPECT100_OVERSIZE = PRE + r"""
