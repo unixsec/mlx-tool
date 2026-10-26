@@ -45,7 +45,9 @@ if [ -x "$CODE_ROOT/bin/mlx" ] && [ -d "$DATA_ROOT/run" ]; then
   # 下一条 `mlx chat` 报「连不上」，没有任何线索指向这次重装。
   # 2026-09-02 我自己踩了：验证通过后又部署一次，把 qwen38 停掉，
   # 然后告诉 Alex「服务没有问题」。
-  STOPPED=$(ls "$DATA_ROOT/run"/*.json 2>/dev/null \
+  # 没有服务在跑时 `ls` 无匹配返回 1 —— 不兜住，pipefail + set -e 会让安装器在这里
+  # 一行不打地 rc 1 退出（2026-10-26 真机重装踩到：`run/` 里只剩 `alias/`）。
+  STOPPED=$({ ls "$DATA_ROOT/run"/*.json 2>/dev/null || true; } \
             | sed 's/.*\///;s/\.json$//' | tr '\n' ' ')
   say "== 收敛正在运行的服务（重装前置）"
   if ! "$CODE_ROOT/bin/mlx" down --all 2>/dev/null; then

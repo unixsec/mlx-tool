@@ -297,6 +297,19 @@ def test_l3_reinstall_removes_retired_types_table(tmp_path, repo):
     assert not old.exists(), "退役文件在重装后仍然存在"
 
 
+def test_l3_reinstall_when_nothing_running(installed, repo):
+    """真机形状：用过一阵、此刻没有服务在跑 —— `run/` 在，里面只有 `alias/` 子目录、没有 `*.json`。
+    重装前的「记下停了谁」那条管道里 `ls` 无匹配返回 1，`pipefail` + `set -e` 曾让安装器
+    一行不打、rc 1 静默退出（2026-10-26 真机重装踩到）。"""
+    code_root, data_root, env = installed
+    (data_root / "run" / "alias" / "qwen").mkdir(parents=True, exist_ok=True)
+    assert not list((data_root / "run").glob("*.json"))
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+                       capture_output=True, text=True, timeout=60, check=False, env=env)
+    assert r.returncode == 0, f"空闲时重装失败 rc={r.returncode}：{r.stderr}"
+    assert "收敛正在运行的服务" in r.stderr and "== 挂 PATH" in r.stderr
+
+
 def test_l3_fresh_install_generates_keys_without_printing_them(tmp_path, repo):
     """spec §6.4 第 4 步与 §5.2：全新安装生成两把密钥、0600、**值不出现在安装器输出里**。"""
     roots = {k: tmp_path / v for k, v in
