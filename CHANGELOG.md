@@ -49,6 +49,14 @@
 - 请求里的 `adapters`、`adapter_path`、`draft_model` 被网关剥离，客户端不能让模型加载别的权重
 - **按请求体 `model` 路由的端点，连不上模型上游由 504 改为 502 `upstream_error`**；按 id 查询 / 删除 / 取消的扇出端点，后端连不上或回 5xx 是 502，10 秒内有后端没回话仍是 504 `upstream_timeout`。日志事件 `sse_stream_aborted` 改名 `upstream_aborted`，与客户端自己断开的 `client_disconnected` 区分；流开始后未见终止帧（半帧、断在帧边界）记 `sse_truncated`；扇出端点上后端对 2xx 回非 JSON 体同样是 502，请求体不是 JSON 对象是 400
 
+### 修复
+
+- `mlx down --all --dry-run` 不再真的停掉服务：`--all` 路径此前没有把 `--dry-run` 传给逐个停服务的循环；现在只预览。
+  配套新增按类的守卫，由命令表派生「声明 `--dry-run` 的动词 × 接受的目标形态」，在真在跑的进程上断言零状态变化
+- `mlx config get` / `config ls` 对模型目标报的端口改为 `up` 实际使用的值（登记端口，来源 machine；模型自己设过则为 user），
+  不再显示出厂 8100；全局 `port` 设置不再盖到模型上（与 `up` 一致）
+- `mlx help model rm` 不再说「删除前会要求键入模型 id」：只有带 `--weights` 才确认；`mlx help restart` 改为先校验、通过后再停再起
+
 ### 移除
 
 - `share/types.tsv`、`backend` 配置键、登记期类型判定链

@@ -990,7 +990,7 @@ mlx restart qwen27b     # 先校验，通过了才停、再起
 ```
 
 想先看会停掉谁：`mlx down qwen27b --dry-run`（`down` / `restart` 都接 `--dry-run`，只打印不动手）。
-**别对 `--all` 用它**：`mlx down --all --dry-run` 目前会真的停掉全部服务（已知缺陷，见 [KNOWN-ISSUES](KNOWN-ISSUES.md)）。
+`down --all --dry-run` 同样只预览，列出有运行记录、会被停掉的全部服务。
 
 ---
 
@@ -1021,8 +1021,7 @@ $ mlx model rm qwen27b --weights
     权重已移入回收站  ~/.local/state/mlx_server/trash/models--mlx-community--Qwen3.8-27B-8bit.1788226602363
 ```
 
-不带 `--weights` 不问，直接删登记，并说明权重原样保留。（`mlx help model rm` 的说明里「删除前会要求你键入模型 id 确认」
-这句对不带 `--weights` 的情形不成立，以本节为准。）`model rm` 没有 `--dry-run`。
+不带 `--weights` 不问，直接删登记，并说明权重原样保留。`model rm` 没有 `--dry-run`。
 
 不带 tty 的场景（脚本、CI）下确认读不到输入，按设计**视为拒绝**，零删除。
 
@@ -1235,7 +1234,7 @@ $ mlx help model rm
 
 说明
     删除一个模型的**登记**。默认**不动权重** —— 加 --weights 才把权重
-    移入回收站（可恢复）。删除前会要求你键入模型 id 确认。
+    移入回收站（可恢复）。不带 --weights 只删登记，**不询问确认**；带 --weights 时才要求键入模型 id 确认（加 --yes 跳过）。
 
 参数
     --json      输出机读 JSON（默认输出是给人看的）
@@ -1324,8 +1323,7 @@ mlx config diff                            # 只看你改过的
 
 `get` 默认给人看（键 / 值 / 来源三行），密钥打码为 `****`；`--reveal` 显示原值，`--json` 给脚本用。
 
-注意：登记时给的端口记在注册表里，不在这三层里 —— `mlx config get <模型> --key=port` 显示的是配置层的值（没设过就是出厂 8100），
-不是模型实际用的端口。实际端口以 `mlx model ls` 或 `mlx up <id> --dry-run` 为准。
+`mlx config get <模型> --key=port` 显示的就是 `up` 会用的端口：模型自己设过的值（来源 user），否则是登记时给的端口（来源 machine）。
 
 全部配置键（`mlx config ls` 列出同一批；默认与取值域来自 `share/schema.tsv`）：
 

@@ -9,15 +9,6 @@
 
 ## 一、尚未修的缺陷
 
-### `mlx down --all --dry-run` 会真的停掉全部服务
-
-`--dry-run` 对 `down` 与 `restart` 是登记过的，单个或多个显式目标（`mlx down qwen38 --dry-run`、
-`mlx down api qwen38 --dry-run`）都只打印预览。但 `--all` 这条路径逐个停服务时没有把 dry-run 传下去，
-**每个有运行记录的服务都会被真的停掉**（读代码确认，并在隔离环境里调用 `cmd.svc.run` 复现：
-`down --all` + `dry_run=True` 仍对每个服务调用了 `supervisor.down`）。
-
-绕开：要预览就逐个写目标，不要和 `--all` 一起用。
-
 ### `mlx up` 报「已启动」时后端可能是坏的（仅 mlx_lm）
 
 就绪判据是端口上的监听者是不是我们记录的那个 pid。它挡住了「端口被别人占」，但挡不住这一类：
@@ -43,17 +34,6 @@ mlx_vlm 加载完权重才监听，端口 LISTEN 即模型可用，不受此影�
 
 （机制由读代码确认：`cmd/svc.py` 的后端判定步调用 `templates.inspect_template`，后者轮询 `ps`；
 「约 15 个」这个数字来自开发记录，本次没有在真实安装上复测。）
-
-### `config get <模型> --key=port` 不显示登记的端口
-
-登记时给的 `--port` 记在注册表那条记录的磁盘事实段里，而 `config get` / `config ls` 只合成出厂默认、
-全局 `settings.json` 与该模型自己的配置三层。于是没另设过端口的模型，`mlx config get qwen38 --key=port`
-显示出厂的 8100（来源 default），而模型实际起在登记的端口上（隔离环境实测）。
-实际端口以 `mlx model ls`、`mlx up <id> --dry-run` 为准；`mlx config set <id> --key=port --value=…` 设过之后两边才一致。
-
-### `mlx help model rm` 说「删除前会要求你键入模型 id 确认」
-
-只有带 `--weights` 时才问；不带 `--weights` 直接删登记（这是有意的分档，手册第九节有表）。帮助文案没跟上。
 
 ### `--dry-run` 仍未覆盖的动词（不危险，但预览不了）
 
