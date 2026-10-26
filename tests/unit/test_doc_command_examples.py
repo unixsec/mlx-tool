@@ -7,8 +7,13 @@ CHANGELOG，还写进了产品自己的输出（`bootstrap keys` 收尾提示、
 
 逐条修字面串只修得了这一个实例；这里守的是整个类：「印给用户照抄的 `mlx` 命令」。
 
-**提取面**（`_SOURCES`）：两份 README、`docs/*.md`、CHANGELOG 里的代码块与行内代码，
-`messages.tsv` 的 `help.*.example` 字段与全部文案里的反引号片段。
+**提取面**（`_collect()`，来源清单见 `_sources()`）：
+- 两份 README、`docs/*.md`、CHANGELOG 里的代码块与行内代码；
+- `messages.tsv` 的**全部正文**，按纯文本抽（不只反引号片段：`先起它：mlx up {service}` 这种也是照抄对象）；
+- `deployer/*.sh` 里 `say` / `echo` 印给用户的文本（安装器的收尾提示就在这里）；
+- `payload/**/*.py` 的字符串字面量（`ast` 取常量与 f-string，跳过 docstring）中，
+  `mlx` 后紧跟**已登记动词**（取自 `verbs.tsv`）的片段 —— 渲染器、提示文案里拼出来的命令。
+每个来源都断言抽到了东西（`test_every_source_contributes`），提取面悄悄失效会红。
 **求值面**：只走解析器 —— `cli.parse`（`entry.main` 解析段的同一个入口；`help` 走
 `cli.render_help`，与 `entry.main` 的短路一致）。不执行动词。经下限解释器调起
 （`floor.run_floor`），不在测试自己的 venv 里 import 产品模块。
@@ -19,7 +24,7 @@ CHANGELOG，还写进了产品自己的输出（`bootstrap keys` 收尾提示、
   目录图注释里的 `mlx chat`，都是在指称动词，不是让人照敲）。带了 flag 的一律不豁免 ——
   X1 那条正是「带 flag、缺目标」；
 - help 的「用法」行（含 `[--`）：方括号是语法记号；
-- 第一个词不以字母开头的（`mlx ≥ 0.30.4` 说的是 mlx 这个 Python 包，不是本工具）；
+- 第一个词不以小写 ASCII 字母开头的（`mlx ≥ 0.30.4` 说的是 mlx 这个 Python 包；`mlx 找不到` 是中文行文）；
 - 文案里动词本身是模板占位的（`mlx {verb}`）；
 - `_COUNTEREXAMPLES`：文档**有意**写出的错误命令（教学反例、未实现的命令）。
   它们反过来必须**解析失败** —— 哪天变得能解析了，名单就过时了，守卫同样红。
@@ -59,6 +64,7 @@ _PLACEHOLDERS = {
     "<命令>": "model",
     "<command>": "model",
     "<路径>": "./mlx-config.json",
+    "<repo>": "mlx-community/Qwen3-0.6B-4bit",
     "<同一家族、同一词表的小模型仓库>": "mlx-community/Qwen3-0.6B-4bit",
     "<32 位以上的串>": "abcdefghijklmnopqrstuvwxyz012345",
     "{id}": "qwen38",
@@ -67,9 +73,20 @@ _PLACEHOLDERS = {
     "{draft}": "qwen38-small",
     "{repo}": "mlx-community/Qwen3-0.6B-4bit",
     "{key}": "port",
+    "{example}": "qwen38",
+    "{known_first}": "qwen38",
+    "{extra}": "qwen",
+    "{svc}": "qwen38",
+    "{t}": "qwen38",
+    "{s}": "qwen38",
+    "{mid}": "qwen38",
+    "{target}": "qwen38",
+    "{inv.target}": "qwen38",
+    "$s": "qwen38",
+    "$PWD": "/tmp/certs",
 }
 # 文案模板里动词本身是占位：解析不出任何有意义的东西
-_TEMPLATED_VERB = ("{verb}", "{action}")
+_TEMPLATED_VERB = ("{verb}", "{action}", "{head}")
 
 # 有意写出的错误命令（argv 去掉开头的 `mlx`，空格连接）。**必须解析失败**。
 _COUNTEREXAMPLES = {
@@ -88,15 +105,58 @@ _COUNTEREXAMPLES = {
 }
 
 _REPO = Path(__file__).resolve().parents[2]
+_PAYLOAD = _REPO / "payload"
 _CMD = re.compile(r"(?<![\w./~-])mlx(?=\s|$)")
 _SPAN = re.compile(r"`([^`\n]+)`")
 _OPS = set("();<>|&")
 
 
 def _sources():
+    """→ (markdown 文件, messages.tsv, deployer 脚本, 产品 .py)。"""
     md = [_REPO / "README.md", _REPO / "README_cn.md", _REPO / "CHANGELOG.md"]
     md += sorted((_REPO / "docs").glob("*.md"))
-    return md, _REPO / "payload" / "share" / "messages.tsv"
+    sh = sorted((_REPO / "deployer").glob("*.sh"))
+    py = sorted(p for p in _PAYLOAD.rglob("*.py") if "__pycache__" not in p.parts)
+    return md, _PAYLOAD / "share" / "messages.tsv", sh, py
+
+
+def _verbs():
+    """`mlx` 后面能跟的第一个词：顶层动词与动词组名（`internal` 组不算）。"""
+    out = set()
+    for ln in (_PAYLOAD / "share" / "verbs.tsv").read_text(encoding="utf-8").splitlines():
+        if not ln.strip() or ln.startswith("#"):
+            continue
+        c = ln.split("\t")
+        if c[13] != "public":
+            continue
+        out.add(c[1] or c[0])
+    return out
+
+
+def _py_strings(path):
+    """→ [(行号, 文本)]：字符串常量与 f-string（`{表达式}` 原样留作占位符），跳过 docstring。"""
+    import ast
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    skip = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
+                and body and isinstance(body[0], ast.Expr) \
+                and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+            skip.add(id(body[0].value))
+        if isinstance(node, ast.JoinedStr):
+            skip.update(id(v) for v in node.values)
+    out = []
+    for node in ast.walk(tree):
+        if id(node) in skip:
+            continue
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            out.append((node.lineno, node.value))
+        elif isinstance(node, ast.JoinedStr):
+            text = "".join(v.value if isinstance(v, ast.Constant)
+                           else "{" + ast.unparse(v.value) + "}" for v in node.values)
+            out.append((node.lineno, text))
+    return out
 
 
 def _logical_lines(text):
@@ -131,7 +191,7 @@ def _cut_prose(tail):
             quote = ch
         elif ch == "<":
             quote = ">"                       # 占位符 `<同一家族、同一词表…>` 里的标点同样不截
-        elif ch in "）；。，、」":
+        elif ch in "（）；。，、」":
             return tail[:i]
     return tail
 
@@ -150,7 +210,7 @@ def _tokens(tail):
 
 def _collect():
     """→ [(位置, 种类, 原文)]。种类：block（代码块 / help 例子）或 span（行内代码）。"""
-    md, messages = _sources()
+    md, messages, sh, py = _sources()
     found = []
     for f in md:
         in_block = False
@@ -174,15 +234,24 @@ def _collect():
         if not line or line.startswith("#") or "\t" not in line:
             continue
         key, text = line.split("\t", 1)
-        text = text.replace("\\n", "\n")
-        if key.endswith(".example"):
+        for ln in _logical_lines(text.replace("\\n", "\n")):
+            for tail in _commands(ln):
+                found.append((f"messages.tsv:{i}({key})", "text", tail))
+    for f in sh:
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            m = re.search(r'\b(?:say|echo)\s+"(.*)"', line)
+            if m:
+                for tail in _commands(m.group(1)):
+                    found.append((f"deployer/{f.name}:{i}", "text", tail))
+    verbs = _verbs()
+    for f in py:
+        rel = f.relative_to(_REPO)
+        for i, text in _py_strings(f):
             for ln in _logical_lines(text):
                 for tail in _commands(ln):
-                    found.append((f"messages.tsv:{i}({key})", "block", tail))
-        else:
-            for span in _SPAN.findall(text):
-                for tail in _commands(span):
-                    found.append((f"messages.tsv:{i}({key})", "span", tail))
+                    first = tail.split()[0] if tail.split() else ""
+                    if first in verbs:
+                        found.append((f"{rel}:{i}", "text", tail))
     return found
 
 
@@ -206,7 +275,7 @@ def _substitute(tail):
     """→ (替换后的原文, 未登记的占位符列表)。**先替换再分词**：`<` `>` 在 shell 里是重定向。"""
     for ph, val in _PLACEHOLDERS.items():
         tail = tail.replace(ph, val)
-    return tail, re.findall(r"<[^<>\s]+>|\{[a-z_]+\}", tail)
+    return tail, re.findall(r"<[^<>\s]+>|\{[^{}\s]+\}|\$\{?\w+\}?", tail)
 
 
 def _parse_all(payload, sys_py, tmp_path, cases):
@@ -264,8 +333,9 @@ def test_doc_command_examples_parse(payload, sys_py, tmp_path):
         if not argv:
             skipped["bare"] += 1              # 只是工具名
             continue
-        if not argv[0][:1].isalpha():
-            skipped["not_cli"] += 1           # `mlx ≥ 0.30.4`、`mlx / mlx-lm`：说的是 mlx 这个包
+        if not re.match(r"[a-z]", argv[0]):
+            # `mlx ≥ 0.30.4`、`mlx / mlx-lm` 说的是 mlx 这个包；`mlx 找不到` 是中文行文。动词都是小写 ASCII
+            skipped["not_cli"] += 1
             continue
         cases.append(argv)
         meta.append((where, kind, tail))
@@ -292,3 +362,43 @@ def test_doc_command_examples_parse(payload, sys_py, tmp_path):
     Cardinality.check("反例名单里不再出现在文档中的条目",
                       sorted(_COUNTEREXAMPLES - seen_counter), rel="empty")
     assert len(cases) > 100, f"只抽到 {len(cases)} 条可解析示例，提取面可能失效（跳过：{skipped}）"
+
+
+def _group(where):
+    if where.startswith("payload/"):
+        return "payload/**/*.py"
+    if where.startswith("deployer/"):
+        return where.split(":")[0]
+    return where.split(":")[0].split("(")[0]
+
+
+def test_every_source_contributes():
+    """按来源逐个断言非空：某个来源的提取面悄悄失效（改了文件结构、正则不再命中），
+    这条守卫会把它当成「这个来源里零个坏命令」而一直绿 —— 闭集断言的空真。"""
+    md, _messages, sh, _py = _sources()
+    got = {_group(w) for w, _, _ in _collect()}
+    want = {f.name for f in md} | {"messages.tsv", "payload/**/*.py", "deployer/install.sh"}
+    Cardinality.check("没有贡献任何 mlx 命令的来源", sorted(want - got), rel="empty")
+    assert sh, "deployer/*.sh 一个都没找到"
+    # 锚点：X1 现行犯所在的三类产品文本都要被抽到
+    tails = {(_group(w), t.strip()) for w, _, t in _collect()}
+    for src, cmd in (("deployer/install.sh", "config get api.token --reveal"),
+                     ("payload/**/*.py", "config get <键名> --reveal"),
+                     ("messages.tsv", "config get api.token --reveal")):
+        assert (src, cmd) in tails, f"提取面失效：{src} 里的 `mlx {cmd}` 没被抽到"
+
+
+def test_help_doc_anchors_exist_in_guide():
+    """`mlx help <命令>` 末行印 `文档  USER-GUIDE.md#<锚点>`（`verbs.tsv#doc_anchor`）。
+    锚点在手册里不存在，用户点过去落在文件开头。"""
+    guide = (_REPO / "docs" / "USER-GUIDE.md").read_text(encoding="utf-8")
+    have = set(re.findall(r"\{#([\w-]+)\}", guide)) | set(re.findall(r'<a id="([\w-]+)"', guide))
+    want = set()
+    for ln in (_PAYLOAD / "share" / "verbs.tsv").read_text(encoding="utf-8").splitlines():
+        if not ln.strip() or ln.startswith("#"):
+            continue
+        c = ln.split("\t")
+        if c[13] == "public" and "#" in c[14]:
+            want.add(c[14].split("#", 1)[1])
+    Cardinality.require_nonempty("help 引用的手册锚点", want, "verbs.tsv 的 doc_anchor 列没读到")
+    Cardinality.check("help 引用但手册里没有的锚点", sorted(want - have), rel="empty")
