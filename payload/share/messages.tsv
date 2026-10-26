@@ -172,6 +172,7 @@ fit.undeterminable	容量判定不出来（{detail}）—— **不在容量不�
 weights.scan_undeterminable	权重目录扫不完整（{detail}）—— **不用部分事实覆盖记录**，那会把扫不到的模型当成孤儿。检查权重根的权限与挂载后重试
 run.unreadable	运行记录存在但读不出来（{detail}）。这**不等于「没在跑」**：后端可能还活着。先看 `mlx status`，必要时手工确认进程后删掉那个 run 记录
 flag.yes	跳过确认（**只对 `model rm --weights` 有效**；`model trash empty` 不可跳过，它是唯一不可恢复的动作）
+config.level_mismatch	{key} 是{level}级配置键，不能设在{where}层（写进去 `up` 与 `config get` 都会忽略它）。该设在{right}层：全局键 `mlx config set {key} --value=<值>`，模型键 `mlx config set <模型id> --key={key} --value=<值>`
 config.not_writable	{key} 不能用 `config set` 改（scope={scope}）—— 它是磁盘事实，由工具自己填，不是配置
 config.import_needs_from	`mlx config import` 需要 `--from=<文件>`
 config.import_unreadable	读不了 {path}（{detail}）

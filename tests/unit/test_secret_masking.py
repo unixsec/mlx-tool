@@ -64,8 +64,11 @@ from mlx_server import store
 stack = []
 store.commit(ctx, store.MODELS,
              store.ModelsTx("test_model", {"repo": "o/m"}, port=8100), stack)
-# 设置模型层的 api.token
-r["set_model"] = run("set", "test_model", key="api.token", value="@TOKEN@M")
+# 模型层的 api.token：`config set` 现在按 level 拒绝（全局级键写不进模型层），
+# 所以这里直接落一条**旧版遗留的**死值 —— unset 仍须能清掉它，且回显不泄密
+store.commit(ctx, store.MODELS,
+             store.ModelsTx("test_model", {"api.token": "@TOKEN@M"},
+                            user_keys=("api.token",)), stack)
 # 从模型层 unset（应该保留全局层的值，回显为 ****）
 r["unset"] = run("unset", "test_model", key="api.token")
 print(json.dumps(r))

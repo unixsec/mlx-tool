@@ -103,6 +103,25 @@ def _layers(ctx, target, deps=None, runtime=False):
     return layers
 
 
+def _level_mismatch(defs, key, per_model):
+    # type: (dict, str, bool) -> object
+    """`config set` / `import` 的 level 闸门：**用 `schema.build_layers` 同一个语义**。
+
+    `build_layers` 只把 level∈(global,both) 的 settings 键纳入 machine 层、
+    只把 level∈(model,both) 的模型 user 键纳入 user 层 —— 写到另一层的值读侧与 `up`
+    都会忽略，是死旋钮。返回 `Refused` 或 `None`。
+    """
+    lv = (defs.get(key) or {}).get("level")
+    if lv is None or lv == "both":
+        return None
+    if (per_model and lv == "global") or (not per_model and lv == "model"):
+        return Refused(6, "config.level_mismatch", key=key,
+                       level="全局" if lv == "global" else "模型",
+                       where="模型" if per_model else "全局",
+                       right="全局" if lv == "global" else "模型")
+    return None
+
+
 def run(ctx, stack, inv, deps=None):
     # **失败关闭**（fail-closed，finding I-1）：`schema.tsv` 读不到 ⇒ `_defs` 回落
     # `{}` ⇒ `is_secret` 恒假 ⇒ `ls`/`get`/`diff`/`validate`/`export`/`set`/`unset`
@@ -113,6 +132,12 @@ def run(ctx, stack, inv, deps=None):
     if not _defs(ctx, deps):
         return Refused(3, "tables.unreadable",
                        detail="schema.tsv 读不到，为避免密钥打码失效已整体拒绝（重装：`mlx install`）")
+    if inv.verb in ("ls", "get", "validate", "diff", "export") and inv.target \
+            and inv.target != "api" and inv.target not in _domain(ctx, deps) \
+            and store.load(ctx, store.MODELS).by_id(inv.target) is None:
+        # 读侧与 set 一致：拼错 / 未登记的 id 先报找不到，而不是按网关构造层、
+        # 显示网关端口（`is_model` 由记录是否存在推出，缺记录会塌成 api）
+        return Refused(6, "model.not_found", id=inv.target)
     layers = (inv.args or {}).get("layers")
     if layers is None:
         # 目标是键名（`config set port ...`）还是模型 id（`config set qwen ...`）——
@@ -229,6 +254,9 @@ def run(ctx, stack, inv, deps=None):
                 rejected.append({"key": key, "why": "未知键"})
             elif defs and not schema.writable(key, defs):
                 rejected.append({"key": key, "why": "不可写（scope != user）"})
+            elif _level_mismatch(defs, key, False) is not None:
+                rejected.append({"key": key,
+                                 "why": "模型级键，不能写进全局层（用 `config set <模型id> --key=…`）"})
             else:
                 try:
                     v = schema.coerce(key, incoming[key], defs)
@@ -331,6 +359,10 @@ def run(ctx, stack, inv, deps=None):
     if defs and not schema.writable(key, defs):
         return Refused(6, "config.not_writable", key=key,
                        scope=(defs.get(key) or {}).get("scope", "?"))
+    # level 闸门在值域校验之前：写错层的值读侧与 `up` 都忽略，是死旋钮
+    mismatch = _level_mismatch(defs, key, inv.target != key)
+    if mismatch is not None:
+        return mismatch
     if val is None:
         # **必填校验**。解析层的缺值检查只管「flag 写了但没给值」，
         # 管不到「flag 完全没写」。此前 `mlx config set backend` 返回 rc 0
