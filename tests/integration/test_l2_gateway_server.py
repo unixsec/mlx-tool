@@ -662,3 +662,47 @@ def test_startup_sweep_failure_does_not_block_serving(payload, sys_py):
     而刷新线程里的同一调用是包了的。"""
     got = run_floor(payload, sys_py, SWEEP_FAIL, with_gateway=True, timeout=60, TOK=TOK)
     assert got == {"status": 200, "logged": True}, f"清扫失败应只记事件，不阻止启动：{got}"
+
+
+DRIP_BODY = PRE + r"""
+import io
+import gateway.server as server_mod
+server_mod.BODY_IDLE_SEC = 1.0           # 单次 recv 静默上限：滴灌间隔 0.3 s 永远碰不到它
+server_mod.BODY_MIN_SEC = 0.5            # 起步宽限
+server_mod.BODY_MIN_RATE = 10            # 每秒至少 10 字节才挣得到时间额度
+server_mod.BODY_MAX_SEC = 60.0
+logs = io.StringIO(); sys.stderr = logs
+g = Gateway(None, facade, token="@TOK@", limits={"inflight_max_mb": 64}); g.refresh_routes()
+srv, port = start()
+s = socket.create_connection(("127.0.0.1", port), timeout=5)
+s.sendall(("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+           "Content-Type: application/json\r\nContent-Length: %d\r\n\r\n" % (32 * 1024 * 1024)).encode())
+stop = threading.Event()
+def drip():
+    while not stop.wait(0.3):
+        try:
+            s.sendall(b" ")
+        except OSError:
+            return
+threading.Thread(target=drip, daemon=True).start()
+t0 = time.time()
+s.settimeout(4)
+try:
+    line = s.recv(256).decode("latin-1").split("\r\n")[0]
+except OSError as e:
+    line = type(e).__name__
+elapsed = round(time.time() - t0, 2)
+stop.set()
+time.sleep(0.2)
+print(json.dumps({"line": line, "elapsed": elapsed, "after": g.budget.used,
+                  "logged": "body_read_timeout" in logs.getvalue()}))
+"""
+
+
+def test_dripping_body_upload_hits_total_deadline(payload, sys_py):
+    """安全复核（5216db8 之后）：只有单次 recv 的静默上限时，每次间隔小于它的滴灌能无限期
+    占住已计费的在途预算。读体按到货字节挣时间额度：滴灌者超过总时限后 408、预算退还。"""
+    got = run_floor(payload, sys_py, DRIP_BODY, with_gateway=True, timeout=60, TOK=TOK)
+    assert got["line"] == "HTTP/1.1 408 Request Timeout", f"滴灌超过总时限应 408：{got}"
+    assert got["elapsed"] < 3, f"应在时限附近被切断，而不是等到客户端自己超时：{got}"
+    assert got["after"] == 0 and got["logged"], f"切断后预算退还并记事件：{got}"

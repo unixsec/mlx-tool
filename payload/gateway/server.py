@@ -26,7 +26,19 @@ from .app import log_event
 DEFAULT_MAX_BODY_MB = 256          # `api.max_body_mb` 出厂值（spec D22：多图与长上下文请求体）
 _HANDSHAKE_SEC = 10.0
 _MAX_CL_DIGITS = 20                # `Content-Length` 最长位数，见 `_parse_content_length`
-BODY_IDLE_SEC = 60.0               # 读请求体时两次到货之间最长静默；超时 ⇒ 408、退预算、关连接
+# 读请求体的时限（终审 B I1 + 安全复核）。只有「每次 recv 的静默上限」不够：每 59 s 发 1 字节
+# 就能无限期占住已计费的在途预算。所以另按**到货字节记时间额度**：已收 `got` 字节时，读体
+# 最多可以进行到 `min(BODY_MAX_SEC, BODY_MIN_SEC + got / BODY_MIN_RATE)` 秒；超出 ⇒ 408、
+# 退预算、关连接。读完整个体的总时限因此 ≤ min(BODY_MAX_SEC, BODY_MIN_SEC + n / BODY_MIN_RATE)，
+# 而滴灌者在 `BODY_MIN_SEC` 之后很快就被切断（它挣不到额度）。取值：
+#   · BODY_MIN_RATE = 256 KiB/s（约 2 Mbps）：远低于任何 Wi-Fi / 以太网的真实上传速率；
+#   · BODY_MIN_SEC = 30 s：小体与起步阶段的宽限（TCP 慢启动、客户端先序列化再发）；
+#   · BODY_MAX_SEC = 1200 s：绝对上限。256 MB（出厂 max_body_mb）按最低速率需 1024 s + 30 s，仍在上限内；
+#   · BODY_IDLE_SEC = 60 s：单次 recv 的静默上限（与上面取较紧者）。
+BODY_IDLE_SEC = 60.0
+BODY_MIN_SEC = 30.0
+BODY_MIN_RATE = 256 * 1024
+BODY_MAX_SEC = 1200.0
 LINGER_SEC = 2.0                   # 体未读即拒：回复后最多排空这么久，再关（见 `_lingering_close`）
 LINGER_MAX_BYTES = 64 * 1024 * 1024
 
@@ -186,6 +198,10 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             直接 close 时接收缓冲里还有未读字节，内核回 RST —— 还在 `send` 体的客户端
             （Python `BrokenPipeError`、curl `Connection reset`）读不到 503 与 `Retry-After`，
             最该按 `Retry-After` 退避的大体请求偏偏拿不到它。上限 `LINGER_SEC` / `LINGER_MAX_BYTES`。
+
+            不构成新的放大面：每条被拒连接至多占一个工作线程 `LINGER_SEC`（2 s），排空的字节
+            按 64 KB 一块读出即丢、不缓冲、不计入在途预算；而未鉴权客户端本来就能用慢速请求头
+            无限期占住一个线程（`ThreadingHTTPServer` 线程数无上限，计划 2 遗留），这里的上界更紧。
             """
             sock = self.connection
             try:
@@ -382,21 +398,33 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             n, _err = self._parse_content_length()      # 上面已判过，这里必然合法
             if n == 0:
                 return None, None
-            # **读体有静默上限**（终审 B I1）：声明大体后一个字节都不发（合盖、断 Wi-Fi 不发 FIN，
-            # 或恶意）的连接此前永远阻塞在这里，已计入的在途预算随之永久占住 —— 8 条就能让
-            # 整个网关一直 503。超时 ⇒ 408 并关连接，预算由 do_POST 的 finally 退还。
-            self.connection.settimeout(BODY_IDLE_SEC)
+            # **读体有时限**（终审 B I1）：声明大体后不发或滴灌（合盖、断 Wi-Fi 不发 FIN，或恶意）
+            # 的连接此前永远阻塞在这里，已计入的在途预算随之永久占住 —— 8 条就能让整个网关
+            # 一直 503。按到货字节挣时间额度（见模块顶部 BODY_* 常量），分块读、每块前按剩余
+            # 时间 settimeout；超时 ⇒ 408 并关连接，预算由 do_POST 的 finally 退还。
+            chunks, got, start = [], 0, time.monotonic()
             try:
-                raw = self.rfile.read(n)
+                while got < n:
+                    budget_sec = min(BODY_MAX_SEC, BODY_MIN_SEC + got / BODY_MIN_RATE)
+                    left = start + budget_sec - time.monotonic()
+                    if left <= 0:
+                        raise socket.timeout("body read deadline")
+                    self.connection.settimeout(min(BODY_IDLE_SEC, left))
+                    chunk = self.rfile.read1(min(65536, n - got))
+                    if not chunk:
+                        break                       # 客户端提前关闭：体不完整，下面按非法 JSON 处理
+                    chunks.append(chunk)
+                    got += len(chunk)
             except socket.timeout:
                 log_event("warn", "body_read_timeout", peer=str(self.client_address[0]),
-                          declared=n)
+                          declared=n, received=got)
                 self.close_connection = True
                 return None, (408, {"error": {"message": "request body not received in time",
                                               "type": "invalid_request"}})
             finally:
                 with contextlib.suppress(OSError, ValueError):
                     self.connection.settimeout(None)
+            raw = b"".join(chunks)
             try:
                 return json.loads(raw), None
             except ValueError:
