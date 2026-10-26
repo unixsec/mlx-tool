@@ -7,7 +7,7 @@ from ..result import Done, Refused
 #
 # 为什么是 1.0.0 而不是 7.x：`v7/` 是**第七次设计迭代**的目录名，不是产品版本。
 # 前六次没有一次发布过。这是第一个跑通全链路并对外发布的版本。
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def run(ctx, stack, inv, deps=None):

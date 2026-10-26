@@ -1,8 +1,7 @@
 # MLX Toolkit 使用指南
 
 > macOS + Apple Silicon 上管理 MLX 本地大模型的命令行工具。
-> 工具版本 1.0.0；本手册按当前开发分支的行为编写（即将发布的 1.1.0，改动见
-> [CHANGELOG](../CHANGELOG.md) 的 `[Unreleased]` 段）。
+> 工具版本 1.1.0（改动见 [CHANGELOG](../CHANGELOG.md) 的 `[1.1.0]` 段）。
 > 带 `$` 提示符的段落取自真实运行，路径、pid、地址等换成了示意值，输出的形状与本版一致。
 
 本文按**你实际会走的顺序**编排：先把工具装上，再找模型、下载、登记、启动、使用，
@@ -136,7 +135,7 @@ $ mlx status
   ✓ 代码根   ~/.local/share/mlx_server
   ✓ 数据根   ~/.local/state/mlx_server
   ✓ 权重根   ~/lab/models/mlx
-  · 工具版本 1.0.0
+  · 工具版本 1.1.0
 
   ✓ PATH 生效  ~/.local/share/mlx_server/bin
   ✓ 分发清单  73 项，完整
@@ -1164,7 +1163,7 @@ MLX_ROOT_WEIGHTS=<你的权重根> \
 
 升级后跑一次 `mlx check`，十二项应该全绿。
 
-**从 1.0.0 升到 1.1.0（开发中）** 还有几件事要做，[CHANGELOG](../CHANGELOG.md) 的「升级须知」逐条列了。要点：
+**从 1.0.0 升到 1.1.0** 还有几件事要做，[CHANGELOG](../CHANGELOG.md) 的「升级须知」逐条列了。要点：
 
 - 重跑 `bash deployer/install.sh`：会装 mlx-vlm、生成两把密钥、删除退役的表；
 - 跑一次 `mlx model repair`，清掉 1.0.0 的旧字段与退役配置键；

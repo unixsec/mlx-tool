@@ -4,7 +4,7 @@
 
 **在 Apple Silicon 上跑本地大模型 —— 并接进任何 OpenAI 或 Anthropic 兼容的应用。**
 
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon-black)](https://support.apple.com/zh-cn/116943)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Backend](https://img.shields.io/badge/backend-mlx--lm%20%7C%20mlx--vlm-orange)](https://github.com/ml-explore/mlx-lm)
@@ -21,7 +21,7 @@
 
 ## 🚀 最新进展
 
-- **开发中（1.1.0，尚未发布）** —— 完整清单与升级须知见[变更记录](CHANGELOG.md)的 `[Unreleased]` 段。
+- **v1.1.0**（2026-10）—— 完整清单与升级须知见[变更记录](CHANGELOG.md)的 `[1.1.0]` 段。
   - 每次 `mlx up` 按权重选后端：多模态模型走 `mlx_vlm`，纯文本走 `mlx_lm`。
   - 网关服务本机、虚拟机（Parallels / VMware 共享网络）与同一 Wi-Fi 上的设备。
     **所有来源都要网关令牌**，TLS 可选，`api.bind` 默认改为 `0.0.0.0`。

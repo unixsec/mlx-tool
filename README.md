@@ -4,7 +4,7 @@
 
 **Run local LLMs on Apple Silicon — and plug them into any OpenAI- or Anthropic-compatible app.**
 
-[![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon-black)](https://support.apple.com/en-us/116943)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Backend](https://img.shields.io/badge/backend-mlx--lm%20%7C%20mlx--vlm-orange)](https://github.com/ml-explore/mlx-lm)
@@ -21,7 +21,7 @@
 
 ## 🚀 What's New
 
-- **Unreleased (1.1.0, in development)** — see the `[Unreleased]` section of the
+- **v1.1.0** (2026-10) — see the `[1.1.0]` section of the
   [Changelog](CHANGELOG.md) for the full list and the upgrade notes.
   - The backend is picked from the weights on every `mlx up`: multimodal models
     run on `mlx_vlm`, text models on `mlx_lm`.

@@ -25,5 +25,5 @@ def test_docs_no_longer_teach_retired_behaviour(repo):
 
     log = _read(repo, "CHANGELOG.md")
     head = log.split("## [1.0.0]")[0]
-    for s in ("## [Unreleased]", "81920", "mlx model repair", "types.tsv", "mlx-vlm"):
-        assert s in head, f"CHANGELOG 的 Unreleased 段缺「{s}」"
+    for s in ("## [1.1.0]", "81920", "mlx model repair", "types.tsv", "mlx-vlm"):
+        assert s in head, f"CHANGELOG 的 1.1.0 段缺「{s}」"

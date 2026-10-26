@@ -1213,7 +1213,8 @@ def test_version_string_is_single_sourced(payload, repo):
     # 5 条命中全是假阳性）。提取面要跟被守的东西一样窄。
     PATTERNS = (r"版本\s+(\d+\.\d+\.\d+(?:-\w+)?)",
                 r"工具版本\s+(\d+\.\d+\.\d+(?:-\w+)?)",
-                r"[Vv]ersion[:\s]+(\d+\.\d+\.\d+(?:-\w+)?)")
+                r"[Vv]ersion[:\s]+(\d+\.\d+\.\d+(?:-\w+)?)",
+                r"badge/version-(\d+\.\d+\.\d+)")       # README 徽章：改常量时最常被漏的一处
     stale = []
     for doc in [repo / "docs" / "USER-GUIDE.md",
                 repo / "README.md", repo / "README_cn.md",
