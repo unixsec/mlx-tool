@@ -17,7 +17,7 @@
 # 由 `weights` 产出。`config set <模型> --key=revision` 因此被域校验拒绝 ——
 # 那正是 P-SCH-15 点名的那条。
 # 列（顺序即 tables.COLUMNS）：key type domain default scope level restart exportable secret group readers
-port	int	1-65535	8100	user	both	model	yes	no	service	backendarg,ports,cmd.svc
+port	int	1-65535	8100	user	model	model	yes	no	service	backendarg,ports,cmd.svc
 max_tokens	int	1-1048576	81920	user	both	model	yes	no	service	backendarg
 # ── 模态覆盖与并发（spec D2 / D18）────────────────────────────
 modality	str	auto|text|vision	auto	user	model	model	yes	no	service	cmd.svc,route,cmd.model.query

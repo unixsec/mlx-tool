@@ -115,10 +115,13 @@ def _level_mismatch(defs, key, per_model):
     if lv is None or lv == "both":
         return None
     if (per_model and lv == "global") or (not per_model and lv == "model"):
+        # 只给**正确**的那一种写法（终审 C M1：两种一起列，其中一种正是刚被拒的写法）
+        how = (f"`mlx config set {key} --value=<值>`" if lv == "global"
+               else f"`mlx config set <模型id> --key={key} --value=<值>`")
         return Refused(6, "config.level_mismatch", key=key,
                        level="全局" if lv == "global" else "模型",
                        where="模型" if per_model else "全局",
-                       right="全局" if lv == "global" else "模型")
+                       right="全局" if lv == "global" else "模型", how=how)
     return None
 
 
@@ -191,6 +194,8 @@ def run(ctx, stack, inv, deps=None):
             cfg, err = None, f"{e.kind}：{e.key}"
         except Exception as e:                         # noqa: BLE001
             cfg, err = None, str(e)
+        # 值域判定与 `up`（svc._v_config）同一份实现：逐键标出非法值
+        invalid = schema.domain_errors(cfg, defs) if cfg is not None else {}
 
         for key in sorted(_domain(ctx, deps)):
             if cfg is None:
@@ -201,6 +206,10 @@ def run(ctx, stack, inv, deps=None):
                 continue
             val, src = cfg.values.get(key), cfg.sources.get(key, "?")
             val = _mask1(key, val, defs)
+            if key in invalid:
+                rows.append((key, "failed", f"{val}（来自 {src}）：{invalid[key]}"))
+                bad.append(key)
+                continue
             rows.append((key, "ok", f"{val}（来自 {src}）"))
         payload = {"kind": "checks", "rows": rows, "failed": bad,
                    "undeterminable": []}
@@ -215,7 +224,9 @@ def run(ctx, stack, inv, deps=None):
         rows = []
         for key in sorted(cfg.values):
             src = cfg.sources.get(key, "default")
-            if src == "default":
+            if src in ("default", "cli"):
+                # cli 层（安装时写定的网关端口、shell 里的 MLX_GATEWAY_TOKEN）不是「你改过的配置」：
+                # 列进来的话全局 diff 永远多一行网关端口（终审 C M4）。生效值照常见 `config get/ls`
                 continue
             # 出厂值取自表；表里没有该键时回落 —— `_factory` 已经算好了这份
             # 兜底，从它取而不是再碰一次 `schema.DEFAULTS`（那读起来像
@@ -246,6 +257,13 @@ def run(ctx, stack, inv, deps=None):
         if not isinstance(incoming, dict):
             return Refused(6, "config.import_bad_json", path=src,
                            detail="顶层必须是对象")
+        if incoming.get("kind") == "config_export":
+            # `config export --json` 的信封（终审 C I3）：手册的换机流程是 export > f → import，
+            # 此前把 kind / skipped / target / values 当配置键逐个拒掉，rc 0 却什么都没导入
+            if not isinstance(incoming.get("values"), dict):
+                return Refused(6, "config.import_bad_json", path=src,
+                               detail="config_export 信封缺 values 对象")
+            incoming = incoming["values"]
         defs = _defs(ctx, deps)
         domain = _domain(ctx, deps)
         plan, rejected = [], []
@@ -388,6 +406,13 @@ def run(ctx, stack, inv, deps=None):
     per_model = inv.target != key
     if per_model and store.load(ctx, store.MODELS).by_id(inv.target) is None:
         return Refused(6, "model.not_found", id=inv.target)
+    if per_model and key == "port":
+        # 模型自设的端口与登记端口同一套互斥（终审 C I4）：网关端口、其它模型的生效端口
+        if int(val) == int(ctx.gateway_port):
+            return Refused(7, "ports.gateway_conflict", port=val)
+        for r in store.load(ctx, store.MODELS).records:
+            if r.id != inv.target and store.model_port(r) == int(val):
+                return Refused(7, "model.uniqueness", port=val, holder=r.id)
     if not per_model:
         store.commit(ctx, store.SETTINGS, store.SettingsTx({key: val}), stack)
         scope = "global"

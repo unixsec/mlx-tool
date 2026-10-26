@@ -5,8 +5,14 @@
 两个方向都是「设了什么都不会发生」的死旋钮。
 
 判据取 `schema.build_layers`（`up` 与 `config get` 共用的层构造）：对每个可写键 ×
-{全局, 模型} 两种目标，用同一个 level 语义**独立**推出「这一层会不会纳入该键」，
-断言 `set` 成功 ⇔ 纳入；`import`（只写全局层）同理；被拒时盘上零变化。
+{全局, 模型} 两种目标，**独立**推出「写进去的值在某个目标上会不会生效」——
+∃ 目标 ∈ {网关, 已登记模型}，在 `runtime=True`（`up` 实际用的层）下该键的生效来源
+是写入层且生效值就是写入值。断言 `set` 成功 ⇔ 生效；`import`（只写全局层）同理；
+被拒时盘上零变化。
+
+此前判据是「层**纳入**了该键」（终审 C I1）：全局 `port` 被纳入 machine 层，却对模型
+（不吃全局 port，用登记端口）和网关（cli 层恒有网关端口）都被遮住 —— 被更高层恒定
+遮住的键会被判成「可写」，守卫量的是「纳入」这个实例，不是「生效」这一类。
 另：读侧对未登记 / 拼错的模型 id 报 model.not_found，不按网关构造层。
 """
 import sys
@@ -45,6 +51,21 @@ def disk():
     return out
 
 seed("m1", "org/m1", 8151, config="{}")
+
+def takes_effect(k, v, form):
+    if form == "global":
+        shapes = [dict(is_model=False, gateway_port=ctx.gateway_port),
+                  dict(is_model=True, rec_user={}, registered_port=8151)]
+        for kw in shapes:
+            layers, _ = schema.build_layers(defs, {k: v}, runtime=True, **kw)
+            cfg = schema.effective("t", layers, defaults=dflt)
+            if cfg.sources.get(k) == "machine" and cfg.values.get(k) == v:
+                return True
+        return False
+    layers, _ = schema.build_layers(defs, {}, True, rec_user={k: v}, registered_port=8151,
+                                    runtime=True)
+    cfg = schema.effective("t", layers, defaults=dflt)
+    return cfg.sources.get(k) == "user" and cfg.values.get(k) == v
 res = {"keys": writable, "set": {}, "import": {}, "reads": {}}
 for k in writable:
     v = sample(k)
@@ -54,13 +75,8 @@ for k in writable:
         inv = Invocation("set", k if form == "global" else "m1",
                          args={"key": k, "value": str(v)})
         out = config.run(ctx, None, inv, {})
-        # 判据：同一个 level 语义，经 build_layers 独立推出
-        if form == "global":
-            layers, _ = schema.build_layers(defs, {k: v}, False, runtime=False)
-            included = k in (layers.get("machine") or {})
-        else:
-            layers, _ = schema.build_layers(defs, {}, True, rec_user={k: v})
-            included = k in (layers.get("user") or {})
+        # 判据：写入的值在某个目标上真的生效（见模块文档）
+        included = takes_effect(k, v, form)
         res["set"][k + "/" + form] = {
             "rc": out.rc, "key": getattr(out, "msg_key", None), "included": included,
             "changed": disk() != before}
@@ -72,9 +88,8 @@ for k in writable:
     json.dump({k: v}, open(src, "w"))
     before = disk()
     out = config.run(ctx, None, Invocation("import", None, args={"from": src}), {})
-    layers, _ = schema.build_layers(defs, {k: v}, False, runtime=False)
     res["import"][k] = {"planned": k in out.payload["planned"],
-                        "included": k in (layers.get("machine") or {}),
+                        "included": takes_effect(k, v, "global"),
                         "changed_when_rejected": (k not in out.payload["planned"]
                                                   and disk() != before)}
     config.run(ctx, None, Invocation("unset", k, args={"key": k}), {})
@@ -95,7 +110,7 @@ def test_set_and_import_succeed_iff_the_layer_reads_the_key(payload, sys_py):
     for ident, r in got["set"].items():
         k, form = ident.rsplit("/", 1)
         if (r["rc"] == 0) != r["included"]:
-            bad.append(f"set {ident}: rc={r['rc']} {r['key']}，但层{'会' if r['included'] else '不会'}纳入该键")
+            bad.append(f"set {ident}: rc={r['rc']} {r['key']}，但该值{'会' if r['included'] else '不会'}在任何目标上生效")
         if r["rc"] != 0:
             seen_refused[form] += 1
             if r["key"] != "config.level_mismatch":
@@ -106,7 +121,7 @@ def test_set_and_import_succeed_iff_the_layer_reads_the_key(payload, sys_py):
             seen_ok[form] += 1
     for k, r in got["import"].items():
         if r["planned"] != r["included"]:
-            bad.append(f"import {k}: planned={r['planned']} 但全局层{'会' if r['included'] else '不会'}纳入")
+            bad.append(f"import {k}: planned={r['planned']} 但该值{'会' if r['included'] else '不会'}在任何目标上生效")
         if r["changed_when_rejected"]:
             bad.append(f"import {k}: 被拒却改了盘")
     assert not bad, "\n".join(bad)

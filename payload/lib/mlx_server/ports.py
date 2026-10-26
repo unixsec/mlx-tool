@@ -8,10 +8,13 @@ def conflict_check(ctx, records):
 
     返回 `None` 表示无冲突；有冲突返回 `Refused(7)` 并**逐条指名冲突对**。
     """
+    from .store import model_port
     seen, pairs = {}, []
     gw = ctx.gateway_port
     for r in records:
-        p = r.machine.get("port")
+        # **生效端口**（user 段优先于登记的 machine 段，与 `up` 同一个读函数）：只看 machine 段时，
+        # `config set <id> --key=port` 设出的重复端口、甚至网关端口都能过这道检查（终审 C I4）
+        p = model_port(r)
         if p is None:
             continue
         if p == gw:
@@ -33,8 +36,9 @@ def alloc(ctx, records, listener_probe=None):
     `listener_probe(port) -> Probe[int]`：`Unknown` 且**不是 NO_LISTENER** 时
     **不得采用该端口** —— lsof 跑完即失败会让「已被占用」被读成「空闲」。
     """
+    from .store import model_port
     lo, hi = ctx.port_range
-    taken = {r.machine.get("port") for r in records} | {ctx.gateway_port}
+    taken = {model_port(r) for r in records} | {ctx.gateway_port}
     for p in range(lo, hi + 1):
         if p in taken:
             continue

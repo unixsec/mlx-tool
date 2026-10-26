@@ -93,7 +93,7 @@ def test_config_set_rejects_nonnumeric_string_for_int_key(payload, sys_py):
 store.commit(ctx, store.MODELS, store.ModelsTx("qwen", {"repo": "o/q"}, port=8100))
 r = {}
 r["max_concurrency_abc"] = run("set", "qwen", key="max_concurrency", value="abc")
-r["port_xyz"] = run("set", key="port", value="xyz")
+r["port_xyz"] = run("set", "qwen", key="port", value="xyz")   # port 是模型级键（全局写会被 level 闸门先拒）
 r["max_tokens_bad"] = run("set", key="max_tokens", value="not_a_number")
 print(json.dumps(r))
 """)

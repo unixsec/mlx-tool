@@ -123,6 +123,25 @@ def coerce(key, raw, defs=None):
     return raw
 
 
+def domain_errors(cfg, defs):
+    # type: (object, dict) -> dict
+    """合成后配置的**值域判定，全项目唯一实现点** → `{键: 原因}`（空 ⇒ 全部合法）。
+
+    `svc._v_config`（`up` 的求值点）与 `config validate` 共用：此前值域检查只在前者，
+    validate 只在 `effective` 抛错时才报 failed —— 而那条分支对表内键不可达，于是
+    `settings.json` 里 `max_tokens: 0` 时 validate 报 ok、`up` 报非法（终审 C I2）。
+    出厂默认来源的键不判（出厂值由表保证）。
+    """
+    out = {}
+    for k in sorted(cfg.values):
+        if cfg.sources.get(k) == "default":
+            continue
+        bad = check_domain(k, cfg.values[k], defs)
+        if bad:
+            out[k] = bad
+    return out
+
+
 def check_domain(key, value, defs):
     # type: (str, object, dict) -> object
     """值域校验的**唯一实现点**（spec §2.2）。合法返回 None，非法返回原因文本。

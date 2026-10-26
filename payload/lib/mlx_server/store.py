@@ -292,7 +292,7 @@ def commit(ctx, target, tx, stack=None):
         else:
             if tx.mode == "upsert" and tx.port is not None:
                 for r in recs.values():
-                    if r.id != tx.id and r.machine.get("port") == tx.port:
+                    if r.id != tx.id and model_port(r) == tx.port:
                         raise UniquenessError(
                             f"端口 {tx.port} 已被 {r.id!r} 占用（唯一性在 store 强制）")
             r = recs.get(tx.id) or Record(tx.id, {}, {})

@@ -213,12 +213,9 @@ def _v_config(state, inv, deps):
                                defaults=schema.defaults_from(tv))
     except schema.ConfigError as exc:
         return Refused(6, "config.invalid", key=exc.key, kind=str(exc))
-    for k, val in cfg.values.items():
-        if cfg.sources.get(k) == "default":
-            continue
-        bad = schema.check_domain(k, val, defs)
-        if bad:
-            return Refused(6, "config.invalid", key=k, kind=bad)
+    # 值域判定与 `config validate` 同一份实现（schema.domain_errors）
+    for k, bad in schema.domain_errors(cfg, defs).items():
+        return Refused(6, "config.invalid", key=k, kind=bad)
     state.update(cfg=cfg, tables=tv, dropped=dropped)
     return None
 

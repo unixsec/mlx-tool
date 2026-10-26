@@ -32,6 +32,17 @@ def _modality_display(ctx, rec, attach):
     return "?" if v is None else ("vision" if v else "text")
 
 
+def _merged(r):
+    # type: (object) -> dict
+    """`model ls` 一行的字段：user 与 machine 段合并；端口列是**生效端口**
+    （user 段优先，与 up / status / config get 同一个读函数，终审 C I4）。"""
+    out = dict(r.user, **r.machine)
+    port = store.model_port(r)
+    if port is not None:
+        out["port"] = port
+    return out
+
+
 def run(ctx, stack, inv, deps=None):
     if inv.verb == "ls":
         res = store.load(ctx, store.MODELS)
@@ -50,7 +61,7 @@ def run(ctx, stack, inv, deps=None):
             return "?" if not drafters_ok else _modality_display(ctx, r, attach)
 
         return Done({"kind": "models",
-                     "models": [dict({"id": r.id}, **dict(r.user, **r.machine),
+                     "models": [dict({"id": r.id}, **_merged(r),
                                      state=store.model_state(
                                          {"user": r.user, "machine": r.machine}),
                                      modality_display=_modality(r))

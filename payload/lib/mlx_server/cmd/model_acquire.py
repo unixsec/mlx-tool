@@ -43,7 +43,7 @@ def run(ctx, stack, inv, deps=None):
         return Refused(7, "ports.gateway_conflict", port=port)
     if port is not None:
         for r in existing.records:
-            if r.id != inv.target and r.machine.get("port") == port:
+            if r.id != inv.target and store.model_port(r) == port:
                 return Refused(7, "model.uniqueness", port=port, holder=r.id)
 
     # **覆盖要说出来**。`upsert` 是设计行为，但此前重复登记同一个 id
