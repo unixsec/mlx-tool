@@ -392,8 +392,15 @@ def test_help_doc_anchors_exist_in_guide():
     """`mlx help <命令>` 末行印 `文档  USER-GUIDE.md#<锚点>`（`verbs.tsv#doc_anchor`）。
     锚点在手册里不存在，用户点过去落在文件开头。"""
     guide = (_REPO / "docs" / "USER-GUIDE.md").read_text(encoding="utf-8")
-    have = set(re.findall(r"\{#([\w-]+)\}", guide)) | set(re.findall(r'<a id="([\w-]+)"', guide))
+    # **只认 `<a id>`**：`{#x}` 是 Pandoc / kramdown 的标题属性，GitHub 不渲染它
+    # （终审 C M7：只按 `{#x}` 定义的锚点在 GitHub 上点过去落在文件开头）
+    have = set(re.findall(r'<a id="([\w-]+)"', guide))
     want = set()
+    for readme in ("README.md", "README_cn.md", "docs/KNOWN-ISSUES.md", "CHANGELOG.md"):
+        f = _REPO / readme
+        if f.exists():
+            want |= set(re.findall(r"USER-GUIDE\.md#([\w-]+)", f.read_text(encoding="utf-8")))
+    want |= set(re.findall(r"\]\(#([\w-]+)\)", guide))
     for ln in (_PAYLOAD / "share" / "verbs.tsv").read_text(encoding="utf-8").splitlines():
         if not ln.strip() or ln.startswith("#"):
             continue

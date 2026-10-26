@@ -53,13 +53,26 @@
 
 - `mlx down --all --dry-run` 不再真的停掉服务：`--all` 路径此前没有把 `--dry-run` 传给逐个停服务的循环；现在只预览。
   配套新增按类的守卫，由命令表派生「声明 `--dry-run` 的动词 × 接受的目标形态」，在真在跑的进程上断言零状态变化
-- `mlx config get` / `config ls` 对模型目标报的端口改为 `up` 实际使用的值（登记端口，来源 machine；模型自己设过则为 user），
-  不再显示出厂 8100；全局 `port` 设置不再盖到模型上（与 `up` 一致）
+- `mlx config get <模型> --key=port` 报的端口改为 `up` 实际使用的值（登记端口，来源 machine；模型自己设过则为 user），
+  不再显示出厂 8100。`config get port`（不带模型）报网关端口（来源 cli），不再是 settings 里的值或出厂 8100；
+  `MLX_GATEWAY_TOKEN` 存在时 `config get api.token` 反映它（来源 cli）
 - `mlx help model rm` 不再说「删除前会要求键入模型 id」：只有带 `--weights` 才确认；`mlx help restart` 改为说明哪些在停之前校验、哪些在停之后才查
 - `mlx config set` / `config import` 按键的层级校验：全局级键（`api.*`、`backend.api_key`、`fit.*`）不能写到模型上，
-  模型级键（`modality`、`draft_model`、`num_draft_tokens`）不能写成全局，否则 rc 6 `config.level_mismatch`——此前写得进去，
-  但 `up` 与 `config get` 都会忽略，是死旋钮；`config get/ls <拼错的模型id>` 报「模型不存在」，不再按网关显示端口。
-  `config unset` 仍可清理旧版留下的值
+  模型级键（`port`、`modality`、`draft_model`、`num_draft_tokens`）不能写成全局，否则 rc 6 `config.level_mismatch`——此前写得进去，
+  但 `up` 与 `config get` 都会忽略，是死旋钮（全局 `port` 对模型被登记端口遮住、对网关被网关端口遮住）；
+  `config get / diff <拼错的模型id>` 报「模型不存在」，不再按网关显示端口。`config unset` 仍可清理旧版留下的值
+- `mlx config validate` 真的检查值域：与 `up` 用同一套判定，非法的键逐个标 failed（rc 65）。此前恒报 ok，`up` 却拒绝
+- `mlx config import` 认得 `config export --json` 的输出（此前把信封的 `kind` / `values` 等当成未知键全部拒掉，rc 0 却什么都没导入）
+- 模型自设的端口（`config set <模型> --key=port`）参与端口互斥：与其它模型的端口或网关端口相同时 rc 7；
+  `up` / `restart` 停前的登记端口冲突检查、端口分配与 `model ls` 的端口列都按生效端口（自设优先于登记）
+- `mlx config diff` 不再列出来自安装或环境的值（来源 cli，如网关端口）：它们不是改过的配置
+- 网关：读请求体有总时限（按到货字节计时间额度，最低 256 KiB/s、起步宽限 30 s、上限 1200 s），客户端停住或滴灌时回 408 并退还在途预算，
+  不再让几条连接把网关钉成 503；体还没读就拒绝时（401 / 413 / 503 等）先排空再关连接，客户端能读到状态码与 `Retry-After`；
+  带 `Expect: 100-continue` 的请求在发 100 之前先预留预算，预算满直接 503
+- 网关代取：「本机自身地址一律拒」覆盖所有网卡（含 VPN 等被排除接口）的所有地址，不再能用 IPv6 `%网卡` 后缀或同网段的第二个本机地址绕过；
+  部署 venv（Python 3.14）下以关连接结束的图片服务器（如 `python3 -m http.server`）不再一律 `connect_failed`；
+  非 ASCII 路径按 UTF-8 编码、IDN 主机名与站点本地地址 `fec0::/10` 按 `address_denied` 拒绝、异常的 `Content-Length` 不再让请求回零字节
+- 非流式请求上游断在终止帧之前时记 `sse_truncated`（此前记 `upstream_aborted`），与流式一致
 
 ### 移除
 

@@ -496,7 +496,7 @@ mlx up qwen05b llama8b        # 每个目标一行结论
 mlx restart qwen05b           # 先校验，校验全过才停，再起
 ```
 
-同时起多个时端口必须各不相同 —— 登记那一步就会拦住重复端口（rc 7）。
+同时起多个时端口必须各不相同 —— 登记那一步就会拦住重复端口（rc 7）；用 `config set <模型> --key=port` 给模型自设端口时同样检查（与其它模型的端口、网关端口都不能相同）。
 
 **`restart` 分两段检查**：
 
@@ -514,6 +514,7 @@ rc 取其中最差的那个（例如 6 = 模型不存在）；只要有目标真
 
 ---
 
+<a id="backend"></a>
 ### 自动选择后端 {#backend}
 
 每次 `mlx up` 都读一遍权重目录里的 `config.json` 现场判定，不在登记时定死：
@@ -539,6 +540,7 @@ rc 取其中最差的那个（例如 6 = 模型不存在）；只要有目标真
 
 ---
 
+<a id="draft"></a>
 ### 投机解码（speculative decoding） {#draft}
 
 用一个**小模型**先猜若干 token，大模型一次性校验 —— 吞吐能明显提升，
@@ -801,6 +803,7 @@ curl -sN http://127.0.0.1:8080/v1/chat/completions \
 `/v1/models` 列的是**正在跑的**模型。列表是空的说明模型没起 —— 回第五节，
 先 `mlx up <id>`，再刷新客户端的模型列表。
 
+<a id="remote"></a>
 ### 从虚拟机、同一 Wi-Fi 的设备连 {#remote}
 
 网关默认绑定全部网卡（`api.bind` = `0.0.0.0`），但**只放行这几类来源**，其余一律回 403 `peer_not_allowed`：
@@ -856,6 +859,7 @@ mlx restart api
 `subjectAltName` 里写 `mlx api info` 列出的地址。客户端要信任这张证书（把 `gateway.crt` 导入，或在 curl 里用 `--cacert gateway.crt`）。
 私钥权限宽于 0600 时 `mlx up api` 会拒绝启动。系统 python 最高支持 TLS 1.2，装了推理 venv 时网关自动用 venv 的解释器（TLS 1.3）。
 
+<a id="clients"></a>
 ### 接入各类客户端 {#clients}
 
 | 客户端 | 配置 |
@@ -899,6 +903,7 @@ Codex 与 Claude Code 分别只用 responses 与 messages，所以只能配多�
 响应带 `Access-Control-Allow-Origin: *`，不带 `Allow-Credentials`（令牌走请求头）。真正的请求仍要令牌，
 且 `POST` 必须是 `Content-Type: application/json`（浏览器的 `text/plain` 简单请求会被 415 挡掉）。
 
+<a id="media"></a>
 ### 图片、音频、视频 {#media}
 
 | 你发的 | 本机来源 | 虚拟机 / Wi-Fi 设备 |
@@ -949,6 +954,7 @@ Codex 与 Claude Code 分别只用 responses 与 messages，所以只能配多�
 视频临时文件落在 `<数据根>/run/media/<uuid4>/`（目录权限 0700），请求结束即删；网关崩溃留下的目录，启动时清扫一次、运行中随路由刷新（约每 5 秒）再查，删掉超过 1 小时的残留。
 写不下时返回 507 `media_storage_failed`。
 
+<a id="thinking"></a>
 ### 思考与输出长度 {#thinking}
 
 **开关思考**（chat / completions 端点，任选一种写法）：
@@ -978,6 +984,7 @@ responses 与 messages 认 `reasoning.effort`（顶层 `reasoning_effort` 同样
 `thinking_budget` 只有多模态模型支持，发给文本模型返回 400 `thinking_budget_unsupported`。
 请求里的 `adapters`、`adapter_path`、`draft_model` 会被网关剥离，客户端不能让模型加载别的权重。
 
+<a id="streaming"></a>
 ### 流式与长任务 {#streaming}
 
 网关对模型**一律用流式**取结果：
@@ -1065,6 +1072,7 @@ mlx model gc            # 确认无误后再真回收
 
 ---
 
+<a id="trash"></a>
 ### 回收站：看 · 恢复 · 清空 {#trash}
 
 `model rm --weights` 与 `model gc` 都是**移入回收站**，不是直接删。
@@ -1251,7 +1259,7 @@ usage: mlx <命令> [<参数>] [--flag]
 | `mlx caps refresh` / `mlx caps show` | 重新采集 / 查看 venv 里装了哪些后端包（`up` 按它判断后端可不可用，装完包要 refresh） |
 | `mlx bootstrap keys` | 只补空的密钥，输出只列键名（见[密钥](#keys)） |
 | `mlx bootstrap verify` | 按分发清单逐项校验安装产物：齐全时 `verified` 是清单项数；缺文件时 rc 6 并列出缺的。输出里的 `extra` 目前恒为空（本版不检查清单外多出来的文件） |
-| `mlx config validate` | 每个配置键一行：当前值与来源。配置是整体合成的：**只要有一个键非法，合成整体失败，所有键都标 failed**、detail 里写着是哪个键哪种错（rc 65） |
+| `mlx config validate` | 每个配置键一行：当前值与来源，并按 `up` 同一套值域检查：**非法的键逐个标 failed**，detail 写原因（rc 65） |
 | `mlx status <id>` / `mlx status --all` | 只看一个服务 / 看所有有运行记录的服务 |
 | `mlx check --json` | 机读的检查结果 |
 
@@ -1340,6 +1348,7 @@ $ mlx check
 
 <a id="get"></a><a id="set"></a><a id="validate"></a>
 
+<a id="config"></a>
 ## 十二之二 · 配置 {#config}
 
 配置有**三层**，高层覆盖低层：出厂默认 < 全局（`settings.json`）< 单个模型。
@@ -1364,11 +1373,11 @@ mlx config diff                            # 只看你改过的
 
 `mlx config get <模型> --key=port` 显示的就是 `up` 会用的端口：模型自己设过的值（来源 user），否则是登记时给的端口（来源 machine）。
 
-`config get port`（不带模型、即网关）显示的是安装时写进 `constants.env` 的**网关端口**，来源 `cli`；
-`settings.json` 里的全局 `port` 对网关不生效。
+`config get port`（不带模型、即网关）显示的是安装时写进 `constants.env` 的**网关端口**，来源 `cli`。
+`port` 是模型级键，`mlx config set port --value=…`（全局）会被拒绝；旧版留下的全局 `port` 用 `mlx config unset port` 清掉。
 
 每个键有**作用范围**（见下表）：作用范围为「全局」的键（`api.*`、`backend.api_key`、`fit.*`）
-只能写全局，为「模型」的键（`modality`、`draft_model`、`num_draft_tokens`）只能写在某个模型上，「全局或模型」的两处都行。
+只能写全局，为「模型」的键（`port`、`modality`、`draft_model`、`num_draft_tokens`）只能写在某个模型上，「全局或模型」的两处都行。
 写错层会被拒绝（rc 6，`config.level_mismatch`），因为写错层的值读侧与 `up` 都会忽略。
 `mlx config import` 同理：模型级键会列入「被拒」。读不存在的模型 id（`config get <拼错的id> --key=port`）报「模型不存在」。
 
@@ -1376,7 +1385,7 @@ mlx config diff                            # 只看你改过的
 
 | 键 | 默认（域） | 作用范围 | 管什么 | 改完重启 |
 |---|---|---|---|---|
-| `port` | 8100（1–65535） | 模型 | 模型监听端口：模型自己设过的值 > 登记时的 `--port` > 出厂 8100。**全局 `port` 设置对模型不起作用**（`mlx config set port --value=…` 写进去也不会被 `up` 采用） | 该模型 |
+| `port` | 8100（1–65535） | 模型 | 模型监听端口：模型自己设过的值 > 登记时的 `--port` > 出厂 8100。**不能设在全局**（`mlx config set port --value=…` 被拒，rc 6）；设在模型上时不能与其它模型或网关的端口相同（rc 7） | 该模型 |
 | `max_tokens` | 81920（1–1048576） | 全局或模型 | 后端默认输出长度（请求里自带的值照常生效） | 该模型 |
 | `max_concurrency` | 8（1–256） | 全局或模型 | 后端同时处理的请求数 | 该模型 |
 | `modality` | auto（auto / text / vision） | 模型 | 模态覆盖，见[自动选择后端](#backend) | 该模型 |
@@ -1404,6 +1413,8 @@ $ mlx config diff
   max_tokens   4096        machine   81920
 ```
 
+`diff` 只列你改过的：来自安装或环境的值（来源 `cli`，如网关端口）不列。带模型时（`config diff <模型>`）登记端口会作为一行出现（来源 machine）。
+
 ### 搬到另一台机器
 
 ```bash
@@ -1413,6 +1424,7 @@ mlx config import --from=mlx-config.json
 ```
 
 `export` **只导出改过的键**（出厂值换台机器仍是出厂值），且**跳过机密**（两把密钥要在新机器上重新生成或设置）。
+`import` 只写全局层：带模型导出（`config export <模型> --json`）的包里，模型级键（`port`、`modality` 等）导入时列入「被拒」，在新机器上用 `mlx config set <模型id> --key=…` 手工设。
 `import` **不假装原子** —— 跨文件事务做不到一次全成，所以它逐条报告：
 
 ```
@@ -1424,6 +1436,7 @@ $ mlx config import --from=bad.json
 
 **前面成功的保持生效**，不回滚。
 
+<a id="keys"></a>
 ### 密钥 {#keys}
 
 工具有两把密钥，都存在数据根的 `settings.json`（权限 0600），显示时一律打码为 `****`：
