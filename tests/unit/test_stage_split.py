@@ -415,3 +415,181 @@ def test_dry_run_ownership_equals_implementation(payload: Path):
                       sorted(declared - implemented), rel="empty")
     Cardinality.check("实现了 --dry-run 但没登记的动词",
                       sorted(implemented - declared), rel="empty")
+
+
+# ── `--dry-run` 零状态变化：按**类**守（verbs/cli 表派生，非手写清单）──────────
+#
+# 坏样本（本轮真实发生）：`mlx down --all --dry-run` 把全部服务真的停了 ——
+# `svc.run` 的 `--all` 分支调 `_collect(...)` 时漏了 `dry_run=`，而单目标与
+# 多目标两条分支都传了。此前的守卫（上面的 `test_gate1_*`）都只驱动
+# `up <单目标>`，于是「`--dry-run` 在某个**目标形态**上失效」这一整类没有求值面。
+# 类的定义：{cli.tsv 里声明 `--dry-run` 的每个动词} × {该动词接受的每种目标形态}。
+# 两个因子都从表里读；新增动词 / 新增 `--all` 属主自动进入。
+
+def _dry_run_cases(payload: Path):
+    """派生 `(动词路径, 目标形态, argv)`。表是唯一来源。"""
+    def rows(name):
+        return [ln.split("\t") for ln in (payload / "share" / name).read_text().splitlines()
+                if ln and not ln.startswith("#")]
+    verb_rows = {((r[1] + " " if r[1] else "") + r[0]).strip(): r for r in rows("verbs.tsv")}
+    owners = {r[0]: [v.strip() for v in r[1].split(",")] for r in rows("cli.tsv")}
+    # 别名行（`model install` 的 parent 在第 2 列）已在上面拼成路径
+    cases = []
+    for path in owners["--dry-run"]:
+        row = verb_rows[path]
+        pos = row[4]
+        base = path.split()
+        has_all = path in owners.get("--all", [])
+        if pos in ("0", "?"):
+            cases.append((path, "none", base))
+        if pos in ("1", "+", "?"):
+            cases.append((path, "single", base + ["qwen"]))
+        if pos == "+":
+            cases.append((path, "multi", base + ["qwen", "glm"]))
+        if has_all:
+            cases.append((path, "all", base + ["--all"]))
+    return [(p, f, a + ["--dry-run"]) for p, f, a in cases]
+
+
+# 这些动词除目标外还要必填 flag；值是**最小可通过解析**的补充，键必须 ∈ 派生集
+# （陈旧条目会被下面的测试拒绝，所以它不是第二份清单，只是参数补丁）。
+_DRY_RUN_EXTRA_ARGS = {
+    "model install": ["--repo=org/new", "--type=text"],
+    "model register": ["--repo=org/new", "--type=text"],
+    "config import": ["--from=@IMPORT_SRC@"],
+}
+
+_DRY_RUN_PROG = r"""
+import hashlib, json, os, shutil, signal, subprocess, sys, tempfile
+from mlx_server import entry, proc, supervisor
+
+root = tempfile.mkdtemp()
+code, data, wts, venv = (os.path.join(root, d) for d in ("code", "data", "w", "venv"))
+share = os.path.join(root, "share")
+shutil.copytree("@PAYLOAD@/share", share)
+for d in (code, data, wts, os.path.join(venv, "bin"), os.path.join(data, "run")):
+    os.makedirs(d, exist_ok=True)
+src = os.path.join(root, "import-src.json")
+open(src, "w").write("{}")
+os.environ.update({"MLX_ROOT_CODE": code, "MLX_ROOT_DATA": data, "MLX_ROOT_WEIGHTS": wts,
+                   "MLX_SHARE_ROOT": share, "MLX_GATEWAY_PORT": "8340",
+                   "MLX_PORT_RANGE": "8100-8199", "MLX_VENV": venv})
+
+# 两个登记模型 + 两个**真在跑**的进程（不是死 pid：死 pid 的 down 只删记录，
+# 走不到 kill 分支，那会让「没杀」由「本来就没东西可杀」空真满足）。
+procs = {}
+with open(os.path.join(data, "models.jsonl"), "w") as fh:
+    for mid, port in (("qwen", 8177), ("glm", 8178)):
+        repo = "org/" + mid
+        snap = os.path.join(wts, "hub", "models--org--" + mid, "snapshots", "main")
+        os.makedirs(snap)
+        open(os.path.join(snap, "config.json"), "w").write("{}")
+        fh.write(json.dumps({"id": mid, "user": {"repo": repo, "type": "text"},
+                             "machine": {"port": port, "revision": "main"}}) + "\n")
+        p = subprocess.Popen(["/bin/sleep", "300"], start_new_session=True)
+        procs[mid] = p
+        st = proc.started_at_raw(p.pid)
+        with open(os.path.join(data, "run", mid + ".json"), "w") as rf:
+            rf.write(json.dumps({"pid": p.pid, "pgid": p.pid, "port": port,
+                                 "started_at": st.value, "model_arg": mid, "type": "model",
+                                 "schema_ver": 1, "nonce": "n"}))
+
+def tree():
+    out = {}
+    for top in (code, data, wts, venv):
+        for dp, dn, fn in os.walk(top):
+            for n in dn:
+                out[os.path.relpath(os.path.join(dp, n), root) + "/"] = None
+            for n in fn:
+                f = os.path.join(dp, n)
+                out[os.path.relpath(f, root)] = hashlib.sha1(open(f, "rb").read()).hexdigest()
+    return out
+
+# ── 钩子：在**原语**上量（kill 系 + 进程创建），不按名字 ──
+kills, spawns = [], []
+for n in ("kill", "killpg"):
+    orig = getattr(os, n)
+    def mk(orig=orig, n=n):
+        def f(pid, sig, *a, **k):
+            if sig != 0:                      # 信号 0 是存活探测，不是动作
+                kills.append([n, pid, int(sig)])
+            return orig(pid, sig, *a, **k)
+        return f
+    setattr(os, n, mk())
+_pi = subprocess.Popen.__init__
+READ_ONLY = ("ps", "lsof", "pgrep", "vm_stat", "networksetup", "ifconfig")
+def _ctr(self, args, *a, **kw):
+    argv = list(args) if isinstance(args, (list, tuple)) else [str(args)]
+    if os.path.basename(argv[0]) not in READ_ONLY:    # 只读探测不算「动手」
+        spawns.append(argv)
+    return _pi(self, args, *a, **kw)
+subprocess.Popen.__init__ = _ctr
+for n in ("system", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe"):
+    o = getattr(os, n, None)
+    if o is not None:
+        def mk2(o=o, n=n):
+            def f(*a, **k):
+                spawns.append([n])
+                return o(*a, **k)
+            return f
+        setattr(os, n, mk2())
+
+class _Sink:
+    def write(self, s): return len(s)
+    def flush(self): pass
+
+results = []
+for path, form, argv in json.loads('''@CASES@'''):
+    argv = [a.replace("@IMPORT_SRC@", src) for a in argv]
+    extra = [a.replace("@IMPORT_SRC@", src) for a in json.loads('''@EXTRA@''').get(path, [])]
+    full = ["mlx"] + argv[:-1] + extra + argv[-1:]
+    before = tree()
+    del kills[:], spawns[:]
+    rc = entry.main(full, out=_Sink(), err=_Sink())
+    after = tree()
+    results.append({"case": " ".join(full[1:]), "path": path, "form": form, "rc": rc,
+                    "changed": sorted(k for k in set(before) | set(after)
+                                      if before.get(k, "-") != after.get(k, "-")),
+                    "kills": list(kills), "spawns": list(spawns),
+                    "dead": [m for m, p in procs.items() if p.poll() is not None]})
+    # 复位：被误杀的进程不可复位，所以第一次出现就够了
+for p in procs.values():
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
+print(json.dumps(results))
+"""
+
+
+def test_dry_run_changes_no_state_for_every_verb_and_target_form(payload: Path, sys_py: str):
+    """每个声明 `--dry-run` 的动词 × 它接受的每种目标形态：零状态变化。
+
+    「零状态变化」的求值器是**作用于真实产物**的三个独立量：
+    ① 数据/代码/权重根的全树内容哈希前后一致；
+    ② `os.kill/killpg` 没有发过非 0 信号，除只读探测外没有进程被创建；
+    ③ 夹具里真在跑的进程还活着。
+    """
+    from floor import run_floor
+    cases = _dry_run_cases(payload)
+    derived_verbs = {p for p, _, _ in cases}
+    assert {"up", "down", "restart"} <= derived_verbs, f"派生没读对：{derived_verbs}"
+    stale = set(_DRY_RUN_EXTRA_ARGS) - derived_verbs
+    assert not stale, f"参数补丁指向不再声明 --dry-run 的动词：{stale}"
+    # 阴性：`--all` 只派生给表里登记过它的动词
+    assert {p for p, f, _ in cases if f == "all"} == {"down"}, cases
+
+    got = run_floor(payload, sys_py, _DRY_RUN_PROG, timeout=240,
+                    CASES=json.dumps(cases, ensure_ascii=False),
+                    EXTRA=json.dumps(_DRY_RUN_EXTRA_ARGS))
+    assert len(got) == len(cases)
+    bad = [g for g in got if g["changed"] or g["kills"] or g["spawns"] or g["dead"]]
+    assert not bad, "--dry-run 改了状态：\n" + "\n".join(
+        f"  mlx {g['case']} → rc={g['rc']} 改动={g['changed']} 信号={g['kills']} "
+        f"起进程={g['spawns']} 被杀的服务={g['dead']}" for g in bad)
+
+    # **非空真**：服务类动词必须真的走到了预览分支（rc 0），而不是被解析/校验拒绝后
+    # 「什么都没动」。其余动词若被拒（缺必填项等）不算失败，但至少一半要 rc 0。
+    svc = [g for g in got if g["path"] in ("up", "down", "restart")]
+    assert svc and all(g["rc"] == 0 for g in svc), [(g["case"], g["rc"]) for g in svc]
+    assert sum(g["rc"] == 0 for g in got) * 2 >= len(got), [(g["case"], g["rc"]) for g in got]

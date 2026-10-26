@@ -542,7 +542,7 @@ def run(ctx, stack, inv, deps):
         # （没起过的服务没有运行记录，也就无从停止）
         services = supervisor.services_with_record(ctx)
         results, worst, _committed, _failed_codes = _collect(
-            ctx, stack, deps, inv.verb, services)
+            ctx, stack, deps, inv.verb, services, dry_run=inv.dry_run)
         if worst == 0:
             return Done({"kind": "svc", "targets": services, "results": results})
         # 有服务没停下来 ⇒ Failed 并**逐个指名**，调用方（卸载器）据此拒绝动盘
