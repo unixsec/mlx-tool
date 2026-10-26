@@ -100,10 +100,18 @@ def _layers(ctx, target, deps=None):
     domain = _domain(ctx, deps)
     out = {}
     glob = {k: v for k, v in store.load_settings(ctx).items() if k in domain}
+    rec = store.load(ctx, store.MODELS).by_id(target) if target else None
+    if rec is not None:
+        # 与 `svc._v_config`（`up` 的求值点）同一份 machine 层规则：模型目标
+        # **不吃全局 `port` 设置**，端口来自注册表登记。此前这里没有这一条，
+        # `config get <模型> --key=port` 报 8100/default，而 `up` 用的是登记端口。
+        glob.pop("port", None)
+        port = store.model_port(rec)
+        if port is not None:
+            glob["port"] = int(port)
     if glob:
         out["machine"] = glob
     if target:
-        rec = store.load(ctx, store.MODELS).by_id(target)
         if rec is not None:
             per = {k: v for k, v in rec.user.items() if k in domain}
             if per:
