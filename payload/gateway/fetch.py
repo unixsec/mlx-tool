@@ -22,7 +22,7 @@ import socket
 import ssl
 import threading
 import time
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from gateway import peers
 
@@ -34,6 +34,7 @@ DNS_MAX_THREADS = 8        # 同时挂着的解析线程上限：超时放弃的
 _DNS_SLOTS = threading.BoundedSemaphore(DNS_MAX_THREADS)
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
 _NUMERICISH = re.compile(r"^(?:0x[0-9a-fx.]*|[0-9.]+)$", re.IGNORECASE)
+_URL_SAFE = "/?#[]@!$&'()*+,;=:%-._~"       # RFC 3986 保留字符 + 非保留标点 + `%`：只编码非 ASCII 与空白等
 
 
 class FetchError(Exception):
@@ -59,8 +60,33 @@ def unwrap(ip):
     return ip
 
 
-def target_allowed(ip, peer_class, allowed_nets):
-    # type: (object, str, list) -> bool
+def _bare(ip):
+    # type: (object) -> object
+    """去掉 IPv6 的 zone（`%en0`）。3.9 起 `IPv6Address` 的相等与哈希带 `scope_id`，
+    `fd00:1::5%en0 != fd00:1::5` —— 不剥掉，任何「等于某个本机地址」的判断都能被加一个后缀绕过。"""
+    if ip.version == 6 and getattr(ip, "scope_id", None):
+        return ipaddress.IPv6Address(str(ip).split("%")[0])
+    return ip
+
+
+def own_set(allowed_nets, own_addrs):
+    # type: (object, object) -> set
+    """本机自身地址集合：`own_addrs`（`NetView` 快照里全部接口的全部地址，含被排除接口）
+    并上放行网段条目的 `addr`（快照缺 `own_addrs` 时至少不比此前更松）。比较一律剥 zone、还原内嵌 IPv4。"""
+    out = set()
+    raw = list(own_addrs or ()) + [n.get("addr") for n in (allowed_nets or ())]
+    for a in raw:
+        if not a:
+            continue
+        try:
+            out.add(unwrap(_bare(ipaddress.ip_address(str(a).split("%")[0]))))
+        except ValueError:
+            continue
+    return out
+
+
+def target_allowed(ip, peer_class, allowed_nets, own_addrs=None):
+    # type: (object, str, list, object) -> bool
     """D23：本机来源不限；远端来源只放行**公网**与**当前放行网段**。
 
     网段包含判断复用 `peers.net_matches`（见模块文档）。这里比 `classify_peer`
@@ -75,20 +101,16 @@ def target_allowed(ip, peer_class, allowed_nets):
     """
     if peer_class == "LOOPBACK":
         return True
-    ip = unwrap(ip)
+    ip = unwrap(_bare(ip))
     if (ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified
             or ip.is_reserved):
         return False
     if ip.version == 4 and int(ip) == 0xFFFFFFFF:
         return False
-    if ip.version == 6 and ip.teredo is not None:
+    if ip.version == 6 and (ip.teredo is not None or ip.is_site_local):
+        return False                              # fec0::/10 已弃用，各版本 Python 却都算 is_global
+    if ip in own_set(allowed_nets, own_addrs):   # 本机自身地址（含公网形态、含被排除接口上的）不作代取目标
         return False
-    for n in allowed_nets or ():                  # 本机自身地址（含公网形态的）不作代取目标
-        try:
-            if ip == unwrap(ipaddress.ip_address(str(n.get("addr")).split("%")[0])):
-                return False
-        except ValueError:
-            continue
     if ip.is_global:
         return True
     for n in allowed_nets or ():
@@ -177,9 +199,36 @@ def _kill(sock):
         sock.close()
 
 
+def _ascii_length(resp):
+    # type: (object) -> object
+    """响应的 `Content-Length` → int | None。**只认 ASCII 数字**：`"²".isdigit()` 为真而
+    `int("²")` 抛 `ValueError`（http.client 按 latin-1 解码头值，字节 0xB2 就是它）。
+    其余形态与 http.client 一样当作没给长度（按关连接标界读）。"""
+    length = resp.getheader("Content-Length")
+    if length and length.isascii() and length.isdigit():
+        return int(length)
+    return None
+
+
 def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "video"),
-          resolver=None, connect=None, ssl_context=None, wall_sec=WALL_SEC, clock=time.monotonic):
-    # type: (str, str, list, int, tuple, object, object, object, float, object) -> dict
+          resolver=None, connect=None, ssl_context=None, wall_sec=WALL_SEC, clock=time.monotonic,
+          own_addrs=None):
+    # type: (str, str, list, int, tuple, object, object, object, float, object, object) -> dict
+    """→ `{"content_type", "data", "host"}`；失败一律 `FetchError`（`reason ∈ REASONS`）。
+
+    **异常契约按类兜底**：管线里漏网的 `ValueError`（含 `UnicodeError`）映射为
+    `http_error`，不让它越过契约穿到 server 的 `handle_error`、给客户端零字节。
+    """
+    try:
+        return _fetch(url, peer_class, allowed_nets, max_bytes, kinds, resolver, connect,
+                      ssl_context, wall_sec, clock, own_addrs)
+    except ValueError as exc:
+        raise FetchError("http_error", f"{type(exc).__name__}: {str(exc)[:80]}") from None
+
+
+def _fetch(url, peer_class, allowed_nets, max_bytes, kinds, resolver, connect, ssl_context,
+           wall_sec, clock, own_addrs):
+    # type: (str, str, list, int, tuple, object, object, object, float, object, object) -> dict
     deadline = clock() + wall_sec
     connect = connect or default_connect
     for _hop in range(MAX_REDIRECTS + 1):
@@ -192,12 +241,16 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
             raise FetchError("address_denied", "URL 无法解析") from exc
         if scheme not in ("http", "https") or not host:
             raise FetchError("address_denied", "只允许 http / https")
+        if not host.isascii():
+            # IDN / 非 ASCII 主机名：Host 头按 latin-1 编码会抛 UnicodeEncodeError；
+            # 在解析与建连之前拒绝（不替客户端做 punycode，也不发出这次 DNS 查询）
+            raise FetchError("address_denied", "主机名含非 ASCII 字符")
         if explicit_port == 0:
             raise FetchError("address_denied", "端口 0")
         default_port = 443 if scheme == "https" else 80
         port = explicit_port or default_port
         ips = _host_ips(host, port, resolver, deadline - clock())
-        if not all(target_allowed(ip, peer_class, allowed_nets) for ip in ips):
+        if not all(target_allowed(ip, peer_class, allowed_nets, own_addrs) for ip in ips):
             raise FetchError("address_denied", host)
         remaining = deadline - clock()
         if remaining <= 0:
@@ -218,7 +271,10 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
                     dog = threading.Timer(max(0.01, deadline - clock()), _fire)
                     dog.daemon = True
                     dog.start()
-                target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+                # 请求行按 ASCII 编码：路径/查询串里的非 ASCII 字符按 UTF-8 百分号编码（与浏览器一致），
+                # 已有的 ASCII 字符（含 `%XX`）原样保留
+                target = quote((parts.path or "/") + ("?" + parts.query if parts.query else ""),
+                               safe=_URL_SAFE)
                 host_header = (f"[{host}]" if ":" in host else host) + (
                     "" if port == default_port else f":{port}")
                 conn.putrequest("GET", target, skip_host=True, skip_accept_encoding=True)
@@ -250,16 +306,21 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
             ctype = (resp.getheader("Content-Type") or "").split(";")[0].strip().lower()
             if ctype.split("/")[0] not in kinds:
                 raise FetchError("bad_content_type", ctype or "（缺失）")
-            length = resp.getheader("Content-Length")
-            if length and length.isdigit() and int(length) > max_bytes:
-                raise FetchError("too_large", length)
+            length = _ascii_length(resp)
+            if length is not None and length > max_bytes:
+                raise FetchError("too_large", str(length))
             chunks, total = [], 0
             while True:
                 left = deadline - clock()
                 if left <= 0:
                     raise FetchError("timeout", host)
+                if resp.isclosed():
+                    # 正文已读完（Content-Length 读满或关连接标界读到 EOF）。3.14 的 read1 读满后
+                    # 会关掉 fp，以关连接标界的响应（HTTP/1.0、`Connection: close`）此时 fd 已真正
+                    # 关闭 —— 再 settimeout 抛 EBADF，被误判成 connect_failed（终审 X-1）
+                    break
                 try:
-                    if sock is not None:
+                    if sock is not None and sock.fileno() != -1:
                         sock.settimeout(max(0.01, left))   # 每次 recv 都受剩余墙钟约束
                     chunk = resp.read1(65536)               # 至多一次 recv，不攒满再返回
                 except socket.timeout as exc:
@@ -276,7 +337,7 @@ def fetch(url, peer_class, allowed_nets, max_bytes, kinds=("image", "audio", "vi
                 chunks.append(chunk)
             if fired.is_set():                      # 被看门狗切断后读到的 EOF 不是完整正文
                 raise FetchError("timeout", host)
-            if length and length.isdigit() and total != int(length):
+            if length is not None and total != length:
                 raise FetchError("http_error", f"正文被截断 {total}/{length}")
             return {"content_type": ctype, "data": b"".join(chunks), "host": host}
         finally:

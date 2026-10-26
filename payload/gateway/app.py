@@ -128,13 +128,18 @@ class Gateway:
 
     def media_context(self, ticket):
         # type: (object) -> dict
-        nets = self.nets.snapshot()["allowed_nets"] if self.nets is not None else []
+        snap = self.nets.snapshot() if self.nets is not None else {}
+        nets, own = snap.get("allowed_nets") or [], snap.get("own_addrs") or []
+
+        def fetcher(url, peer_class, allowed_nets, max_bytes, kinds):
+            # 本机自身地址随同一份快照绑进来：media 层的 fetcher 签名不变
+            return self.fetch_media(url, peer_class, allowed_nets, max_bytes, kinds, own_addrs=own)
         return {"nets": nets, "limits": self.limits, "ticket": ticket, "store": self.media_store,
-                "fetcher": self.fetch_media}
+                "fetcher": fetcher}
 
     @staticmethod
-    def fetch_media(url, peer_class, allowed_nets, max_bytes, kinds):
-        # type: (str, str, list, int, tuple) -> dict
+    def fetch_media(url, peer_class, allowed_nets, max_bytes, kinds, own_addrs=None):
+        # type: (str, str, list, int, tuple, object) -> dict
         """代取并记 `media_fetched`。**只记主机名、原因码与字节数** —— URL 的路径与查询串里常有签名，
         `FetchError.detail` 可能带异常原文，同样不进日志。"""
         try:
@@ -142,7 +147,7 @@ class Gateway:
         except ValueError:
             host = ""
         try:
-            got = fetch.fetch(url, peer_class, allowed_nets, max_bytes, kinds)
+            got = fetch.fetch(url, peer_class, allowed_nets, max_bytes, kinds, own_addrs=own_addrs)
         except fetch.FetchError as exc:
             log_event("warn", "media_fetched", host=host, reason=exc.reason)
             raise

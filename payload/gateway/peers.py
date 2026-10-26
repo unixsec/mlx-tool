@@ -94,7 +94,19 @@ def _reason(name, port):
 
 def compute_nets(hw, ifs, allow_cidrs=""):
     # type: (dict, dict, str) -> dict
-    """放行网段与排除接口。**同一网段同一 scope 只列一次**（同一 /64 常有多个地址）。"""
+    """放行网段、排除接口与本机自身地址。**同一网段同一 scope 只列一次**（同一 /64 常有多个地址）。
+
+    `own`：**全部接口（含回环与被排除接口）的全部地址**，不带 zone、不去重网段 —— 代取目标的
+    「本机自身地址一律拒」用它判（`gateway.fetch.target_allowed`）。不能从 `allowed` 的 `addr`
+    推：那里每个网段只留第一个地址（同一 /64 的 temporary 地址、IPv4 别名会漏），
+    被排除接口（utun 上 VPN 分配的公网地址）更是一个都不在（终审 A I-1）。
+    """
+    own = []
+    for name in sorted(ifs):
+        info = ifs[name]
+        for a in [x[0] for x in info.get("inet", ())] + [x[0] for x in info.get("inet6", ())]:
+            if a not in own:
+                own.append(a)
     allowed = [{"net": n, "iface": "lo0", "kind": "loopback", "scope": None, "addr": a}
                for n, a in zip(LOOPBACK_NETS, ("127.0.0.1", "::1"))]
     excluded = []
@@ -133,7 +145,7 @@ def compute_nets(hw, ifs, allow_cidrs=""):
         if cidr:
             allowed.append({"net": str(ipaddress.ip_network(cidr, strict=False)),
                             "iface": None, "kind": "config", "scope": None, "addr": None})
-    return {"allowed": allowed, "excluded": excluded}
+    return {"allowed": allowed, "excluded": excluded, "own": own}
 
 
 def normalize_peer(addr):
@@ -348,4 +360,4 @@ class NetView:
         return {"allowed_nets": [dict(a) for a in self._nets["allowed"]],
                 "excluded_ifaces": [dict(e) for e in self._nets["excluded"]],
                 "nets_source": self._source, "nets_computed_at": self._computed_at,
-                "nets_error": self._error}
+                "nets_error": self._error, "own_addrs": list(self._nets.get("own") or ())}
