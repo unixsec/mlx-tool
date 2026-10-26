@@ -197,36 +197,14 @@ def _v_config(state, inv, deps):
     tv = open_tables(ctx)
     defs = schema.keydefs(tv)
     settings = store.load_settings(ctx)
-    dropped = sorted(k for k in settings if k not in defs)
-    machine = {k: val for k, val in settings.items()
-               if k in defs and defs[k]["scope"] == "user"
-               and defs[k]["level"] in ("global", "both")
-               and not (inv.target != "api" and k == "port")}
-    layers = {}
-    if inv.target == "api":
-        layers["cli"] = {"port": ctx.gateway_port}
-        tok = getattr(ctx, "gateway_token_env", "")
-        if tok:
-            # 放 cli 层：与命令行参数同性质 —— 本次调用的显式意图，不落盘
-            layers["cli"]["api.token"] = tok
-    else:
-        rec = state["record"]
-        port = store.model_port(rec)
-        if port is not None:
-            machine["port"] = int(port)
-        user = {}
-        for k in list(rec.user):
-            d = defs.get(k)
-            if d is None:
-                if k not in ("repo", "type"):       # 非配置字段（repo）与旧字段（type）
-                    dropped.append(k)
-                continue
-            if d["scope"] == "user" and d["level"] in ("model", "both"):
-                user[k] = dict.get(rec.user, k)
-        if user:
-            layers["user"] = user
-    if machine:
-        layers["machine"] = machine
+    rec = None if inv.target == "api" else state["record"]
+    # 层构造的唯一实现点在 `schema.build_layers`（与 `config get/ls` 共用）
+    layers, dropped = schema.build_layers(
+        defs, settings, is_model=rec is not None,
+        rec_user=None if rec is None else rec.user,
+        registered_port=None if rec is None else store.model_port(rec),
+        gateway_port=ctx.gateway_port,
+        gateway_token_env=getattr(ctx, "gateway_token_env", ""))
     venv_py = os.path.join(ctx.venv, "bin", "python3") if getattr(ctx, "venv", "") else ""
     if venv_py and not os.path.exists(venv_py):
         venv_py = ""                           # venv 没建成 ⇒ 回落（§0.4.2）
@@ -241,7 +219,7 @@ def _v_config(state, inv, deps):
         bad = schema.check_domain(k, val, defs)
         if bad:
             return Refused(6, "config.invalid", key=k, kind=bad)
-    state.update(cfg=cfg, tables=tv, dropped=sorted(set(dropped)))
+    state.update(cfg=cfg, tables=tv, dropped=dropped)
     return None
 
 

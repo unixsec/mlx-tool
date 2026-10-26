@@ -196,6 +196,58 @@ class ServiceConfig:
         return f"ServiceConfig({self.service!r}, {self.values!r})"
 
 
+def build_layers(defs, settings, is_model, rec_user=None, registered_port=None,
+                 gateway_port=None, gateway_token_env="", runtime=True):
+    # type: (dict, dict, bool, object, object, object, str, bool) -> tuple
+    """`effective` 的输入层 —— **全项目唯一的层构造点**（纯函数，不读盘）。
+
+    `svc._v_config`（`up` 的求值点）与 `config get/ls/validate/diff` 此前各有一份
+    层构造：读侧只按「键在不在配置域」筛，缺登记端口、缺网关的 cli 层、不看
+    `level` 列 —— 同一个键两个命令两个答案（`config get <模型> --key=port` 报
+    8100，`up` 用登记端口）。两份实现必然漂移，所以合并成这一份。
+
+    层序（低→高）：出厂默认 < machine < user < cli。
+      · machine = settings 里 scope==user 且 level∈(global,both) 的键；
+                  模型目标**不吃全局 `port`**，改用注册表登记端口
+      · user    = 模型记录 user 段里 scope==user 且 level∈(model,both) 的键
+      · cli     = 仅网关（`is_model` 假）且 `runtime`：`ctx.gateway_port`，
+                  以及 shell 里显式给的 `MLX_GATEWAY_TOKEN`（→ `api.token`）。
+                  `runtime=False` 给 set/unset 回读与 export：它们说的是**落盘状态**，
+                  不该把进程环境当成用户设过的值。
+    返回 `(layers, dropped)`；`dropped` = 被忽略的表外键（已退役的键）。
+    """
+    dropped = sorted(k for k in settings if k not in defs)
+    machine = {k: v for k, v in settings.items()
+               if k in defs and defs[k]["scope"] == "user"
+               and defs[k]["level"] in ("global", "both")
+               and not (is_model and k == "port")}
+    layers = {}
+    if not is_model:
+        if runtime:
+            layers["cli"] = {}
+            if gateway_port is not None:
+                layers["cli"]["port"] = gateway_port
+            if gateway_token_env:
+                layers["cli"]["api.token"] = gateway_token_env
+    else:
+        if registered_port is not None:
+            machine["port"] = int(registered_port)
+        user = {}
+        for k in list(rec_user or {}):
+            d = defs.get(k)
+            if d is None:
+                if k not in ("repo", "type"):       # 非配置字段（repo）与旧字段（type）
+                    dropped.append(k)
+                continue
+            if d["scope"] == "user" and d["level"] in ("model", "both"):
+                user[k] = rec_user[k]
+        if user:
+            layers["user"] = user
+    if machine:
+        layers["machine"] = machine
+    return layers, sorted(set(dropped))
+
+
 def effective(service, layers, venv_python="", defaults=None):
     # type: (str, dict, str, dict) -> ServiceConfig
     """把分层配置合成生效值。**纯函数**：同样入参任意次调用返回逐字节相同。

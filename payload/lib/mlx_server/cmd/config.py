@@ -81,41 +81,26 @@ def _factory(ctx, deps):
     return out
 
 
-def _layers(ctx, target, deps=None):
-    # type: (object, str) -> dict
-    """三级链的两个中间层。**读侧此前恒为空** —— `inv.args["layers"]` 这个键
-    全项目没有任何地方写过，于是 `schema.effective` 永远只返回出厂默认值，
-    `config get` 的「来源」列恒为 `default`，用户设什么都读不回来。
+def _layers(ctx, target, deps=None, runtime=False):
+    # type: (object, str, dict, bool) -> dict
+    """`schema.effective` 的输入层。**不自己构造** —— 转给 `schema.build_layers`，
+    与 `up` 的求值点（`svc._v_config`）是同一份实现；此前两处各一份，读侧缺登记端口、
+    缺网关 cli 层、不看 `level`，于是 `config get` 与 `up` 对同一个键各说各的。
 
-    层序（低→高）：`DEFAULTS < machine < user < cli`。这里产出：
-      · `machine` ← `settings.json`（全局设置）
-      · `user`    ← 目标模型记录的 user 段（per-model 覆盖全局，`02a:575`）
-    只取配置域里有的键 —— 记录的 user 段还装着 `repo` / `type`，
-    它们不是配置键，混进去会让 `effective` 抛未知键。
+    `runtime=True`（get/ls/validate/diff）把进程环境带来的值（网关端口、
+    `MLX_GATEWAY_TOKEN`）算进去，来源标 `cli` —— 那就是 `up api` 会用的值；
+    set/unset 回读与 export 用 `runtime=False`，说的是落盘状态。
     """
-    # **筛键用的是配置域（来自 `schema.tsv`），不是硬编码的 DEFAULTS**。
-    # 用后者的话，表里新加的键（`draft_model` / `fit.*` / `api.bind`）会在这里
-    # 被静默滤掉 —— `config set` 写进去了，回读却说「来自 default」。
-    # 这是「建了表却没让求值器用表」的第二处，与 `effective` 那处同源。
-    domain = _domain(ctx, deps)
-    out = {}
-    glob = {k: v for k, v in store.load_settings(ctx).items() if k in domain}
+    defs = _defs(ctx, deps)
     rec = store.load(ctx, store.MODELS).by_id(target) if target else None
-    if rec is not None:
-        # 与 `svc._v_config`（`up` 的求值点）同一份 machine 层规则：模型目标
-        # **不吃全局 `port` 设置**，端口来自注册表登记。此前这里没有这一条，
-        # `config get <模型> --key=port` 报 8100/default，而 `up` 用的是登记端口。
-        glob.pop("port", None)
-        port = store.model_port(rec)
-        if port is not None:
-            glob["port"] = int(port)
-    if glob:
-        out["machine"] = glob
-    if rec is not None:                  # rec 仅在有 target 且登记存在时非 None
-        per = {k: v for k, v in rec.user.items() if k in domain}
-        if per:
-            out["user"] = per
-    return out
+    layers, _dropped = schema.build_layers(
+        defs, store.load_settings(ctx), is_model=rec is not None,
+        rec_user=None if rec is None else rec.user,
+        registered_port=None if rec is None else store.model_port(rec),
+        gateway_port=getattr(ctx, "gateway_port", None),
+        gateway_token_env=getattr(ctx, "gateway_token_env", ""),
+        runtime=runtime)
+    return layers
 
 
 def run(ctx, stack, inv, deps=None):
@@ -133,7 +118,8 @@ def run(ctx, stack, inv, deps=None):
         # 目标是键名（`config set port ...`）还是模型 id（`config set qwen ...`）——
         # 用**配置域**判，不用硬编码 DEFAULTS（表里新加的键会被误判成模型 id）
         _dom = _domain(ctx, deps)
-        layers = _layers(ctx, inv.target if inv.target not in _dom else None, deps)
+        layers = _layers(ctx, inv.target if inv.target not in _dom else None, deps,
+                         runtime=True)
     if inv.verb == "ls":
         cfg = schema.effective(inv.target or "api", layers, defaults=_factory(ctx, deps))
         # 表外键（spec §2.2：生效配置里被丢弃的那些）要看得见 —— 否则用户设过的
@@ -311,7 +297,11 @@ def run(ctx, stack, inv, deps=None):
     if inv.verb == "export":
         # **肯定白名单**（`02:1431`）：`exportable == yes` 且 `secret == no`。
         # 两个条件缺一不可 —— 机密即使标了 exportable 也不导出。
-        cfg = schema.effective(inv.target or "api", layers, defaults=_factory(ctx, deps))
+        # export 说的是**落盘状态**：不带进程环境层（网关端口 / 环境令牌）
+        cfg = schema.effective(
+            inv.target or "api",
+            _layers(ctx, inv.target if inv.target not in _domain(ctx, deps) else None, deps),
+            defaults=_factory(ctx, deps))
         defs = _defs(ctx, deps)
         out, skipped = {}, []
         for key in sorted(cfg.values):
