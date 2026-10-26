@@ -706,3 +706,50 @@ def test_dripping_body_upload_hits_total_deadline(payload, sys_py):
     assert got["line"] == "HTTP/1.1 408 Request Timeout", f"滴灌超过总时限应 408：{got}"
     assert got["elapsed"] < 3, f"应在时限附近被切断，而不是等到客户端自己超时：{got}"
     assert got["after"] == 0 and got["logged"], f"切断后预算退还并记事件：{got}"
+
+
+REUSE = PRE + r"""
+srv, port = start()
+st = raw_request(port, ("GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").encode())[0]
+time.sleep(0.2)                          # 服务端先关连接 ⇒ 本端口留下 TIME_WAIT
+srv.shutdown(); srv.server_close()
+try:
+    srv2 = GatewayServer(("127.0.0.1", port), make_handler(g))
+    rebound = True
+    srv2.server_close()
+except OSError as e:
+    rebound = "errno %s" % e.errno
+print(json.dumps({"first": st, "rebound": rebound, "flag": GatewayServer.allow_reuse_address}))
+"""
+
+
+def test_restart_rebinds_the_same_port_immediately(payload, sys_py):
+    """终审 D I-4（承接 A12）：`allow_reuse_address` 关掉后，处理过请求的网关关闭后立刻在同端口
+    重绑会 errno 48 —— `mlx restart api` 必然失败（2026-09-15 实测）。"""
+    got = run_floor(payload, sys_py, REUSE, with_gateway=True, TOK=TOK)
+    assert "200" in got["first"], got
+    assert got["rebound"] is True, f"同端口立刻重绑失败：{got}"
+
+
+CL_DIGITS = PRE + r"""
+srv, port = start()
+def post_cl(cl, body):
+    head = ("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+            "Content-Type: application/json\r\nConnection: close\r\nContent-Length: %s\r\n\r\n" % cl).encode()
+    return raw_request(port, head, body)[0]
+B = b'{"model":"qwen"}\n'
+out = {"d20": post_cl("0" * 18 + "17", B), "d21": post_cl("0" * 19 + "17", B),
+       "d5000": post_cl("9" * 5000, B)}
+out["no_dict"] = not hasattr(g, "__dict__")
+print(json.dumps(out))
+"""
+
+
+def test_content_length_digit_cap_boundary_and_gateway_slots(payload, sys_py):
+    """终审 D（承接 A3）：`Content-Length` 的 20 位长度门 —— 20 位的合法值放行，21 位与 5000 位拒；
+    整个门删掉、或位数改大，21 位样本都会走到 413/正常处理而不是 400。
+    另承接 A19：`Gateway` 有 `__slots__`（请求处理路径不能给它挂新属性）。"""
+    got = run_floor(payload, sys_py, CL_DIGITS, with_gateway=True, TOK=TOK)
+    assert "400" not in got["d20"], f"20 位（含前导零）的合法值应放行：{got}"
+    assert "400" in got["d21"] and "400" in got["d5000"], f"超过 20 位应 400：{got}"
+    assert got["no_dict"] is True, "Gateway 必须保留 __slots__"

@@ -52,7 +52,7 @@ PORT = up.server_address[1]
 
 def run(mode, keepalive_sec=0.5, probe_sec=0.1, disconnect_after=None, write_fails_after=None):
     client, peer = socket.socketpair()
-    got = {"heads": [], "chunks": b"", "keepalives": 0}
+    got = {"heads": [], "chunks": b"", "keepalives": 0, "ka_before_head": 0}
     t0 = time.monotonic()
     def on_head(head):
         got["heads"].append(head[0] if head[0] != "error" else ["error", head[1], head[2]])
@@ -62,6 +62,8 @@ def run(mode, keepalive_sec=0.5, probe_sec=0.1, disconnect_after=None, write_fai
         got["chunks"] += chunk
     def keepalive():
         got["keepalives"] += 1
+        if not got["heads"]:
+            got["ka_before_head"] += 1
     if disconnect_after is not None:
         threading.Timer(disconnect_after, peer.close).start()
     res = R.relay(lambda reg: R.open_upstream(PORT, "/v1/chat/completions", {"mode": mode}, register=reg),
@@ -74,7 +76,8 @@ def run(mode, keepalive_sec=0.5, probe_sec=0.1, disconnect_after=None, write_fai
     except OSError:
         pass
     return {"outcome": res["outcome"], "heads": got["heads"], "chunks": got["chunks"].decode(),
-            "keepalives": got["keepalives"], "elapsed": round(elapsed, 2), "bytes": res["bytes"]}
+            "keepalives": got["keepalives"], "ka_before_head": got["ka_before_head"],
+            "elapsed": round(elapsed, 2), "bytes": res["bytes"]}
 r = {}
 r["ok"] = run("ok")
 r["quiet"] = run("quiet", keepalive_sec=0.4)
@@ -85,6 +88,20 @@ r["upstream_saw_close"] = "endless" in EVENTS and EVENTS["endless"] - t_disc < 2
 r["write_fail"] = run("endless", write_fails_after=0.3)
 r["slow_head_disconnect"] = run("slow_head", disconnect_after=0.3)
 r["bad"] = run("bad")
+# 上游 1.5 s 才回响应头（mlx_lm 排队），保活间隔 0.3 s：头之前一行保活都不得发 ——
+# server 的 keepalive 直接写 wfile，此时还没 send_response，客户端会把 `: keepalive` 当状态行
+r["slow_head_ka"] = run("slow_head", keepalive_sec=0.3)
+# 出厂保活间隔（不传 keepalive_sec）的行为：时钟放大 100 倍，上游静默 1.3 s 真实时间 ≈ 130 s，
+# 按 15 s 一行约 8 行；常量若被改成 30 s 只剩约 4 行
+_t0 = time.monotonic()
+def fast_clock():
+    return (time.monotonic() - _t0) * 100.0
+_ka = []
+_c, _p = socket.socketpair()
+R.relay(lambda reg: R.open_upstream(PORT, "/v1/chat/completions", {"mode": "quiet"}, register=reg),
+        lambda h: None, lambda c: None, lambda: True, lambda: _ka.append(1), probe_sec=0.01, clock=fast_clock)
+_c.close(); _p.close()
+r["default_ka"] = len(_ka)
 r["abort"] = run("abort")
 r["failed"] = R.relay(lambda reg: R.open_upstream(1, "/x", {}, register=reg), lambda h: None, lambda c: None,
                       lambda: True, None, probe_sec=0.05)
@@ -117,6 +134,10 @@ def test_relay_keepalive_disconnect_and_errors(payload, sys_py):
     assert got["abort"]["outcome"] == "upstream_aborted"
     assert got["failed"] == ["upstream_failed", "failed"]
     assert got["alive"] == [True, False]
+    sk = got["slow_head_ka"]
+    assert sk["outcome"] == "ok" and sk["ka_before_head"] == 0 and sk["heads"] == ["stream"], \
+        f"响应头到达之前绝不能发保活：{sk}"
+    assert 6 <= got["default_ka"] <= 10, f"出厂保活间隔应为 15 s（≈130 s 静默约 8 行）：{got['default_ka']}"
 
 
 PROG2 = r"""
