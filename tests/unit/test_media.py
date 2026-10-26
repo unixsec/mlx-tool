@@ -182,6 +182,13 @@ fresh = store.new_dir(); open(os.path.join(fresh, "1.mp4"), "wb").write(b"x")
 past = time.time() - 7200
 os.utime(old, (past, past))
 out["sweep"] = [store.sweep(), os.path.exists(old), os.path.exists(fresh)]
+# 媒体根里一个指向别处、mtime 很旧的符号链接：清扫不得跟随它删目标目录里的文件
+victim = tempfile.mkdtemp(); open(os.path.join(victim, "keep.txt"), "w").write("k")
+link = os.path.join(store.root, "deadbeef")
+os.symlink(victim, link)
+os.utime(victim, (past, past)); os.utime(link, (past, past), follow_symlinks=False)
+store.sweep()
+out["sweep_symlink"] = os.path.exists(os.path.join(victim, "keep.txt"))
 print(json.dumps(out, ensure_ascii=False))
 """
 
@@ -272,3 +279,4 @@ def test_media_processing(payload, sys_py):
             f"{key}：网关放行谓词不得比后端宽，实得 {remote}"
     assert got["budget_pair"] == [104, 0], "reserve 与 release 必须成对：请求结束后在途字节归零"
     assert got["sweep"] == [1, False, True], "只清扫超过 1 小时的遗留目录"
+    assert got["sweep_symlink"] is True, "清扫不跟随符号链接（lstat）"

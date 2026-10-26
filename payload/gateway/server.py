@@ -5,6 +5,7 @@
 所有判定在 `Gateway`（`precheck` / `prepare` / `handle`）；本层只做 HTTP 搬运、
 流式直出（经 `relay`：`read1`、保活、断连即取消上游）与连接生命周期。
 """
+import contextlib
 import http.client
 import json
 import os
@@ -12,6 +13,7 @@ import socket
 import ssl
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +26,9 @@ from .app import log_event
 DEFAULT_MAX_BODY_MB = 256          # `api.max_body_mb` 出厂值（spec D22：多图与长上下文请求体）
 _HANDSHAKE_SEC = 10.0
 _MAX_CL_DIGITS = 20                # `Content-Length` 最长位数，见 `_parse_content_length`
+BODY_IDLE_SEC = 60.0               # 读请求体时两次到货之间最长静默；超时 ⇒ 408、退预算、关连接
+LINGER_SEC = 2.0                   # 体未读即拒：回复后最多排空这么久，再关（见 `_lingering_close`）
+LINGER_MAX_BYTES = 64 * 1024 * 1024
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -154,6 +159,8 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
         server_version = "mlx_server-gateway"
 
         def setup(self):
+            self._linger = False          # 本连接以「体未读即拒」收尾 ⇒ 关之前先排空
+            self._pre_ticket = None       # `handle_expect_100` 发 100 前预留的在途预算
             if tls_context is not None:
                 # **握手在本连接的工作线程里做**：放在 accept 线程里，一个只连不发的明文连接
                 # 就能让网关停止接受新连接
@@ -161,6 +168,51 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.request = tls_context.wrap_socket(self.request, server_side=True)
                 self.request.settimeout(None)
             super().setup()
+
+        def handle(self):
+            try:
+                super().handle()
+            finally:
+                if self._pre_ticket is not None:     # 预留了却没走到 do_POST（解析失败、断开）
+                    self._pre_ticket.close()
+                    self._pre_ticket = None
+                if self._linger:
+                    self._lingering_close()
+
+        def _lingering_close(self):
+            """**体没读就回了最终状态**时的收尾：先 `shutdown(SHUT_WR)` 把回复连同 FIN 发出去，
+            再有界地读掉客户端还在发的体，然后才关（终审 B I2）。
+
+            直接 close 时接收缓冲里还有未读字节，内核回 RST —— 还在 `send` 体的客户端
+            （Python `BrokenPipeError`、curl `Connection reset`）读不到 503 与 `Retry-After`，
+            最该按 `Retry-After` 退避的大体请求偏偏拿不到它。上限 `LINGER_SEC` / `LINGER_MAX_BYTES`。
+            """
+            sock = self.connection
+            try:
+                self.wfile.flush()
+                sock.shutdown(socket.SHUT_WR)
+            except (OSError, ValueError):
+                return
+            deadline = time.monotonic() + LINGER_SEC
+            got = 0
+            while got < LINGER_MAX_BYTES:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                try:
+                    sock.settimeout(left)
+                    chunk = sock.recv(65536)
+                except (OSError, ValueError):
+                    break
+                if not chunk:
+                    break
+                got += len(chunk)
+
+        def _reject_unread(self, status, body):
+            """体还在 socket 里时回最终状态：连接不可复用，且以 lingering close 收尾。"""
+            self.close_connection = True
+            self._linger = True
+            return self._reply(status, body)
 
         def _framing_defect(self):
             # type: () -> object
@@ -208,8 +260,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             if bad is None:
                 return True
             # 头块不可信 ⇒ 体的边界也就不可信：这条连接不能再复用
-            self.close_connection = True
-            self._reply(400, {"error": {"message": bad, "type": "invalid_request"}})
+            self._reject_unread(400, {"error": {"message": bad, "type": "invalid_request"}})
             return False
 
         def log_message(self, fmt, *args):
@@ -331,8 +382,23 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             n, _err = self._parse_content_length()      # 上面已判过，这里必然合法
             if n == 0:
                 return None, None
+            # **读体有静默上限**（终审 B I1）：声明大体后一个字节都不发（合盖、断 Wi-Fi 不发 FIN，
+            # 或恶意）的连接此前永远阻塞在这里，已计入的在途预算随之永久占住 —— 8 条就能让
+            # 整个网关一直 503。超时 ⇒ 408 并关连接，预算由 do_POST 的 finally 退还。
+            self.connection.settimeout(BODY_IDLE_SEC)
             try:
-                return json.loads(self.rfile.read(n)), None
+                raw = self.rfile.read(n)
+            except socket.timeout:
+                log_event("warn", "body_read_timeout", peer=str(self.client_address[0]),
+                          declared=n)
+                self.close_connection = True
+                return None, (408, {"error": {"message": "request body not received in time",
+                                              "type": "invalid_request"}})
+            finally:
+                with contextlib.suppress(OSError, ValueError):
+                    self.connection.settimeout(None)
+            try:
+                return json.loads(raw), None
             except ValueError:
                 return None, (400, {"error": {"message": "body is not valid JSON",
                                               "type": "invalid_request"}})
@@ -379,19 +445,36 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
         def handle_expect_100(self):
             """默认实现在这里直接回 100 Continue，等于邀请未鉴权 / 被拒来源的客户端把体发过来
             （复检 Minor 6）。先跑 `precheck`：不通过就直接回绝，不发 100 Continue。"""
+            # 本方法在 `super().parse_request()` **内部**被调用，早于 `parse_request` 里的
+            # 分帧不变式：先在这里验，免得在不可信的头上跑 precheck、发出 100（终审 B m2）
+            bad = self._framing_defect()
+            if bad is not None:
+                self._reject_unread(400, {"error": {"message": bad, "type": "invalid_request"}})
+                return False
             _peer_class, _path, _query, _hit, early = gw.precheck(
                 self.command, self.path, dict(self.headers), self.client_address[0])
             if early:
-                self.close_connection = True
-                self._reply(*early)
+                self._reject_unread(*early)
                 return False
             # **体积也要在这里判**（收尾评审 Important 4）：`Content-Length` 此刻
             # 已经知道了，而 `100 Continue` 的意思是「把体发过来吧」——
             # 对一个必然回 413 的体发出这句邀请，等于让客户端白传一遍。
             err = self._declared_body_error()
             if err:
-                self._reply(*err)        # close_connection 已由 _declared_body_error 置位
+                self._reject_unread(*err)
                 return False
+            if self.command == "POST":
+                # **先预留在途预算、再发 100**（终审 B I2）：预算满时直接给 503 + Retry-After，
+                # 不邀请客户端把体传上来再被拒。预留交给 do_POST，不重复计费
+                n, _err = self._parse_content_length()
+                ticket = gw.new_ticket()
+                try:
+                    ticket.charge(n)
+                except media.MediaError as exc:
+                    ticket.close()
+                    self._reject_unread(*exc.reply())
+                    return False
+                self._pre_ticket = ticket
             return super().handle_expect_100()
 
         def do_POST(self):       # noqa: N802
@@ -399,21 +482,21 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             _peer_class, _path, _query, _hit, early = gw.precheck(
                 "POST", self.path, dict(self.headers), peer)
             if early:
-                self.close_connection = True       # 请求体没读，这条连接不能再复用
-                return self._reply(*early)
+                return self._reject_unread(*early)  # 请求体没读，这条连接不能再复用
             # 裁决 M3：先按头判 Transfer-Encoding / Content-Length / 413，再把声明的体积计入在途预算
             err = self._declared_body_error()
             if err:
-                return self._reply(*err)           # close_connection 已由 _declared_body_error 置位
+                return self._reject_unread(*err)
             n, _err = self._parse_content_length()
             # Ticket 覆盖请求的**全部**退出路径：入站管线已落盘/计费后才抛错、中继、聚合、客户端断开
-            ticket = gw.new_ticket()
+            ticket, self._pre_ticket = self._pre_ticket, None
             try:
-                try:
-                    ticket.charge(n)
-                except media.MediaError as exc:
-                    self.close_connection = True   # 体没读
-                    return self._reply(*exc.reply())
+                if ticket is None:
+                    ticket = gw.new_ticket()
+                    try:
+                        ticket.charge(n)
+                    except media.MediaError as exc:
+                        return self._reject_unread(*exc.reply())   # 体没读
                 body, err = self._read_body()
                 if err:
                     return self._reply(*err)
@@ -559,7 +642,11 @@ def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0,
 
     if gw.nets is not None:
         gw.nets.refresh()
-    gw.media_store.sweep()                              # 上次崩溃留下的临时媒体
+    try:
+        gw.media_store.sweep()                          # 上次崩溃留下的临时媒体
+    except Exception as e:                              # noqa: BLE001
+        # 与刷新线程里同一调用同等对待：媒体根目录不可读不该让网关起不来
+        log_event("error", "media_sweep_failed", detail=str(e)[:200])
     gw.refresh_routes()
     t = threading.Thread(target=refresher, daemon=True)
     t.start()

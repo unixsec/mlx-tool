@@ -10,6 +10,7 @@ import binascii
 import contextlib
 import copy
 import os
+import stat
 import threading
 import time
 import uuid
@@ -116,7 +117,8 @@ class Store:
         for name in names:
             path = os.path.join(self.root, name)
             try:
-                if os.path.isdir(path) and now - os.stat(path).st_mtime > age_sec:
+                st = os.lstat(path)                 # 不跟随符号链接：链接指向的目录不归本 Store 管
+                if stat.S_ISDIR(st.st_mode) and now - st.st_mtime > age_sec:
                     self.remove_dir(path)
                     removed += 1
             except OSError:

@@ -364,6 +364,8 @@ SHAPES = {
     "bad_line_no_colon": START + "X-Bad\r\nContent-Length: %d\r\n\r\n" % len(SMUG),
     "space_before_colon": START + "Content-Length : %d\r\n\r\n" % len(SMUG),
     "obs_fold_swallow": START + "X-Fold: a\r\n Content-Length: %d\r\n\r\n" % len(SMUG),
+    # handle_expect_100 在 parse_request 内部、早于分帧不变式运行：不可信的头上不得先发 100（终审 B m2）
+    "obs_fold_expect": START + "Expect: 100-continue\r\nX-Fold: a\r\n Content-Length: %d\r\n\r\n" % len(SMUG),
 }
 out = {k: responses(v.encode(), SMUG) for k, v in SHAPES.items()}
 out["wellformed"] = responses((START + "Content-Length: 17\r\n\r\n").encode(),
@@ -387,7 +389,7 @@ def test_malformed_header_block_cannot_smuggle_a_second_request(payload, sys_py)
     良性对照必须一起断言：这道新判据不能把格式正确的请求也打成 400。
     """
     got = run_floor(payload, sys_py, FRAMING, with_gateway=True, timeout=60, TOK=TOK)
-    for shape in ("bad_line_no_colon", "space_before_colon", "obs_fold_swallow"):
+    for shape in ("bad_line_no_colon", "space_before_colon", "obs_fold_swallow", "obs_fold_expect"):
         assert got[shape] == ["400"], (
             f"{shape}：一条请求进、{len(got[shape])} 条响应出 ⇒ 响应错位：{got[shape]}")
     assert len(got["wellformed"]) == 1 and got["wellformed"][0] != "400", (
@@ -506,3 +508,152 @@ def test_expect_100_not_granted_for_a_body_already_over_the_cap(payload, sys_py)
     got = run_floor(payload, sys_py, EXPECT100_OVERSIZE, with_gateway=True, TOK=TOK)
     assert got["status_lines"] == ["HTTP/1.1 413"], (
         f"超限的体不该先拿到 100 Continue：{got['status_lines']}")
+
+
+STALL_BODY = PRE + r"""
+import io
+import gateway.server as server_mod
+server_mod.BODY_IDLE_SEC = 0.5           # 缩短读体静默上限，不用真等 60 s
+logs = io.StringIO(); sys.stderr = logs
+g = Gateway(None, facade, token="@TOK@", limits={"inflight_max_mb": 64}); g.refresh_routes()
+srv, port = start()
+def open_stalled(mb):
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.sendall(("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+               "Content-Type: application/json\r\nContent-Length: %d\r\n\r\n" % (mb * 1024 * 1024)).encode())
+    return s
+a, b = open_stalled(32), open_stalled(32)
+time.sleep(0.2)
+during = g.budget.used
+def first_line(s):
+    try:
+        return s.recv(256).decode("latin-1").split("\r\n")[0]
+    except OSError as e:
+        return type(e).__name__
+lines = [first_line(a), first_line(b)]
+time.sleep(0.2)
+after = g.budget.used
+small = raw_request(port, ("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+                           "Content-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n").encode(),
+                    b"{}")[0]
+print(json.dumps({"during": during, "after": after, "lines": lines, "small": small,
+                  "logged": "body_read_timeout" in logs.getvalue()}))
+"""
+
+
+def test_stalled_body_upload_releases_budget(payload, sys_py):
+    """终审 B I1：先计费、后读体，而读体没有超时 —— 声明大体后静止的连接永久占住在途预算，
+    8 条就能让整个网关一直 503。读体静默超时 ⇒ 408、关连接、预算退回。"""
+    got = run_floor(payload, sys_py, STALL_BODY, with_gateway=True, timeout=60, TOK=TOK)
+    assert got["during"] == 64 * 1024 * 1024, f"两条连接应各计入 32 MB：{got}"
+    assert got["lines"] == ["HTTP/1.1 408 Request Timeout"] * 2, f"静止的上传应收到 408：{got}"
+    assert got["after"] == 0, f"超时后在途预算必须退回 0：{got}"
+    assert "503" not in got["small"], f"预算退回后的正常请求不该再 503：{got}"
+    assert got["logged"], "超时要记 body_read_timeout"
+
+
+LINGER = PRE + r"""
+import http.client
+g = Gateway(None, facade, token="@TOK@", limits={"inflight_max_mb": 1}); g.refresh_routes()
+srv, port = start()
+BIG = b'{"model":"qwen","pad":"' + b"x" * (20 * 1024 * 1024) + b'"}'
+def post(token, body, expect=False):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    h = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    try:
+        c.request("POST", "/v1/chat/completions", body=body, headers=h)
+        r = c.getresponse()
+        return [r.status, r.getheader("Retry-After")]
+    except OSError as e:
+        return [type(e).__name__, None]
+    finally:
+        c.close()
+out = {"busy_big": post("@TOK@", BIG), "unauth_big": post("wrong", BIG)}
+# Expect 路径：预算满时直接 503，不先发 100 Continue
+s = socket.create_connection(("127.0.0.1", port), timeout=3)
+s.sendall(("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+           "Content-Type: application/json\r\nContent-Length: %d\r\n"
+           "Expect: 100-continue\r\n\r\n" % (2 * 1024 * 1024)).encode())
+buf = b""
+try:
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        buf += chunk
+except OSError:
+    pass
+s.close()
+out["expect_lines"] = re.findall(r"HTTP/1\.[01] \d{3}", buf.decode("latin-1"))
+out["expect_retry_after"] = "Retry-After: 5" in buf.decode("latin-1")
+# 预算够时 Expect 路径照常 100 → 体 → 回复，而且只计一次费（回复后预算回 0）
+g2 = Gateway(None, facade, token="@TOK@", limits={"inflight_max_mb": 64}); g2.refresh_routes()
+srv2 = GatewayServer(("127.0.0.1", 0), make_handler(g2))
+threading.Thread(target=srv2.serve_forever, daemon=True).start()
+s = socket.create_connection(("127.0.0.1", srv2.server_address[1]), timeout=3)
+body = b'{"pad":"x"}'
+s.sendall(("POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer @TOK@\r\n"
+           "Content-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n"
+           "Expect: 100-continue\r\n\r\n" % len(body)).encode())
+first = s.recv(4096)
+s.sendall(body)
+rest = b""
+try:
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        rest += chunk
+except OSError:
+    pass
+s.close()
+time.sleep(0.1)
+out["expect_ok"] = re.findall(r"HTTP/1\.[01] \d{3}", (first + rest).decode("latin-1"))
+out["expect_ok_budget"] = g2.budget.used
+print(json.dumps(out))
+"""
+
+
+def test_early_rejection_reaches_a_client_still_sending_its_body(payload, sys_py):
+    """终审 B I2：体没读就回 503/401 后直接 close，接收缓冲里的残余让内核回 RST，
+    还在发体的客户端读不到状态码与 `Retry-After`（实测 20 MB 体 → BrokenPipeError）。
+    Expect 路径此前不看预算：先发 100，客户端开传，再 503 + RST。"""
+    got = run_floor(payload, sys_py, LINGER, with_gateway=True, timeout=60, TOK=TOK)
+    assert got["busy_big"] == [503, "5"], f"预算满时大体请求应拿到 503 + Retry-After：{got}"
+    assert got["unauth_big"][0] == 401, f"错误令牌的大体请求应拿到 401：{got}"
+    assert got["expect_lines"] == ["HTTP/1.1 503"] and got["expect_retry_after"], \
+        f"Expect 路径预算满时应直接 503（不发 100）：{got}"
+    assert got["expect_ok"][0] == "HTTP/1.1 100" and len(got["expect_ok"]) == 2, \
+        f"预算够时 Expect 路径照常：{got}"
+    assert got["expect_ok_budget"] == 0, f"Expect 预留只计一次费且回复后退还：{got}"
+
+
+SWEEP_FAIL = PRE + r"""
+import io
+import gateway.server as server_mod
+from gateway import media as M
+logs = io.StringIO(); sys.stderr = logs
+out_buf = io.StringIO(); real_stdout = sys.stdout; sys.stdout = out_buf
+def boom(self, *a, **k):
+    raise PermissionError(13, "denied")
+M.Store.sweep = boom
+sock = socket.socket(); sock.bind(("127.0.0.1", 0)); free = sock.getsockname()[1]; sock.close()
+t = threading.Thread(target=server_mod.serve, args=(g,), kwargs={"port": free, "refresh_sec": 60}, daemon=True)
+t.start()
+deadline = time.time() + 5
+status = None
+while time.time() < deadline and status is None:
+    try:
+        status = call("http://127.0.0.1:%d/healthz" % free, timeout=1)
+    except Exception:
+        time.sleep(0.1)
+sys.stdout = real_stdout
+print(json.dumps({"status": status, "logged": "media_sweep_failed" in logs.getvalue()}))
+"""
+
+
+def test_startup_sweep_failure_does_not_block_serving(payload, sys_py):
+    """终审 B m7：启动时的 `media_store.sweep()` 没包 try —— 媒体根目录不可读就起不来，
+    而刷新线程里的同一调用是包了的。"""
+    got = run_floor(payload, sys_py, SWEEP_FAIL, with_gateway=True, timeout=60, TOK=TOK)
+    assert got == {"status": 200, "logged": True}, f"清扫失败应只记事件，不阻止启动：{got}"
