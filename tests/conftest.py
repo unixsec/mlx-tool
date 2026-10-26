@@ -63,4 +63,15 @@ def _never_touch_real_rc(tmp_path_factory, monkeypatch):
     for name in ("MLX_GATEWAY_TOKEN", "MLX_BACKEND_API_KEY",
                  "MLX_ROOT_CODE", "MLX_ROOT_DATA", "MLX_ROOT_WEIGHTS"):
         monkeypatch.delenv(name, raising=False)
+    # **开发者的终端同样不得进入测试**：产品的确认只读 `/dev/tty`，`stdin=DEVNULL`
+    # 挡不住它。在交互终端里跑时子进程继承控制终端，提示会弹到开发者屏幕上并真等输入
+    # （2026-10-26 实测：卸载用例卡到超时，`rm --weights` 被键入的 qwen 确认）。
+    # 默认让每个子进程自成会话；显式传了 `start_new_session` 的（pty 用例）不动。
+    real_init = subprocess.Popen.__init__
+
+    def _detached_init(self, *args, **kwargs):
+        kwargs.setdefault("start_new_session", True)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", _detached_init)
     yield
