@@ -55,6 +55,7 @@ mlx check                # 12 项检查，应该全过
 
 安装器会建推理 venv 并装 `huggingface_hub`、`mlx`、`mlx-lm`、`mlx-vlm`（最后一个会带入 torch，
 第一次装要多等一会儿）；还会生成两把密钥（`backend.api_key` 与 `api.token`），并提示网关默认监听全部网卡。
+可以放心重跑：重装前自动备份配置与模型登记表，结尾自动跑一遍 `mlx check`。
 
 ### 跑一个模型
 

@@ -70,6 +70,7 @@ venv 只服务**下载权重**与**跑推理**这两件事。
 
 ```
 $ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
+== 备份状态文件
 == 建三根
 == 拷载荷
 == 写 constants.env（三根的兜底来源，裁决 R4-3 断口②）
@@ -93,6 +94,14 @@ $ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
 == 校验产物（按 manifest.tsv）
 == 挂 PATH
    ✓ ~/.zshrc（备份 ~/.local/state/mlx_server/backups/.zshrc.20261026-071807）
+== 自检
+  工具版本     1.1.0
+  …
+  ✓ settings_mode  ok
+
+  12 项，12 项通过
+   ✓ 健康检查全部通过
+   · 本次安装日志：~/.local/state/mlx_server/logs/install/20261026-071807.log
 == 完成。**新开一个终端**，或先跑：source ~/.zshrc
 ```
 
@@ -105,6 +114,11 @@ $ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
 - **网关默认对局域网开放**：上面那段 `!!` 警告就是在说这件事；只给本机用就照它给的命令改。
 
 重装时（代码根已有旧版本）第一步是 `== 收敛正在运行的服务（重装前置）`，会先停掉在跑的服务，结尾列出起回来的命令。
+
+**可以放心重跑**：密钥只补空值、PATH 块只留一份；动盘之前把 `settings.json`、`models.jsonl`、`caps.json`
+备份进数据根的 `backups/`（和最近一份内容相同就不再复制，重跑多少次都不会堆出一串一样的备份）；
+每次安装的输出另存到 `logs/install/<时间>.log`；结尾自动跑一遍 `mlx check`（`== 自检`），
+有项不过时附下一步，但不算安装失败。
 
 **PATH 是自动写入的**，不用你手动贴。安装器用 `# >>> mlx_server:mlx >>>` 标记块
 包住它写的行，重装时先删旧块再写新块（永远只有一份），改动前把你的 rc 备份到数据根。
@@ -1161,7 +1175,7 @@ MLX_ROOT_WEIGHTS=<你的权重根> \
 
 **数据不会丢**：升级只替换代码根，注册表、会话、权重都在另外两个根里，原样不动。
 
-升级后跑一次 `mlx check`，十二项应该全绿。
+安装器结尾的 `== 自检` 已经跑过 `mlx check`，十二项应该全绿。
 
 **从 1.0.0 升到 1.1.0** 还有几件事要做，[CHANGELOG](../CHANGELOG.md) 的「升级须知」逐条列了。要点：
 

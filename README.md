@@ -63,6 +63,8 @@ The installer builds the inference venv and installs `huggingface_hub`, `mlx`,
 `mlx-lm` and `mlx-vlm` (the last one pulls in torch, so the first install takes
 a while). It also generates the two secrets (`backend.api_key` and `api.token`)
 and prints a warning that the gateway listens on all interfaces by default.
+It is safe to re-run: it backs up your settings and model registry first and
+finishes by running `mlx check` itself.
 
 ### Run a model
 

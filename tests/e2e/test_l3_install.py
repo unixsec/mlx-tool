@@ -310,6 +310,56 @@ def test_l3_reinstall_when_nothing_running(installed, repo):
     assert "收敛正在运行的服务" in r.stderr and "== 挂 PATH" in r.stderr
 
 
+def test_l3_reinstall_backs_up_state_only_when_changed(installed, repo):
+    """重装前把 settings / 模型登记表 / caps 备份进 `backups/`；**内容没变就不再加一份**。
+
+    一键安装要能反复跑：每跑一次多三份一模一样的备份，几次之后真正有用的那份就找不到了。
+    settings 里有密钥 ⇒ 备份不得比原件更宽（0600）。
+    """
+    code_root, data_root, env = installed
+    backups = data_root / "backups"
+
+    def reinstall():
+        r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+                           capture_output=True, text=True, timeout=60, check=False, env=env)
+        assert r.returncode == 0, f"重装失败：{r.stderr}"
+        return {p.name for p in backups.iterdir()}
+
+    originals = {n: (data_root / n).read_bytes() for n in ("settings.json", "models.jsonl")}
+    first = reinstall()
+    for name, data in originals.items():
+        got = [backups / b for b in first if b.startswith(name + ".")]
+        assert len(got) == 1, f"{name} 应恰好一份备份：{sorted(first)}"
+        assert got[0].read_bytes() == data, f"{name} 的备份与重装前内容不同"
+    st = [backups / b for b in first if b.startswith("settings.json.")][0]
+    assert stat.S_IMODE(st.stat().st_mode) == 0o600, "settings 备份权限比原件宽"
+
+    assert reinstall() == first, "内容没变，重装却又多了备份"
+
+    s = json.loads((data_root / "settings.json").read_text())
+    s["max_concurrency"] = 3
+    (data_root / "settings.json").write_text(json.dumps(s))
+    third = reinstall()
+    added = third - first
+    assert len(added) == 1 and next(iter(added)).startswith("settings.json."), sorted(added)
+
+
+def test_l3_install_writes_own_log_and_self_checks(installed, repo):
+    """安装器**自己**留日志、装完当场自检 —— 不靠调用者记得 `| tee`、记得跑 `mlx check`。"""
+    code_root, data_root, env = installed
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+                       capture_output=True, text=True, timeout=60, check=False, env=env)
+    assert r.returncode == 0, r.stderr
+    assert "== 自检" in r.stderr and "工具版本" in r.stderr and "12 项" in r.stderr, r.stderr
+    m = re.search(r"本次安装日志：(\S+)", r.stderr)
+    assert m, f"没报日志路径：{r.stderr[-500:]}"
+    log = Path(m.group(1))
+    assert log.parent == data_root / "logs" / "install", log
+    text = log.read_text()
+    for marker in ("== 备份状态文件", "== 建三根", "== 挂 PATH", "== 自检"):
+        assert marker in text, f"日志缺 {marker!r}"
+
+
 def test_l3_fresh_install_generates_keys_without_printing_them(tmp_path, repo):
     """spec §6.4 第 4 步与 §5.2：全新安装生成两把密钥、0600、**值不出现在安装器输出里**。"""
     roots = {k: tmp_path / v for k, v in

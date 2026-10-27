@@ -36,6 +36,32 @@ PORT_RANGE="${MLX_PORT_RANGE:-8100-8199}"
 
 say() { printf '%s\n' "$*" >&2; }   # 过程说明走 stderr（INV-17）
 
+# **整次安装留一份日志**（数据根，卸载时保留）。此前要靠调用者 `| tee`，
+# 忘了就没有记录 —— 而重装出问题时第一个要看的就是那次安装说了什么。
+# 只记 stderr：过程说明全在那里，密钥只打印键名（见「生成密钥」段）。
+INSTALL_LOG="$DATA_ROOT/logs/install/$(date +%Y%m%d-%H%M%S).log"
+if mkdir -p "${INSTALL_LOG%/*}" 2>/dev/null && : >> "$INSTALL_LOG" 2>/dev/null; then
+  exec 2> >(tee -a "$INSTALL_LOG" >&2)
+else
+  INSTALL_LOG=""
+fi
+
+# 备份进数据根（卸载时保留 ⇒ 天然可回滚）。**不写 $HOME 根。**
+# 与同名的最近一份备份逐字节相同就不再复制 —— 重装多少次，备份只随内容变化增加。
+# `cp -p` 保留权限：settings.json 是 0600、里面有密钥，备份不能比原件更宽。
+_backup() {                         # _backup <file> → stdout: 备份路径
+  local f="$1" name last
+  name=$(basename "$f")
+  mkdir -p "$DATA_ROOT/backups" || return 1
+  last=$({ ls -1d "$DATA_ROOT/backups/$name".* 2>/dev/null || true; } | tail -n 1)
+  if [ -n "$last" ] && [ -f "$last" ] && cmp -s "$f" "$last"; then
+    echo "$last"; return 0
+  fi
+  last="$DATA_ROOT/backups/$name.$(date +%Y%m%d-%H%M%S)"
+  cp -p "$f" "$last" || return 1
+  echo "$last"
+}
+
 # ── I0 · 重装前先收敛服务（裁决 R3-1）────────────────────────────
 # 必须在动任何盘之前、且 run/ 仍可读时执行。
 STOPPED=""
@@ -56,6 +82,16 @@ if [ -x "$CODE_ROOT/bin/mlx" ] && [ -d "$DATA_ROOT/run" ]; then
     exit 6
   fi
 fi
+
+# ── 备份用户状态（服务已停，文件不会写到一半）──────────────────
+# 安装器本身只「补空值」不覆盖，但 caps refresh 会重写 caps.json，
+# 而 settings / 模型登记表丢了就是用户的配置与模型全丢 —— 动盘前留一份。
+say "== 备份状态文件"
+for _f in settings.json models.jsonl caps.json; do
+  [ -f "$DATA_ROOT/$_f" ] || continue
+  if _b=$(_backup "$DATA_ROOT/$_f"); then say "   ✓ $_f → $_b"
+  else say "!! $_f 备份失败 —— 拒绝继续（数据根不可写？）"; exit 73; fi
+done
 
 say "== 建三根"
 mkdir -p "$CODE_ROOT" "$DATA_ROOT" "$WEIGHTS_ROOT"
@@ -256,10 +292,7 @@ _rc_write() {                       # _rc_write <rc-file>
   local rc="$1" tmp bak nold nnew ndel want
   [ -e "$rc" ] || : > "$rc" 2>/dev/null || { say "   ! 无法创建 $rc"; return 1; }
 
-  # 备份进数据根（卸载时保留 ⇒ 天然可回滚）。**不写 $HOME 根。**
-  mkdir -p "$DATA_ROOT/backups"
-  bak="$DATA_ROOT/backups/$(basename "$rc").$(date +%Y%m%d-%H%M%S)"
-  cp "$rc" "$bak" 2>/dev/null || { say "   ! 备份失败，$rc 保持不动"; return 1; }
+  bak=$(_backup "$rc" 2>/dev/null) || { say "   ! 备份失败，$rc 保持不动"; return 1; }
 
   nold=$(wc -l < "$rc" | tr -d " ")
   # **预期删除的行数**，事先精确算出：本工具标记块的全部行 + 块外每一行
@@ -321,6 +354,19 @@ if [ -n "$STOPPED" ]; then
   say "== 重装前停掉了这些服务，**没有自动起回来**："
   for s in $STOPPED; do say "     mlx up $s"; done
 fi
+
+# ── 自检：装完当场跑一遍健康检查，不等用户自己想起来 ───────────
+# 失败**不使安装失败**：依赖没装上（caps）这类降级前面已经明说过，
+# 这里让它们以检查项的形式再出现一次，附带下一步。
+say "== 自检"
+MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" version >&2 || true
+if MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" check >&2; then
+  say "   ✓ 健康检查全部通过"
+else
+  say "   ! 有检查项未通过（见上，每项附下一步）—— 安装本身已完成"
+fi
+[ -z "$INSTALL_LOG" ] || say "   · 本次安装日志：$INSTALL_LOG"
+
 if [ "$rc_ok" = "1" ]; then
   say "== 完成。**新开一个终端**，或先跑：source $RC_FILES"
 else

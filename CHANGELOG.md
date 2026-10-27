@@ -15,6 +15,7 @@
 - **新配置键**：`modality`（auto / text / vision）、`max_concurrency`（默认 8）
 - `mlx model info` 显示模态依据、模板默认的思考开关与 effort 值域；`model ls` 增「模态」列；`status` 增「后端」「并发」列
 - `mlx model repair` 清除 1.0.0 旧字段与退役配置键
+- **安装器可放心重跑**：动盘前把 `settings.json`、`models.jsonl`、`caps.json` 备份进数据根 `backups/`（与最近一份相同则不重复，shell rc 的备份同样去重）；每次安装输出另存 `logs/install/`；结尾自动跑 `mlx check`
 - **多来源接入**：网关放行本机、同一 Wi-Fi / 有线网段、Parallels / VMware 共享网络的虚拟机（按硬件端口类型与虚拟机网桥判定，VPN 与雷雳网桥拒绝），可用 `api.allow_cidrs` 追加网段
 - **端点**：`/v1/responses`（含 `input_tokens`、按 id 查询 / 删除 / 取消、`input_items`）与 Anthropic `/v1/messages`、`/v1/messages/count_tokens`（多模态后端）；`/v1/completions` 只开给文本后端；路径可省略 `/v1`
 - **CORS**：预检请求在鉴权之前回 204，浏览器里的 Web 客户端可以直接调网关（真正的请求仍要令牌，`POST` 须 `application/json`）
