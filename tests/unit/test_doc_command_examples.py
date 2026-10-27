@@ -50,6 +50,7 @@ _PLACEHOLDERS = {
     "<模型>": "qwen38",
     "<模型id>": "qwen38",
     "<短名>": "qwen38",
+    "<仓库>": "mlx-community/Qwen3-0.6B-4bit",
     "<别的模型>": "llama8b",
     "<服务>": "qwen38",
     "<键>": "port",

@@ -3,8 +3,14 @@
 set -euo pipefail
 
 CODE_ROOT="${MLX_ROOT_CODE:-$HOME/.local/share/mlx_server}"
+# 数据根与权重根以 constants.env 为准（环境变量优先）：装在自定义根上的用户，
+# 「保留：…」报出的必须是他真正的目录，而不是默认值。
+for _k in MLX_ROOT_DATA MLX_ROOT_WEIGHTS; do
+  _v=$(sed -n "s/^${_k}=//p" "$CODE_ROOT/share/constants.env" 2>/dev/null || true)
+  if [ -n "$_v" ]; then eval ": \${$_k:=\$_v}"; fi
+done
 DATA_ROOT="${MLX_ROOT_DATA:-$HOME/.local/state/mlx_server}"
-WEIGHTS_ROOT="${MLX_ROOT_WEIGHTS:-$HOME/lab/models/mlx}"
+WEIGHTS_ROOT="${MLX_ROOT_WEIGHTS:-$HOME/.local/share/mlx_models}"
 say() { printf '%s\n' "$*" >&2; }
 
 # 合法出口只有三个：0 走完 · 5 用户取消 · 6 服务未收敛而拒绝卸载。

@@ -68,12 +68,15 @@ venv 只服务**下载权重**与**跑推理**这两件事。
 
 ### 1.2 装
 
+在源码目录（`git clone` 下来的 `mlx-tool`）里跑：
+
 ```
-$ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
+$ bash deployer/install.sh
 == 备份状态文件
+   · 首次安装，没有要备份的
 == 建三根
 == 拷载荷
-== 写 constants.env（三根的兜底来源，裁决 R4-3 断口②）
+== 写 constants.env
 == 建 venv
    ✓ ~/.local/share/mlx_server/.venv  Python 3.13.x
 == 装推理依赖（失败不影响工具本体）
@@ -95,15 +98,21 @@ $ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
 == 挂 PATH
    ✓ ~/.zshrc（备份 ~/.local/state/mlx_server/backups/.zshrc.20261026-071807）
 == 自检
-  工具版本     1.1.0
-  …
-  ✓ settings_mode  ok
 
-  12 项，12 项通过
-   ✓ 健康检查全部通过
-   · 本次安装日志：~/.local/state/mlx_server/logs/install/20261026-071807.log
-== 完成。**新开一个终端**，或先跑：source ~/.zshrc
+== 安装结果
+  ✓ 版本      1.1.0（已安装）
+  ✓ 自检      12 项，12 项通过
+  ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）
+  · 网关      http://127.0.0.1:8080/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）
+  · 模型      已登记 0 个
+  → 下一步：新开一个终端（或 source ~/.zshrc），然后 mlx model install <短名> --repo=<仓库>
+            <仓库> 在 huggingface.co/mlx-community 挑，例如 mlx-community/Qwen3-0.6B-4bit
+  · 日志      ~/.local/state/mlx_server/logs/install/20261026-071807.log
 ```
+
+**只看最后的「安装结果」就够了**：全是 ✓ 就照「下一步」做。有 ✗ 时那一行会写怎么补；
+自检有未通过的项时，它们会逐项列在「== 自检」下面，每项附下一步。屏幕上的路径把你的 home 显示成 `~`，
+完整输出（含 `mlx version` 与 `mlx check` 全文）在「日志」那行的文件里，求助时贴它就行。
 
 安装器做的事比看上去多三件，第一次装之前知道比较好：
 
@@ -113,12 +122,16 @@ $ bash ~/dev/projects/mlx-toolkit/deployer/install.sh
   输出只列键名不打印值（见[密钥](#keys)）。
 - **网关默认对局域网开放**：上面那段 `!!` 警告就是在说这件事；只给本机用就照它给的命令改。
 
-重装时（代码根已有旧版本）第一步是 `== 收敛正在运行的服务（重装前置）`，会先停掉在跑的服务，结尾列出起回来的命令。
+开头有两道检查：不是 Apple Silicon（M 系列芯片）的 Mac 直接停下（rc 70，什么都不改，推理后端 mlx 只支持 arm64）；
+没找到 3.10 以上的 Homebrew Python 时先提醒一句再继续（见上一节）。
 
-**可以放心重跑**：密钥只补空值、PATH 块只留一份；动盘之前把 `settings.json`、`models.jsonl`、`caps.json`
-备份进数据根的 `backups/`（和最近一份内容相同就不再复制，重跑多少次都不会堆出一串一样的备份）；
-每次安装的输出另存到 `logs/install/<时间>.log`；结尾自动跑一遍 `mlx check`（`== 自检`），
-有项不过时附下一步，但不算安装失败。
+**可以放心重跑**：
+
+- 代码、配置、PATH 都没变且自检通过时，打印「已是当前版本」并直接给出安装结果，**不停服务、不动文件**，几秒结束；
+  要强制重装：`bash deployer/install.sh --force`。
+- 有变化时才重装。重装第一步是 `== 收敛正在运行的服务`，先停掉在跑的服务，安装结果里会列出停了谁、怎么起回来。
+- 动盘之前把 `settings.json`、`models.jsonl` 备份进数据根的 `backups/`（和最近一份内容相同就不再复制）；
+  密钥只补空值；PATH 块只留一份；每次安装的输出另存到 `logs/install/<时间>.log`。
 
 **PATH 是自动写入的**，不用你手动贴。安装器用 `# >>> mlx_server:mlx >>>` 标记块
 包住它写的行，重装时先删旧块再写新块（永远只有一份），改动前把你的 rc 备份到数据根。
@@ -148,7 +161,7 @@ $ mlx status
 
   ✓ 代码根   ~/.local/share/mlx_server
   ✓ 数据根   ~/.local/state/mlx_server
-  ✓ 权重根   ~/lab/models/mlx
+  ✓ 权重根   ~/.local/share/mlx_models
   · 工具版本 1.1.0
 
   ✓ PATH 生效  ~/.local/share/mlx_server/bin
@@ -181,9 +194,9 @@ $ mlx status
 
 `mlx` 的**带值参数一律写成 `--key=value`**，不接受空格分隔：
 
-```bash
-mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit   # ✓
-mlx model install qwen38 --repo mlx-community/Qwen3.8-27B-8bit   # ✗ rc 2
+```text
+mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit   ✓
+mlx model install qwen38 --repo mlx-community/Qwen3.8-27B-8bit   ✗ rc 2
                                ↑ 报「--repo 需要一个值，写成 --repo=<值>」
 ```
 
@@ -235,13 +248,13 @@ model 没有子命令 'search'；可用：gc · info · install · ls · registe
 <权重根>/hub/models--<组织>--<模型名>/snapshots/<revision>/
    │                 │                              └─ 版本，默认 main
    │                 └─ 仓库名里的 `/` 换成 `--`，前缀固定 `models--`
-   └─ 默认 ~/lab/models/mlx，装到别处时看 `mlx status` 的「权重根」那行
+   └─ 默认 ~/.local/share/mlx_models，装到别处时看 `mlx status` 的「权重根」那行
 ```
 
 举例，仓库 `mlx-community/Qwen2.5-0.5B-Instruct-4bit` 的权重完整路径是：
 
 ```
-~/lab/models/mlx/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main/
+~/.local/share/mlx_models/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main/
 ```
 
 这是 HuggingFace 的缓存布局，工具按它解析。**放错地方的后果是静默的**：
@@ -265,7 +278,7 @@ mlx model install qwen05b \
 ```
   installed  qwen05b
   modality   auto
-  path       ~/lab/models/mlx/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
+  path       ~/.local/share/mlx_models/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
   state      就绪
 ```
 
@@ -291,7 +304,7 @@ rc=3、指名原因、并告诉你记录停在哪 —— 补下完权重后跑 `
 
 ```bash
 hf download mlx-community/Qwen2.5-0.5B-Instruct-4bit \
-    --local-dir ~/lab/models/mlx/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
+    --local-dir ~/.local/share/mlx_models/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
 ```
 
 `hf` 命令来自 `huggingface_hub`。安装器已经把它装进工具的 venv 了，
@@ -316,7 +329,7 @@ hf download mlx-community/Qwen2.5-0.5B-Instruct-4bit \
 
 ```bash
 HF_ENDPOINT=https://hf-mirror.com hf download mlx-community/Qwen2.5-0.5B-Instruct-4bit \
-    --local-dir ~/lab/models/mlx/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
+    --local-dir ~/.local/share/mlx_models/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
 ```
 
 ### 3.4 路子三：魔搭社区（ModelScope）手工下
@@ -329,7 +342,7 @@ pip install -U modelscope
 
 modelscope download \
     --model mlx-community/Qwen2.5-0.5B-Instruct-4bit \
-    --local_dir ~/lab/models/mlx/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
+    --local_dir ~/.local/share/mlx_models/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
 ```
 
 **注意两处与 `hf` 不同**，抄错了会报参数错：
@@ -349,9 +362,12 @@ modelscope download \
 ```bash
 mlx model register qwen05b \
     --repo=mlx-community/Qwen2.5-0.5B-Instruct-4bit --port=8100
-mlx model repair          # 用磁盘事实校对注册表
-mlx model ls              # 状态应该是「就绪」
+mlx model repair
+mlx model ls
 ```
+
+- `mlx model repair`：用磁盘事实校对注册表
+- `mlx model ls`：状态应该是「就绪」
 
 **状态还是「已登记」** = 路径算错了。用这条对一下工具到底在找哪里：
 
@@ -481,10 +497,14 @@ huge 装不下：它的体积加上已在跑的模型，超过了这台机器的
 三个比例可调：
 
 ```bash
-mlx config get fit.reserve_pct     # 预留给系统的份额，默认 20
-mlx config get fit.tight_pct       # 超过这个比例算「挤」，默认 75
-mlx config get fit.over_pct        # 超过这个比例拒绝启动，默认 95
+mlx config get fit.reserve_pct
+mlx config get fit.tight_pct
+mlx config get fit.over_pct
 ```
+
+- `mlx config get fit.reserve_pct`：预留给系统的份额，默认 20
+- `mlx config get fit.tight_pct`：超过这个比例算「挤」，默认 75
+- `mlx config get fit.over_pct`：超过这个比例拒绝启动，默认 95
 
 **内存探不出来时也拒绝**（rc 9），并说明是哪个输入不确定 ——
 这条闸门保护的正是「容量不明」那种情形，塌成「大概够」等于没有它。
@@ -505,9 +525,12 @@ rc 6 意味着**零资源创建** —— 没起进程、没写 run 记录，没�
 ### 起多个 · 重启
 
 ```bash
-mlx up qwen05b llama8b        # 每个目标一行结论
-mlx restart qwen05b           # 先校验，校验全过才停，再起
+mlx up qwen05b llama8b
+mlx restart qwen05b
 ```
+
+- `mlx up qwen05b llama8b`：每个目标一行结论
+- `mlx restart qwen05b`：先校验，校验全过才停，再起
 
 同时起多个时端口必须各不相同 —— 登记那一步就会拦住重复端口（rc 7）；用 `config set <模型> --key=port` 给模型自设端口时同样检查（与其它模型的端口、网关端口都不能相同）。
 
@@ -563,10 +586,13 @@ rc 取其中最差的那个（例如 6 = 模型不存在）；只要有目标真
 
 ```bash
 mlx model install qwen38-small --repo=<同一家族、同一词表的小模型仓库> --port=8199
-mlx config set qwen38 --key=modality --value=text      # 多模态模型要先放弃视觉
+mlx config set qwen38 --key=modality --value=text
 mlx config set qwen38 --key=draft_model --value=qwen38-small
-mlx up qwen38 --dry-run      # argv 里应出现 --draft-model qwen38-draft --num-draft-tokens 3
+mlx up qwen38 --dry-run
 ```
+
+- `mlx config set qwen38 --key=modality --value=text`：多模态模型要先放弃视觉
+- `mlx up qwen38 --dry-run`：argv 里应出现 --draft-model qwen38-draft --num-draft-tokens 3
 
 猜多少个可调（默认 3，范围 1–16）：`mlx config set qwen38 --key=num_draft_tokens --value=4`。
 不用了就撤销：`mlx config unset qwen38 --key=draft_model`。
@@ -787,8 +813,11 @@ $ curl ... -d '{"model":"qwen38","messages":[...],"max_tokens":20}'
 
 ```bash
 TOKEN=$(mlx config get api.token --reveal --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+```
 
-# 1. 列模型 —— 应当能看到你起的那个
+1. 列模型 —— 应当能看到你起的那个
+
+```bash
 curl -s http://127.0.0.1:8080/v1/models \
   -H "Authorization: Bearer $TOKEN"
 ```
@@ -797,16 +826,18 @@ curl -s http://127.0.0.1:8080/v1/models \
 {"object": "list", "data": [{"id": "qwen38", "object": "model", "owned_by": "mlx-toolkit"}]}
 ```
 
+2. 发一次对话。max_tokens 给够，否则推理模型只会返回 reasoning 没有 content
+
 ```bash
-# 2. 发一次对话。max_tokens 给够，否则推理模型只会返回 reasoning 没有 content
 curl -s http://127.0.0.1:8080/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen38","messages":[{"role":"user","content":"1+1=?"}],"max_tokens":2048}'
 ```
 
+3. 流式（多数客户端默认走这条），结尾应当有 data: [DONE]
+
 ```bash
-# 3. 流式（多数客户端默认走这条），结尾应当有 data: [DONE]
 curl -sN http://127.0.0.1:8080/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
@@ -848,10 +879,13 @@ $ mlx api info
 **令牌**：所有来源都要。客户端填 `Authorization: Bearer <令牌>` 或 `x-api-key: <令牌>`（Anthropic 客户端用后者）。
 
 ```bash
-mlx config get api.token --reveal       # 看原值
-mlx config set api.token --value=<新值>        # 轮换（32–128 位字母、数字、_ 或 -）
+mlx config get api.token --reveal
+mlx config set api.token --value=<新值>
 mlx restart api
 ```
+
+- `mlx config get api.token --reveal`：看原值
+- `mlx config set api.token --value=<新值>`：轮换（32–128 位字母、数字、_ 或 -）
 
 临时换一个令牌起网关：`MLX_GATEWAY_TOKEN='<32 位以上的串>' mlx up api`（环境变量覆盖配置，只对这次启动有效）。
 
@@ -1030,11 +1064,16 @@ $ mlx down --all
 `down` 是**幂等**的：停一个没在跑的服务返回 0，不是错误。
 
 ```bash
-mlx down qwen27b        # 停一个
-mlx down api qwen27b    # 停多个
-mlx down --all          # 停掉全部有运行记录的
-mlx restart qwen27b     # 先校验，通过了才停、再起
+mlx down qwen27b
+mlx down api qwen27b
+mlx down --all
+mlx restart qwen27b
 ```
+
+- `mlx down qwen27b`：停一个
+- `mlx down api qwen27b`：停多个
+- `mlx down --all`：停掉全部有运行记录的
+- `mlx restart qwen27b`：先校验，通过了才停、再起
 
 想先看会停掉谁：`mlx down qwen27b --dry-run`（`down` / `restart` 都接 `--dry-run`，只打印不动手）。
 `down --all --dry-run` 同样只预览，列出有运行记录、会被停掉的全部服务。
@@ -1048,9 +1087,12 @@ mlx restart qwen27b     # 先校验，通过了才停、再起
 `model rm` 删的是**登记**，默认**不动权重**：
 
 ```bash
-mlx model rm qwen27b              # 只删登记，几十 GB 的权重原样保留
-mlx model rm qwen27b --weights    # 连权重一起移入回收站
+mlx model rm qwen27b
+mlx model rm qwen27b --weights
 ```
+
+- `mlx model rm qwen27b`：只删登记，几十 GB 的权重原样保留
+- `mlx model rm qwen27b --weights`：连权重一起移入回收站
 
 **确认的强度按可恢复性分档** —— 三个删除动作的代价差着数量级：
 
@@ -1079,9 +1121,12 @@ $ mlx model rm qwen27b --weights
 回收孤儿权重（磁盘上有、但没有任何登记引用的）：
 
 ```bash
-mlx model gc --dry-run  # 先看可回收多少（这一步不动任何文件）
-mlx model gc            # 确认无误后再真回收
+mlx model gc --dry-run
+mlx model gc
 ```
+
+- `mlx model gc --dry-run`：先看可回收多少（这一步不动任何文件）
+- `mlx model gc`：确认无误后再真回收
 
 ---
 
@@ -1091,13 +1136,15 @@ mlx model gc            # 确认无误后再真回收
 `model rm --weights` 与 `model gc` 都是**移入回收站**，不是直接删。
 
 ```bash
-mlx model trash ls                    # 看里面有什么
+mlx model trash ls
 ```
+
+- `mlx model trash ls`：看里面有什么
 
 ```
   ID                                  体积      原路径
   ─────────────────────────────────   ────────  ────────────────────────────
-  models--org--demo.1788226602363     2.0 MB    ~/lab/models/mlx/hub/models--org--demo
+  models--org--demo.1788226602363     2.0 MB    ~/.local/share/mlx_models/hub/models--org--demo
 
   共 1 项，2.0 MB（`mlx model trash restore <ID>` 恢复到原路径）
 ```
@@ -1108,15 +1155,17 @@ mlx model trash restore models--org--demo.1788226602363
 
 ```
   ✓ 已恢复  models--org--demo.1788226602363
-    恢复到  ~/lab/models/mlx/hub/models--org--demo
+    恢复到  ~/.local/share/mlx_models/hub/models--org--demo
 ```
 
 恢复的目标是**台账里记着的原路径**。原路径如果已经被占用，**拒绝**而不是覆盖 ——
 那会让一次恢复变成一次覆盖删除。
 
 ```bash
-mlx model trash empty                 # 永久删除，会要求键入 empty 确认
+mlx model trash empty
 ```
+
+- `mlx model trash empty`：永久删除，会要求键入 empty 确认
 
 回收站里的东西**不占注册表**，但占磁盘。`mlx model trash ls` 的最后一行给了总量。
 
@@ -1133,7 +1182,7 @@ $ mlx install --dry-run
   将执行  ~/.local/share/mlx_server/deployer/install.sh
   代码根  ~/.local/share/mlx_server
   数据根  ~/.local/state/mlx_server
-  权重根  ~/lab/models/mlx
+  权重根  ~/.local/share/mlx_models
 ```
 
 去掉 `--dry-run` 就真的执行。它用的是**代码根内的载荷副本**，
@@ -1151,31 +1200,33 @@ $ mlx install
 
 **它会先停掉所有在跑的服务**，装完要自己重新 `mlx up`。
 
-**配置不会被重置**：网关端口、rc 文件面这些会从现有的 `constants.env` 继承。
+**配置不会被重置**：网关端口、rc 文件面、数据根、权重根会从现有的 `constants.env` 继承。
 （这一条以前不成立 —— 重装会把它们悄悄打回出厂值，旧 rc 文件里的 PATH 块
 就此成为卸载器扫不到的孤儿。）
 
 ### 10.2 装新版本的代码
 
-新代码在源码树里，代码根内的副本是旧的，所以**必须从源码树跑安装器**：
+新代码在源码树里，代码根内的副本是旧的，所以**必须从源码树跑安装器**。
+下面的 `<源码目录>` 指当初 `git clone` 下来的那个目录（默认叫 `mlx-tool`）：
 
 ```bash
-cd ~/dev/projects/mlx-toolkit && git pull
-
-# 装到默认位置：
+cd <源码目录>
+git pull
 bash deployer/install.sh
-
-# 装在自定义根上的（`mlx status` 能看到你的三根），要带上原来的根，
-# 否则会在默认位置装出**第二套**，而你的 PATH 还指着旧的那套：
-MLX_ROOT_CODE=<你的代码根> \
-MLX_ROOT_DATA=<你的数据根> \
-MLX_ROOT_WEIGHTS=<你的权重根> \
-  bash deployer/install.sh
 ```
+
+代码根装在自定义位置的（`mlx status` 能看到你的三根），要带上原来的代码根，否则会在默认位置装出**第二套**，
+而你的 PATH 还指着旧的那套。数据根和权重根不用带，安装器会从代码根里的 `constants.env` 读出来：
+
+```bash
+MLX_ROOT_CODE=<你的代码根> bash deployer/install.sh
+```
+
+没有任何变化时，安装器几秒就结束，不停服务；要强制重装加 `--force`。
 
 **数据不会丢**：升级只替换代码根，注册表、会话、权重都在另外两个根里，原样不动。
 
-安装器结尾的 `== 自检` 已经跑过 `mlx check`，十二项应该全绿。
+安装结果清单里的「自检」一行就是 `mlx check` 的结论，应为「12 项，12 项通过」。
 
 **从 1.0.0 升到 1.1.0** 还有几件事要做，[CHANGELOG](../CHANGELOG.md) 的「升级须知」逐条列了。要点：
 
@@ -1200,7 +1251,7 @@ mlx uninstall
 ```
 将删除：~/.local/share/mlx_server（代码根）
 保留：  ~/.local/state/mlx_server（数据根）
-       ~/lab/models/mlx（权重根）
+       ~/.local/share/mlx_models（权重根）
 键入 yes 确认: yes
 ```
 
@@ -1223,12 +1274,12 @@ mlx uninstall
 == 清 venv
 == 完成。以下两处保留：
    ~/.local/state/mlx_server（数据根）
-   ~/lab/models/mlx（权重根）
+   ~/.local/share/mlx_models（权重根）
 （没有正在运行的服务）
   卸载完成
   已删除  ~/.local/share/mlx_server
   保留    ~/.local/state/mlx_server（数据根）
-  保留    ~/lab/models/mlx（权重根）
+  保留    ~/.local/share/mlx_models（权重根）
 ```
 
 ### 保留什么
@@ -1367,13 +1418,20 @@ $ mlx check
 配置有**三层**，高层覆盖低层：出厂默认 < 全局（`settings.json`）< 单个模型。
 
 ```bash
-mlx config ls                              # 全部键：当前值 + 来自哪一层
-mlx config get max_tokens                  # 单个键
-mlx config set max_tokens --value=4096     # 写全局层（对所有模型生效）
-mlx config set qwen05b --key=max_tokens --value=2048   # 写这个模型（覆盖全局）
-mlx config unset max_tokens                # 撤销，回落到下一层
-mlx config diff                            # 只看你改过的
+mlx config ls
+mlx config get max_tokens
+mlx config set max_tokens --value=4096
+mlx config set qwen05b --key=max_tokens --value=2048
+mlx config unset max_tokens
+mlx config diff
 ```
+
+- `mlx config ls`：全部键：当前值 + 来自哪一层
+- `mlx config get max_tokens`：单个键
+- `mlx config set max_tokens --value=4096`：写全局层（对所有模型生效）
+- `mlx config set qwen05b --key=max_tokens --value=2048`：写这个模型（覆盖全局）
+- `mlx config unset max_tokens`：撤销，回落到下一层
+- `mlx config diff`：只看你改过的
 
 **`get` / `set` / `unset` 的目标有两种写法**，别混：
 
@@ -1431,10 +1489,13 @@ $ mlx config diff
 ### 搬到另一台机器
 
 ```bash
-mlx config export --json > mlx-config.json      # 只导出改过的
-mlx config import --from=mlx-config.json --dry-run   # 先看计划
+mlx config export --json > mlx-config.json
+mlx config import --from=mlx-config.json --dry-run
 mlx config import --from=mlx-config.json
 ```
+
+- `mlx config export --json > mlx-config.json`：只导出改过的
+- `mlx config import --from=mlx-config.json --dry-run`：先看计划
 
 `export` **只导出改过的键**（出厂值换台机器仍是出厂值），且**跳过机密**（两把密钥要在新机器上重新生成或设置）。
 `import` 只写全局层：带模型导出（`config export <模型> --json`）的包里，模型级键（`port`、`modality` 等）导入时列入「被拒」，在新机器上用 `mlx config set <模型id> --key=…` 手工设。
@@ -1462,10 +1523,14 @@ $ mlx config import --from=bad.json
 安装器会自动生成缺失的密钥。手动补：
 
 ```bash
-mlx bootstrap keys                           # 只补空值，输出只列键名
-mlx config get api.token --reveal      # 查看原值
-mlx config set api.token --value=<新值>       # 手动换（值会短暂出现在进程列表里）
+mlx bootstrap keys
+mlx config get api.token --reveal
+mlx config set api.token --value=<新值>
 ```
+
+- `mlx bootstrap keys`：只补空值，输出只列键名
+- `mlx config get api.token --reveal`：查看原值
+- `mlx config set api.token --value=<新值>`：手动换（值会短暂出现在进程列表里）
 
 ### 有些字段改不了
 
@@ -1488,9 +1553,12 @@ revision 不能用 `config set` 改（scope=machine）—— 它是磁盘事实�
 ### `mlx: command not found`
 
 ```bash
-ls -l ~/.local/share/mlx_server/bin/mlx     # 文件在吗
-grep -n 'mlx_server' ~/.zshrc               # PATH 写进去了吗
+ls -l ~/.local/share/mlx_server/bin/mlx
+grep -n 'mlx_server' ~/.zshrc
 ```
+
+- `ls -l ~/.local/share/mlx_server/bin/mlx`：文件在吗
+- `grep -n 'mlx_server' ~/.zshrc`：PATH 写进去了吗
 
 两个都在就是当前终端没加载新 PATH —— **新开一个终端**或 `source ~/.zshrc`。
 
@@ -1504,10 +1572,14 @@ grep -n 'mlx_server' ~/.zshrc               # PATH 写进去了吗
 用 `mlx model install` 下载的不会出这个问题，手工下载的要对一下路径：
 
 ```bash
-mlx model info qwen05b                           # 「期望路径」与「实际找到」两行
-ls ~/lab/models/mlx/hub/                         # 看目录名对不对
-mlx model repair                                 # 让工具按磁盘事实重建
+mlx model info qwen05b
+ls ~/.local/share/mlx_models/hub/
+mlx model repair
 ```
+
+- `mlx model info qwen05b`：「期望路径」与「实际找到」两行
+- `ls ~/.local/share/mlx_models/hub/`：看目录名对不对
+- `mlx model repair`：让工具按磁盘事实重建
 
 `model install` 下载失败留下的记录显示「已登记」（没给 `--port` 时是「已登记未下载」）：补下完权重后同样跑 `mlx model repair`。
 
@@ -1524,9 +1596,12 @@ mlx model repair                                 # 让工具按磁盘事实重�
 两种都是重跑一次安装器：
 
 ```bash
-mlx install            # 幂等，会补建 venv
-mlx version            # 看「venv 解释器」和「后端包」两行
+mlx install
+mlx version
 ```
+
+- `mlx install`：幂等，会补建 venv
+- `mlx version`：看「venv 解释器」和「后端包」两行
 
 > `mlx install` 跑的是**代码根里那份**安装器（`mlx install` 只是转调它）。**安装器自身升级过**时它还是旧的 ——
 > 那种情况要从源码跑一次 `bash <源码>/deployer/install.sh`，跑完新 `deployer/`
@@ -1536,8 +1611,10 @@ mlx version            # 看「venv 解释器」和「后端包」两行
 
 ```bash
 ~/.local/share/mlx_server/.venv/bin/pip install -U mlx-lm
-mlx caps refresh       # 重新采集，否则 `up` 会因能力漂移拒绝启动
+mlx caps refresh
 ```
+
+- `mlx caps refresh`：重新采集，否则 `up` 会因能力漂移拒绝启动
 
 ### 服务在跑，但 `chat` / `bench` 说连不上
 
@@ -1645,7 +1722,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 ├── logs/<服务>.log             各模型的后端日志；网关的是 logs/api.log
 └── backups/                    改动你 shell rc 前的备份
 
-~/lab/models/mlx/               权重根 —— 卸载保留
+~/.local/share/mlx_models/               权重根 —— 卸载保留
 └── hub/models--<组织>--<模型>/snapshots/<revision>/
 ```
 
@@ -1666,9 +1743,11 @@ cat ~/.local/share/mlx_server/share/constants.env
 ## 十五 · 给开发者
 
 ```bash
-cd ~/dev/projects/mlx-toolkit
-bash check.sh           # ruff + pytest + 3.9.6 真解释器编译
+cd <源码目录>
+bash check.sh
 ```
+
+- `bash check.sh`：ruff + pytest + 3.9.6 真解释器编译
 
 三步全绿（最后一行 `全绿 ✓`）才算过。仓库不替你装 git 钩子，提交前自己跑；想强制就把它挂进 `.git/hooks/pre-commit`。
 

@@ -304,7 +304,7 @@ def test_l3_reinstall_when_nothing_running(installed, repo):
     code_root, data_root, env = installed
     (data_root / "run" / "alias" / "qwen").mkdir(parents=True, exist_ok=True)
     assert not list((data_root / "run").glob("*.json"))
-    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh"), "--force"],
                        capture_output=True, text=True, timeout=60, check=False, env=env)
     assert r.returncode == 0, f"空闲时重装失败 rc={r.returncode}：{r.stderr}"
     assert "收敛正在运行的服务" in r.stderr and "== 挂 PATH" in r.stderr
@@ -320,7 +320,7 @@ def test_l3_reinstall_backs_up_state_only_when_changed(installed, repo):
     backups = data_root / "backups"
 
     def reinstall():
-        r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+        r = subprocess.run(["bash", str(repo / "deployer" / "install.sh"), "--force"],
                            capture_output=True, text=True, timeout=60, check=False, env=env)
         assert r.returncode == 0, f"重装失败：{r.stderr}"
         return {p.name for p in backups.iterdir()}
@@ -347,16 +347,16 @@ def test_l3_reinstall_backs_up_state_only_when_changed(installed, repo):
 def test_l3_install_writes_own_log_and_self_checks(installed, repo):
     """安装器**自己**留日志、装完当场自检 —— 不靠调用者记得 `| tee`、记得跑 `mlx check`。"""
     code_root, data_root, env = installed
-    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh")],
+    r = subprocess.run(["bash", str(repo / "deployer" / "install.sh"), "--force"],
                        capture_output=True, text=True, timeout=60, check=False, env=env)
     assert r.returncode == 0, r.stderr
-    assert "== 自检" in r.stderr and "工具版本" in r.stderr and "12 项" in r.stderr, r.stderr
-    m = re.search(r"本次安装日志：(\S+)", r.stderr)
+    assert "== 自检" in r.stderr and "12 项" in r.stderr, r.stderr
+    m = re.search(r"· 日志 +(\S+)", r.stderr)
     assert m, f"没报日志路径：{r.stderr[-500:]}"
     log = Path(m.group(1))
     assert log.parent == data_root / "logs" / "install", log
     text = log.read_text()
-    for marker in ("== 备份状态文件", "== 建三根", "== 挂 PATH", "== 自检"):
+    for marker in ("== 备份状态文件", "== 建三根", "== 挂 PATH", "== 自检", "工具版本", "settings_mode"):
         assert marker in text, f"日志缺 {marker!r}"
 
 

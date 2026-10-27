@@ -47,20 +47,23 @@ brew install python@3.13
 ### 安装
 
 ```bash
-git clone https://github.com/<你>/mlx-toolkit.git && cd mlx-toolkit
+git clone https://github.com/unixsec/mlx-tool.git
+cd mlx-tool
 bash deployer/install.sh
-source ~/.zshrc          # 或者新开一个终端
-mlx check                # 12 项检查，应该全过
 ```
+
+装完看最后的「安装结果」清单，照它的「下一步」做：一般是**新开一个终端**（PATH 才生效），然后起模型或下载模型。
+安装器结尾已经跑过 12 项检查（`mlx check`），不用再跑。只支持 Apple Silicon（M 系列芯片）的 Mac。
 
 安装器会建推理 venv 并装 `huggingface_hub`、`mlx`、`mlx-lm`、`mlx-vlm`（最后一个会带入 torch，
 第一次装要多等一会儿）；还会生成两把密钥（`backend.api_key` 与 `api.token`），并提示网关默认监听全部网卡。
-可以放心重跑：重装前自动备份配置与模型登记表，结尾自动跑一遍 `mlx check`。
+可以放心重跑：什么都没变时几秒结束、不停服务；有变化才重装，重装前自动备份配置与模型登记表。强制重装加 `--force`。
 
 ### 跑一个模型
 
+下载 + 登记一步到位（约 27 GB，可续传，有进度）：
+
 ```bash
-# 下载 + 登记一步到位（约 27 GB，可续传，有进度）
 mlx model install qwen38 \
   --repo=mlx-community/Qwen3.8-27B-8bit \
   --port=8100
@@ -72,10 +75,14 @@ mlx chat qwen38 --prompt="用一句话说明什么是投机解码"
 ### 接入外部应用
 
 ```bash
-mlx up api                          # OpenAI 与 Anthropic 兼容网关
-mlx api info                        # 本机、虚拟机、Wi-Fi 设备各自该填的地址
-mlx config get api.token --reveal   # 所有客户端都要带的令牌
+mlx up api
+mlx api info
+mlx config get api.token --reveal
 ```
+
+- `mlx up api`：OpenAI 与 Anthropic 兼容网关
+- `mlx api info`：本机、虚拟机、Wi-Fi 设备各自该填的地址
+- `mlx config get api.token --reveal`：所有客户端都要带的令牌
 
 | 客户端里填 | 值 |
 |---|---|
@@ -156,7 +163,7 @@ $ mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
    … 已下 23.3 GB  21.7 MB/s  84.8%  约剩 3 分
   installed  qwen38
   modality   auto
-  path       ~/lab/models/mlx/hub/models--mlx-community--Qwen3.8-27B-8bit/snapshots/main
+  path       ~/.local/share/mlx_models/hub/models--mlx-community--Qwen3.8-27B-8bit/snapshots/main
   state      就绪
 ```
 
@@ -249,8 +256,10 @@ result → 原语 → 策略 → 资源 → 编排 → 解析 → 装配
 ## 🧪 开发
 
 ```bash
-bash check.sh     # ruff + pytest + 3.9.6 下限编译；最后一行应是「全绿 ✓」
+bash check.sh
 ```
+
+- `bash check.sh`：ruff + pytest + 3.9.6 下限编译；最后一行应是「全绿 ✓」
 
 测试分层。最上层把真实产物装进沙箱、驱动真实的 `mlx` 二进制 ——
 断言与产物之间没有桩。每次提交前跑一遍；仓库不会替你装 git 钩子。

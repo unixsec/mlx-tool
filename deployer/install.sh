@@ -15,13 +15,16 @@ _INHERIT="$CODE_ROOT/share/constants.env"
 if [ -f "$_INHERIT" ]; then
   while IFS='=' read -r _k _v; do
     case "$_k" in
-      MLX_GATEWAY_PORT|MLX_PORT_RANGE|MLX_RC_FILES|MLX_INSTANCE_ID)
+      # 数据根与权重根同理：权重根默认值在 1.1.0 改过（`~/lab/models/mlx` → `~/.local/share/mlx_models`），
+      # 不继承的话老用户一重装就指向空目录，已下载的模型全部「找不到」。
+      MLX_GATEWAY_PORT|MLX_PORT_RANGE|MLX_RC_FILES|MLX_INSTANCE_ID|MLX_ROOT_DATA|MLX_ROOT_WEIGHTS)
         eval ": \${$_k:=\$_v}" ;;
     esac
   done < "$_INHERIT"
 fi
 DATA_ROOT="${MLX_ROOT_DATA:-$HOME/.local/state/mlx_server}"
-WEIGHTS_ROOT="${MLX_ROOT_WEIGHTS:-$HOME/lab/models/mlx}"
+# 权重根默认与另外两根一样走 XDG 布局，且独立于代码根（卸载不波及）。
+WEIGHTS_ROOT="${MLX_ROOT_WEIGHTS:-$HOME/.local/share/mlx_models}"
 GATEWAY_PORT="${MLX_GATEWAY_PORT:-8080}"
 INSTANCE_ID="${MLX_INSTANCE_ID:-mlx}"
 # 标记串是 INSTANCE_ID 派生的**完整串**（T5 第 12 行 · G-RES-15）。
@@ -36,15 +39,84 @@ PORT_RANGE="${MLX_PORT_RANGE:-8100-8199}"
 
 say() { printf '%s\n' "$*" >&2; }   # 过程说明走 stderr（INV-17）
 
-# **整次安装留一份日志**（数据根，卸载时保留）。此前要靠调用者 `| tee`，
-# 忘了就没有记录 —— 而重装出问题时第一个要看的就是那次安装说了什么。
-# 只记 stderr：过程说明全在那里，密钥只打印键名（见「生成密钥」段）。
-INSTALL_LOG="$DATA_ROOT/logs/install/$(date +%Y%m%d-%H%M%S).log"
-if mkdir -p "${INSTALL_LOG%/*}" 2>/dev/null && : >> "$INSTALL_LOG" 2>/dev/null; then
-  exec 2> >(tee -a "$INSTALL_LOG" >&2)
-else
-  INSTALL_LOG=""
+FORCE=0
+for _a in "$@"; do
+  case "$_a" in
+    --force) FORCE=1 ;;
+    -h|--help)
+      say "用法：bash deployer/install.sh [--force]"
+      say "  可反复运行：代码、配置、PATH 都没变且自检通过时直接跳过（不停服务）。"
+      say "  --force  无论如何都重装"
+      exit 0 ;;
+    *) say "未知参数：${_a}（用法：bash deployer/install.sh [--force]）"; exit 2 ;;
+  esac
+done
+
+# ── 平台：只支持 Apple Silicon ─────────────────────────────────────
+# 推理后端 mlx 只发 arm64。判据用 `hw.optional.arm64` 而不是 `uname -m`：
+# Rosetta 下运行的终端里 `uname -m` 报 x86_64，会把 M 系列误判成 Intel。
+# 必须在动任何盘之前判（日志目录也不建）。`MLX_SYSCTL` 是测试注入面。
+_ARM=$("${MLX_SYSCTL:-/usr/sbin/sysctl}" -n hw.optional.arm64 2>/dev/null || true)
+if [ "$_ARM" != "1" ]; then
+  say "!! 本工具只支持 Apple Silicon（M 系列芯片）的 Mac —— 推理后端 mlx 只发 arm64 版本。"
+  say "   这台机器不是（hw.optional.arm64=${_ARM:-取不到}），未做任何改动。"
+  exit 70
 fi
+
+VENV="$CODE_ROOT/.venv"
+PATH_LINE="export PATH=\"$CODE_ROOT/bin:\$PATH\""
+# constants.env 的完整内容。先算出来：「要不要重装」要拿它和已装的逐字节比。
+CONSTANTS="MLX_ROOT_CODE=$CODE_ROOT
+MLX_ROOT_DATA=$DATA_ROOT
+MLX_ROOT_WEIGHTS=$WEIGHTS_ROOT
+MLX_GATEWAY_PORT=$GATEWAY_PORT
+MLX_PORT_RANGE=$PORT_RANGE
+MLX_CMD_NAME=mlx
+MLX_VENV=$CODE_ROOT/.venv
+MLX_INSTANCE_ID=$INSTANCE_ID
+MLX_RC_BEGIN=$RC_BEGIN
+MLX_RC_END=$RC_END
+MLX_RC_FILES=$RC_FILES"
+
+# 屏幕上把 $HOME 显示成 `~`：好读，用户贴输出求助时也不带出用户名。日志里保留完整路径。
+# 只替换「$HOME/」与行尾的「$HOME」，不碰 /Users/alexander 这类前缀相同的路径。
+_tilde() {
+  awk -v h="$HOME" '
+    length(h) > 1 {
+      out = ""; s = $0
+      while ((i = index(s, h)) > 0) {
+        nx = substr(s, i + length(h), 1)
+        if (nx == "/" || nx == "") { out = out substr(s, 1, i - 1) "~"; s = substr(s, i + length(h)) }
+        else { out = out substr(s, 1, i + length(h) - 1); s = substr(s, i + length(h)) }
+      }
+      $0 = out s
+    }
+    { print; fflush() }'
+}
+
+# 候选按**版本从高到低**试，最后才回落系统 python3。
+# `MLX_VENV_PYTHON` 可显式指定（注入面，测试与特殊环境用）。
+# **只认 Homebrew（与 /usr/local 上的第三方安装），不认 /usr/bin/python3**
+# 〔BCR-2026-09-02，`00-inheritance` §0.4.2〕。系统解释器建的 venv 有两个问题：
+#   ① 3.9 装不上 `mlx ≥ 0.30`（只发 cp310+）⇒ 新模型架构永远跑不了
+#   ② venv 绑在系统解释器上，macOS 升级替换它时 venv 会坏
+# 这里**刻意不把 `/usr/bin/python3` 放进候选**：即便将来 macOS 自带 3.12，
+# 上面第 ② 条仍然成立 —— 那不是版本问题，是「谁来管这个解释器」的问题。
+_pick_python() {
+  local c
+  for c in "${MLX_VENV_PYTHON:-}" \
+           /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 \
+           /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
+           /opt/homebrew/bin/python3.10 /opt/homebrew/bin/python3 \
+           /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3; do
+    [ -n "$c" ] && [ -x "$c" ] || continue
+    # 判据是**能不能装上新版 mlx**，即 minor ≥ 10 —— 不是「叫什么名字」
+    if "$c" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null; then
+      echo "$c"; return 0
+    fi
+  done
+  return 1
+}
 
 # 备份进数据根（卸载时保留 ⇒ 天然可回滚）。**不写 $HOME 根。**
 # 与同名的最近一份备份逐字节相同就不再复制 —— 重装多少次，备份只随内容变化增加。
@@ -62,6 +134,43 @@ _backup() {                         # _backup <file> → stdout: 备份路径
   echo "$last"
 }
 
+# ── 已是当前版本？──────────────────────────────────────────────────
+# 安装器可以反复跑：**代码逐文件相同 + constants.env 相同 + 每个 rc 里都有 PATH 行 + 自检通过**
+# 才跳过。四项缺一就照常重装 —— 判据宁可多装一次，也不能漏掉一处该修的。
+# 自升级（`mlx install`，源即代码根）比较必然相同，不判。
+_up_to_date() {
+  local d f
+  [ "$FORCE" = 0 ] && [ "$SRC" != "$CODE_ROOT" ] && [ -x "$CODE_ROOT/bin/mlx" ] || return 1
+  for d in bin lib gateway; do
+    diff -rq -x .gitkeep -x __pycache__ "$SRC/payload/$d" "$CODE_ROOT/$d" >/dev/null 2>&1 || return 1
+  done
+  diff -rq -x .gitkeep -x __pycache__ -x constants.env -x caps.json "$SRC/payload/share" "$CODE_ROOT/share" >/dev/null 2>&1 || return 1
+  diff -rq -x .gitkeep -x __pycache__ "$SRC/payload" "$CODE_ROOT/payload" >/dev/null 2>&1 || return 1
+  diff -rq -x .gitkeep "$SRC/deployer" "$CODE_ROOT/deployer" >/dev/null 2>&1 || return 1
+  [ "$(cat "$CODE_ROOT/share/constants.env" 2>/dev/null)" = "$CONSTANTS" ] || return 1
+  for f in $RC_FILES; do grep -qxF "$PATH_LINE" "$f" 2>/dev/null || return 1; done
+  CHECK_OUT=$(MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" check 2>&1) || return 1
+}
+
+_main() {
+CHECK_OUT=""
+if _up_to_date; then
+  say "== 已是当前版本：代码、配置、PATH 都没变，自检通过 —— 跳过重装，正在运行的服务未动"
+  say "   要强制重装：bash deployer/install.sh --force"
+  ACTION="已是最新，未重装"; CHECK_OK=1; STOPPED=""; rc_ok=1
+  _summary
+  return 0
+fi
+ACTION="已安装"
+
+# 前置提示：没有 ≥3.10 的 Python 时**开头就说**，而不是等装完、`mlx up` 起不来才发现。
+# 不替用户 `brew install` —— 往别人机器上装软件要由他自己决定。
+if ! _pick_python >/dev/null && \
+   ! "$VENV/bin/python3" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null; then
+  say "!! 没找到 3.10 以上的 Python（Homebrew）。工具本体与下载照常可用，但新架构的模型跑不了。"
+  say "   建议先装：brew install python@3.13，再重跑本安装器。现在继续安装……"
+fi
+
 # ── I0 · 重装前先收敛服务（裁决 R3-1）────────────────────────────
 # 必须在动任何盘之前、且 run/ 仍可读时执行。
 STOPPED=""
@@ -75,7 +184,8 @@ if [ -x "$CODE_ROOT/bin/mlx" ] && [ -d "$DATA_ROOT/run" ]; then
   # 一行不打地 rc 1 退出（2026-10-26 真机重装踩到：`run/` 里只剩 `alias/`）。
   STOPPED=$({ ls "$DATA_ROOT/run"/*.json 2>/dev/null || true; } \
             | sed 's/.*\///;s/\.json$//' | tr '\n' ' ')
-  say "== 收敛正在运行的服务（重装前置）"
+  STOPPED="${STOPPED% }"
+  say "== 收敛正在运行的服务（重装前必须先停）"
   if ! "$CODE_ROOT/bin/mlx" down --all 2>/dev/null; then
     say "!! 有服务未能停止 —— 拒绝重装（rc 6）。先手工停掉它们："
     ls "$DATA_ROOT/run"/*.json 2>/dev/null | sed 's/.*\//   /;s/\.json$//' >&2 || true
@@ -84,14 +194,19 @@ if [ -x "$CODE_ROOT/bin/mlx" ] && [ -d "$DATA_ROOT/run" ]; then
 fi
 
 # ── 备份用户状态（服务已停，文件不会写到一半）──────────────────
-# 安装器本身只「补空值」不覆盖，但 caps refresh 会重写 caps.json，
-# 而 settings / 模型登记表丢了就是用户的配置与模型全丢 —— 动盘前留一份。
+# 安装器本身只「补空值」不覆盖，但 settings / 模型登记表一旦损坏就是用户的配置与模型全丢 —— 动盘前留一份。
 say "== 备份状态文件"
-for _f in settings.json models.jsonl caps.json; do
-  [ -f "$DATA_ROOT/$_f" ] || continue
-  if _b=$(_backup "$DATA_ROOT/$_f"); then say "   ✓ $_f → $_b"
-  else say "!! $_f 备份失败 —— 拒绝继续（数据根不可写？）"; exit 73; fi
+_done=""
+# 只备份**丢了找不回来**的：配置与模型登记表。caps.json 不备份 —— 它是派生数据
+# （`mlx caps refresh` 随时重采），且每次安装都重采、带采集时间，备份它会让「内容没变不重复」失效。
+for _p in "$DATA_ROOT/settings.json" "$DATA_ROOT/models.jsonl"; do
+  [ -f "$_p" ] || continue
+  _f=${_p##*/}
+  if _b=$(_backup "$_p"); then _done="$_done $_f"; printf '%s → %s\n' "$_p" "$_b" >> "${INSTALL_LOG:-/dev/null}"
+  else say "!! ${_f} 备份失败 —— 拒绝继续（数据根不可写？）"; exit 73; fi
 done
+if [ -n "$_done" ]; then say "   ✓${_done} → $DATA_ROOT/backups/（内容没变的不重复备份）"
+else say "   · 首次安装，没有要备份的"; fi
 
 say "== 建三根"
 mkdir -p "$CODE_ROOT" "$DATA_ROOT" "$WEIGHTS_ROOT"
@@ -128,20 +243,8 @@ chmod +x "$CODE_ROOT/deployer"/*.sh "$CODE_ROOT/payload/bin/mlx"
 find "$CODE_ROOT" -name .gitkeep -delete
 chmod +x "$CODE_ROOT/bin/mlx"
 
-say "== 写 constants.env（三根的兜底来源，裁决 R4-3 断口②）"
-cat > "$CODE_ROOT/share/constants.env" <<EOF
-MLX_ROOT_CODE=$CODE_ROOT
-MLX_ROOT_DATA=$DATA_ROOT
-MLX_ROOT_WEIGHTS=$WEIGHTS_ROOT
-MLX_GATEWAY_PORT=$GATEWAY_PORT
-MLX_PORT_RANGE=$PORT_RANGE
-MLX_CMD_NAME=mlx
-MLX_VENV=$CODE_ROOT/.venv
-MLX_INSTANCE_ID=$INSTANCE_ID
-MLX_RC_BEGIN=$RC_BEGIN
-MLX_RC_END=$RC_END
-MLX_RC_FILES=$RC_FILES
-EOF
+say "== 写 constants.env"
+printf '%s\n' "$CONSTANTS" > "$CODE_ROOT/share/constants.env"
 
 # ── 建 venv 并装推理依赖（R-DEPLOY-40）──────────────────────────
 # **venv 的解释器要 ≥ 3.10**，否则推理后端被锁死在旧版本：
@@ -155,31 +258,7 @@ EOF
 # 那个理由针对的是**工具本体**，而 venv 只服务下载与推理（§0.4.1/§0.4.2 的
 # 区分）。T1 仍跑在 3.9.6 下限上，那部分一个字节都没变。
 say "== 建 venv"
-VENV="$CODE_ROOT/.venv"
 
-# 候选按**版本从高到低**试，最后才回落系统 python3。
-# `MLX_VENV_PYTHON` 可显式指定（注入面，测试与特殊环境用）。
-# **只认 Homebrew（与 /usr/local 上的第三方安装），不认 /usr/bin/python3**
-# 〔BCR-2026-09-02，`00-inheritance` §0.4.2〕。系统解释器建的 venv 有两个问题：
-#   ① 3.9 装不上 `mlx ≥ 0.30`（只发 cp310+）⇒ 新模型架构永远跑不了
-#   ② venv 绑在系统解释器上，macOS 升级替换它时 venv 会坏
-# 这里**刻意不把 `/usr/bin/python3` 放进候选**：即便将来 macOS 自带 3.12，
-# 上面第 ② 条仍然成立 —— 那不是版本问题，是「谁来管这个解释器」的问题。
-_pick_python() {
-  local c
-  for c in "${MLX_VENV_PYTHON:-}" \
-           /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 \
-           /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
-           /opt/homebrew/bin/python3.10 /opt/homebrew/bin/python3 \
-           /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3; do
-    [ -n "$c" ] && [ -x "$c" ] || continue
-    # 判据是**能不能装上新版 mlx**，即 minor ≥ 10 —— 不是「叫什么名字」
-    if "$c" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null; then
-      echo "$c"; return 0
-    fi
-  done
-  return 1
-}
 
 if [ -x "$VENV/bin/python3" ]; then
   _V=$("$VENV/bin/python3" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo 0)
@@ -286,7 +365,6 @@ done < "$CODE_ROOT/share/manifest.tsv"
 [ "$missing" -eq 0 ] || { say "!! 分发清单缺 $missing 项，安装未完成"; exit 71; }
 
 # ── 挂 PATH（R-DEPLOY-24）──────────────────────────────────────
-PATH_LINE="export PATH=\"$CODE_ROOT/bin:\$PATH\""
 
 _rc_write() {                       # _rc_write <rc-file>
   local rc="$1" tmp bak nold nnew ndel want
@@ -350,26 +428,99 @@ rc_ok=0
 for f in $RC_FILES; do
   if _rc_write "$f"; then rc_ok=1; fi
 done
-if [ -n "$STOPPED" ]; then
-  say "== 重装前停掉了这些服务，**没有自动起回来**："
-  for s in $STOPPED; do say "     mlx up $s"; done
-fi
 
 # ── 自检：装完当场跑一遍健康检查，不等用户自己想起来 ───────────
 # 失败**不使安装失败**：依赖没装上（caps）这类降级前面已经明说过，
-# 这里让它们以检查项的形式再出现一次，附带下一步。
+# 这里让它们以检查项的形式再出现一次，附带下一步。屏幕上只给结论与未过项，全文进日志。
 say "== 自检"
-MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" version >&2 || true
-if MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" check >&2; then
-  say "   ✓ 健康检查全部通过"
+if CHECK_OUT=$(MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" check 2>&1); then
+  CHECK_OK=1
 else
-  say "   ! 有检查项未通过（见上，每项附下一步）—— 安装本身已完成"
+  CHECK_OK=0
+  printf '%s\n' "$CHECK_OUT" | grep -v '^[[:space:]]*✓' | grep -v '^[[:space:]]*$' >&2 || true
 fi
-[ -z "$INSTALL_LOG" ] || say "   · 本次安装日志：$INSTALL_LOG"
+_summary
+}
 
-if [ "$rc_ok" = "1" ]; then
-  say "== 完成。**新开一个终端**，或先跑：source $RC_FILES"
+# ── 结果清单：所有用户都看得懂的那几行 ─────────────────────────────
+_summary() {
+  local ver n first next bind keys hint=""
+  ver=$(MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" version 2>/dev/null)
+  [ -z "$INSTALL_LOG" ] || printf '%s\n%s\n' "$ver" "$CHECK_OUT" >> "$INSTALL_LOG"
+  ver=$(printf '%s\n' "$ver" | awk '/工具版本/ { print $2; exit }')
+  # 模型数与第一个模型名、两把密钥是否齐、网关绑定 —— 只读文件，**不打印任何密钥值**。
+  eval "$(MLX_DATA="$DATA_ROOT" /usr/bin/python3 - <<'PY' 2>/dev/null
+import json, os, shlex
+d = os.environ["MLX_DATA"]
+ids = []
+try:
+    for ln in open(os.path.join(d, "models.jsonl")):
+        ln = ln.strip()
+        if ln:
+            try:
+                ids.append(json.loads(ln)["id"])
+            except Exception:
+                pass
+except OSError:
+    pass
+try:
+    s = json.load(open(os.path.join(d, "settings.json")))
+except Exception:
+    s = {}
+miss = [k for k in ("api.token", "backend.api_key") if not s.get(k)]
+print("n=%d first=%s keys=%s bind=%s" % (len(ids), shlex.quote(ids[0] if ids else ""),
+      shlex.quote(" ".join(miss)), shlex.quote(str(s.get("api.bind", "0.0.0.0")))))
+PY
+)" || true
+  say ""
+  say "== 安装结果"
+  say "  ✓ 版本      ${ver:-?}（${ACTION}）"
+  if [ "${CHECK_OK:-0}" = 1 ]; then
+    say "  ✓ 自检      $(printf '%s\n' "$CHECK_OUT" | awk '/项通过/ { $1 = $1; print; exit }')"
+  else
+    say "  ✗ 自检      有未通过的项（见上方，每项附下一步）；安装本身已完成"
+  fi
+  if [ -z "${keys-x}" ]; then say "  ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）"
+  else say "  ✗ 密钥      缺 ${keys:-?} —— 补：mlx bootstrap keys"; fi
+  if [ "${bind:-}" = "127.0.0.1" ]; then
+    say "  · 网关      http://127.0.0.1:${GATEWAY_PORT}/v1，只对本机（启动：mlx up api）"
+  else
+    say "  · 网关      http://127.0.0.1:${GATEWAY_PORT}/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）"
+  fi
+  say "  · 模型      已登记 ${n:-0} 个"
+  if [ -n "$STOPPED" ]; then
+    say "  ! 重装前停掉了：${STOPPED}（没有自动起回来）"
+    next="mlx up $STOPPED"
+  elif [ "${n:-0}" -gt 0 ]; then
+    next="mlx up $first"
+  else
+    next="mlx model install <短名> --repo=<仓库>"
+    hint="<仓库> 在 huggingface.co/mlx-community 挑，例如 mlx-community/Qwen3-0.6B-4bit"
+  fi
+  if [ "$rc_ok" != 1 ]; then
+    say "  ✗ PATH      未写入 shell rc，手动加这一行：$PATH_LINE"
+    say "  → 下一步：加好 PATH 后新开终端，$next"
+  else
+    case ":$PATH:" in
+      *":$CODE_ROOT/bin:"*) say "  → 下一步：$next" ;;
+      *) say "  → 下一步：新开一个终端（或 source ${RC_FILES%% *}），然后 $next" ;;
+    esac
+    [ -z "$hint" ] || say "            $hint"
+  fi
+  [ -z "$INSTALL_LOG" ] || say "  · 日志      $INSTALL_LOG"
+}
+
+# ── 入口 ───────────────────────────────────────────────────────────
+# **整次安装留一份日志**（数据根，卸载时保留）。此前要靠调用者 `| tee`，忘了就没有记录。
+# 只记 stderr：过程说明全在那里，密钥只打印键名（见「生成密钥」段）。
+# 用管道而不是 `exec 2> >(tee …)`：bash 不等进程替换结束，交互终端里最后几行会
+# 落到提示符之后；管道要等每一段都结束才返回。stdout 经 fd 3 原样旁路。
+INSTALL_LOG="$DATA_ROOT/logs/install/$(date +%Y%m%d-%H%M%S).log"
+mkdir -p "${INSTALL_LOG%/*}" 2>/dev/null && : >> "$INSTALL_LOG" 2>/dev/null || INSTALL_LOG=""
+exec 3>&1
+if [ -n "$INSTALL_LOG" ]; then
+  _main 2>&1 1>&3 3>&- | tee -a "$INSTALL_LOG" | _tilde >&2
 else
-  say "== 完成，但 PATH 未写入。手动加进 shell rc："
-  say "   $PATH_LINE"
+  _main 2>&1 1>&3 3>&- | _tilde >&2
 fi
+exit "${PIPESTATUS[0]}"

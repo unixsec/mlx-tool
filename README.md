@@ -53,23 +53,28 @@ brew install python@3.13
 ### Install
 
 ```bash
-git clone https://github.com/<you>/mlx-toolkit.git && cd mlx-toolkit
+git clone https://github.com/unixsec/mlx-tool.git
+cd mlx-tool
 bash deployer/install.sh
-source ~/.zshrc          # or open a new terminal
-mlx check                # 12 checks — all should pass
 ```
+
+When it finishes, read the "安装结果" (install result) summary at the end and follow its next step —
+usually **open a new terminal** (so PATH takes effect), then start or download a model.
+The installer already ran the 12 checks (`mlx check`) for you. Apple Silicon Macs only.
 
 The installer builds the inference venv and installs `huggingface_hub`, `mlx`,
 `mlx-lm` and `mlx-vlm` (the last one pulls in torch, so the first install takes
 a while). It also generates the two secrets (`backend.api_key` and `api.token`)
 and prints a warning that the gateway listens on all interfaces by default.
-It is safe to re-run: it backs up your settings and model registry first and
-finishes by running `mlx check` itself.
+It is safe to re-run: when nothing changed it finishes in seconds without stopping
+your services; otherwise it backs up your settings and model registry before reinstalling.
+Pass `--force` to reinstall anyway.
 
 ### Run a model
 
+Download + register in one step (~27 GB, resumable, shows progress):
+
 ```bash
-# Download + register in one step (~27 GB, resumable, shows progress)
 mlx model install qwen38 \
   --repo=mlx-community/Qwen3.8-27B-8bit \
   --port=8100
@@ -81,10 +86,14 @@ mlx chat qwen38 --prompt="Explain speculative decoding in one sentence"
 ### Connect an external app
 
 ```bash
-mlx up api                          # OpenAI- and Anthropic-compatible gateway
-mlx api info                        # base URLs for this Mac, VMs and Wi-Fi devices
-mlx config get api.token --reveal   # the token every client must send
+mlx up api
+mlx api info
+mlx config get api.token --reveal
 ```
+
+- `mlx up api`: OpenAI- and Anthropic-compatible gateway
+- `mlx api info`: base URLs for this Mac, VMs and Wi-Fi devices
+- `mlx config get api.token --reveal`: the token every client must send
 
 | Field in your client | Value |
 |---|---|
@@ -167,7 +176,7 @@ $ mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
    … 已下 23.3 GB  21.7 MB/s  84.8%  约剩 3 分
   installed  qwen38
   modality   auto
-  path       ~/lab/models/mlx/hub/models--mlx-community--Qwen3.8-27B-8bit/snapshots/main
+  path       ~/.local/share/mlx_models/hub/models--mlx-community--Qwen3.8-27B-8bit/snapshots/main
   state      就绪
 ```
 
@@ -269,8 +278,10 @@ result → primitives → policy → resources → orchestration → parsing →
 ## 🧪 Development
 
 ```bash
-bash check.sh     # ruff + pytest + 3.9.6 floor compile; last line must be 全绿 ✓
+bash check.sh
 ```
+
+- `bash check.sh`: ruff + pytest + 3.9.6 floor compile; last line must be 全绿 ✓
 
 Tests run in layers. The top layer installs the real product into a sandbox
 and drives the real `mlx` binary — no mocks between the assertion and the
