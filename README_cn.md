@@ -28,6 +28,8 @@
   - 新端点：`/v1/responses` 与 Anthropic `/v1/messages`（多模态后端），Codex CLI 与 Claude Code 能直接接入。
   - 网关自己代取 `http(s)://` 媒体，归一思考开关与强度，对模型一律流式取结果，
     给流式客户端保活，客户端断开即取消生成。
+  - 安装器可以反复跑：什么都没变时几秒结束、不停服务；结尾给一张「安装结果」清单，告诉你下一步做什么。
+    权重根默认改为 `~/.local/share/mlx_models`（已有安装沿用原来的位置）。
 - **v1.0.0**（2026-09）—— 首个发布版本。全链路已在真机跑通：
   下载 27.5 GB 模型 → 登记 → 起服务 → OpenAI 网关 → Cherry Studio → 流式推理。
 
@@ -37,8 +39,9 @@
 
 ### 前置
 
-需要 Homebrew 的 Python **3.10+**。macOS 自带的 3.9.6 **不行**，理由见
-[下文](#为什么不能用-macos-自带的-python)。
+- **Apple Silicon（M 系列芯片）的 Mac**。推理后端 MLX 只支持 arm64，Intel Mac 上安装器会直接停下、不改任何东西。
+- **Homebrew 的 Python 3.10+**。macOS 自带的 3.9.6 **不行**，理由见[下文](#为什么不能用-macos-自带的-python)。
+- **git**，以及放模型的磁盘空间（小模型几百 MB，大模型几十 GB）。
 
 ```bash
 brew install python@3.13
@@ -52,25 +55,38 @@ cd mlx-tool
 bash deployer/install.sh
 ```
 
-装完看最后的「安装结果」清单，照它的「下一步」做：一般是**新开一个终端**（PATH 才生效），然后起模型或下载模型。
-安装器结尾已经跑过 12 项检查（`mlx check`），不用再跑。只支持 Apple Silicon（M 系列芯片）的 Mac。
+安装器会建推理 venv 并装 `huggingface_hub`、`mlx`、`mlx-lm`、`mlx-vlm`（最后一个会带入 torch，第一次装要多等几分钟），
+生成两把密钥（`backend.api_key` 与 `api.token`），把 `mlx` 加进 `~/.zshrc` 的 PATH，最后自己跑一遍 12 项检查（`mlx check`）。
+**只看结尾的「安装结果」就够了**：全是 ✓ 就照它的「下一步」做，一般是**新开一个终端**（PATH 才生效）。
 
-安装器会建推理 venv 并装 `huggingface_hub`、`mlx`、`mlx-lm`、`mlx-vlm`（最后一个会带入 torch，
-第一次装要多等一会儿）；还会生成两把密钥（`backend.api_key` 与 `api.token`），并提示网关默认监听全部网卡。
-可以放心重跑：什么都没变时几秒结束、不停服务；有变化才重装，重装前自动备份配置与模型登记表。强制重装加 `--force`。
+装在哪里（三个目录互不相干，都能用环境变量 `MLX_ROOT_CODE` / `MLX_ROOT_DATA` / `MLX_ROOT_WEIGHTS` 改）：
+
+| 目录 | 默认位置 | 放什么 |
+|---|---|---|
+| 代码根 | `~/.local/share/mlx_server` | 工具本体与推理 venv，重装只换它 |
+| 数据根 | `~/.local/state/mlx_server` | 配置、模型登记表、日志、备份 |
+| 权重根 | `~/.local/share/mlx_models` | 下载的模型权重 |
+
+**可以放心重跑**：什么都没变时几秒结束、不停服务；有变化才重装，重装前自动备份配置与模型登记表。强制重装加 `--force`。
 
 ### 跑一个模型
 
-下载 + 登记一步到位（约 27 GB，可续传，有进度）：
+先用一个 0.6B 的小模型（约 335 MB）把整条链路走通。下载与登记一步完成，可续传，有进度：
 
 ```bash
-mlx model install qwen38 \
-  --repo=mlx-community/Qwen3.8-27B-8bit \
-  --port=8100
-
-mlx up qwen38
-mlx chat qwen38 --prompt="用一句话说明什么是投机解码"
+mlx model install qwen06b --repo=mlx-community/Qwen3-0.6B-4bit --port=8150
+mlx up qwen06b
+mlx chat qwen06b --prompt="用一句话介绍你自己"
 ```
+
+跑通后再换大模型。例如 27B 多模态模型约 28 GB，要 36 GB 以上统一内存；内存装不下时 `mlx up` 会直接拒绝并列出数字，不会把机器拖死：
+
+```bash
+mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
+mlx up qwen38
+```
+
+去哪里找模型、怎么看体积与内存，见手册的「找模型」一节。
 
 ### 接入外部应用
 
@@ -88,13 +104,26 @@ mlx config get api.token --reveal
 |---|---|
 | API 地址 | OpenAI 风格客户端：本机填 `http://127.0.0.1:8080/v1`；Anthropic 客户端（Claude Code）填同一地址但**不带** `/v1`。虚拟机或 Wi-Fi 设备填 `mlx api info` 里对应那行，两列都给了 |
 | API 密钥 | 网关令牌 —— 所有来源都要，本机也不例外 |
-| 模型 ID | `qwen38`（`mlx model ls` 里的 id，不是 HF 仓库名） |
+| 模型 ID | 你登记时起的名字，例如 `qwen06b`（`mlx model ls` 里的 id，不是 HF 仓库名） |
 
 各客户端（Cherry Studio、Claude Code、Codex CLI、Qwen Code）的具体填法见手册的[客户端一节](docs/USER-GUIDE.md#clients)。
 
 > ⚠️ **`max_tokens` 要给到 2048 以上。** 推理模型会先把思考过程输出到单独的
 > `reasoning` 字段，再产出 `content`。预算给小了会在思考阶段被截断，
 > `content` 回来是空的 —— 客户端里显示为**空白回复且没有任何报错**。
+
+### 升级与卸载
+
+升级：在源码目录里拉新代码再跑一次安装器。配置、模型登记表和权重都不动；安装结果会列出重装前停掉的服务和起回来的命令。
+
+```bash
+cd mlx-tool
+git pull
+bash deployer/install.sh
+```
+
+卸载：`mlx uninstall` 删除代码根和 PATH 那几行，**保留**数据根和权重根（几十 GB 的模型不会被顺手删掉）。
+它要求在终端里键入 `yes` 确认。详见手册的[卸载一节](docs/USER-GUIDE.md#uninstall)。
 
 ---
 
@@ -103,7 +132,8 @@ mlx config get api.token --reveal
 | 特性 | 实际意味着什么 |
 |---|---|
 | 🔋 **零依赖 CLI** | 所有面向用户的命令只 import 标准库。推理 venv 坏掉时，`mlx check` 照样能跑、照样告诉你怎么修。解释器按 venv → Homebrew → 系统三级回落，你和一份可用的诊断之间没有单点故障。 |
-| 🗂️ **三根分离** | 代码、状态、权重放在三个互不相干的目录。重装工具只重写第一个 —— 28 GB 的下载和认识它的注册表都留着。三个位置都能用 `MLX_ROOT_*` 覆盖。 |
+| 🗂️ **三根分离** | 代码、状态、权重放在三个互不相干的目录。重装工具只重写第一个 —— 28 GB 的下载和认识它的注册表都留着。三个位置都能用 `MLX_ROOT_*` 覆盖，重装时自动沿用上次的位置。 |
+| ♾️ **安装器可反复跑** | 代码、配置、PATH 都没变且自检通过就直接跳过，不停服务；有变化才重装，重装前备份配置与模型登记表（内容没变不重复备份）。每次安装都留日志，屏幕上的路径把 home 显示成 `~`，贴出来求助不带用户名。 |
 | 🧭 **按权重选后端** | 每次 `mlx up` 读模型的 `config.json`：有非空 `vision_config` 起 `mlx_vlm.server`，否则起 `mlx_lm.server`。单个模型可用 `modality` 强制走文本。 |
 | 🔌 **一个网关接多种客户端** | `mlx up api` 把所有在跑的模型收敛到一个端点后面：`/v1/chat/completions`、`/v1/completions`（文本模型）、`/v1/responses` 与 Anthropic `/v1/messages`（多模态模型）、`/v1/models`，另有免鉴权的 `GET /healthz`。`/v1` 前缀可省。后端不支持的端点回 404，模型零请求。 |
 | 🛡️ **暴露面写在明处** | 网关只放行回环、Wi-Fi / 有线网段与虚拟机网桥 —— VPN、雷雳网桥拒绝 —— 且每个请求都要令牌。TLS 可选（`api.tls_cert` / `api.tls_key`）。 |
@@ -117,6 +147,22 @@ mlx config get api.token --reveal
 ---
 
 ## 🖼️ 长什么样
+
+**安装结果 —— 装完只看这一段**
+
+```console
+$ bash deployer/install.sh
+…
+== 安装结果
+  ✓ 版本      1.1.0（已安装）
+  ✓ 自检      12 项，12 项通过
+  ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）
+  · 网关      http://127.0.0.1:8080/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）
+  · 模型      已登记 0 个
+  → 下一步：新开一个终端（或 source ~/.zshrc），然后 mlx model install <短名> --repo=<仓库>
+            <仓库> 在 huggingface.co/mlx-community 挑，例如 mlx-community/Qwen3-0.6B-4bit
+  · 日志      ~/.local/state/mlx_server/logs/install/20261027-103045.log
+```
 
 **健康检查 —— 十二项，每一项失败时都给可执行的修法**
 
@@ -202,7 +248,7 @@ chat 的第一个参数是**模型 id**，问题用 --prompt= 传：
 ## 📖 用户手册
 
 [完整手册](docs/USER-GUIDE.md)按实际顺序讲：安装、找模型、下载、登记、起服务、使用、
-接入外部工具（含虚拟机与 Wi-Fi 设备、TLS、媒体与流式）、卸载、排查。
+接入外部工具（含虚拟机与 Wi-Fi 设备、TLS、媒体与流式）、升级、卸载、排查。
 
 ### 为什么不能用 macOS 自带的 Python
 
@@ -255,14 +301,21 @@ result → 原语 → 策略 → 资源 → 编排 → 解析 → 装配
 
 ## 🧪 开发
 
+先在源码目录里建开发用的 venv（只放 pytest、ruff 等测试依赖，和工具运行时的推理 venv 无关）：
+
+```bash
+/opt/homebrew/bin/python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+```
+
+提交前跑一遍 `check.sh`。它依次做 ruff 检查、pytest、用真实的 3.9.6 解释器编译全部载荷文件，最后一行应是「全绿 ✓」：
+
 ```bash
 bash check.sh
 ```
 
-- `bash check.sh`：ruff + pytest + 3.9.6 下限编译；最后一行应是「全绿 ✓」
-
 测试分层。最上层把真实产物装进沙箱、驱动真实的 `mlx` 二进制 ——
-断言与产物之间没有桩。每次提交前跑一遍；仓库不会替你装 git 钩子。
+断言与产物之间没有桩。仓库不会替你装 git 钩子。
 
 部分 L3 网关用例读这台机器的真实网络配置：需要 Wi-Fi / 有线 / 虚拟机网桥上有 IPv4 地址，
 且有一个在线的 `utun*` VPN 接口。条件不满足时这些用例**按设计失败**，而不是跳过。

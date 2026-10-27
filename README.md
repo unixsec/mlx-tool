@@ -33,6 +33,10 @@
   - The gateway fetches `http(s)://` media itself, normalises thinking switches
     and effort levels, always streams from the model, keeps streaming clients
     alive and cancels generation when the client disconnects.
+  - The installer is safe to re-run: when nothing changed it finishes in seconds
+    without stopping your services, and it ends with an install summary that
+    tells you what to do next. The weights root now defaults to
+    `~/.local/share/mlx_models` (existing installs keep their location).
 - **v1.0.0** (2026-09) — First release. The full chain is verified on real
   hardware: download a 27.5 GB model → register → serve → OpenAI gateway →
   Cherry Studio → streaming inference.
@@ -43,8 +47,11 @@
 
 ### Prerequisites
 
-Homebrew Python **3.10+**. The system Python (3.9.6) will not work — see
-[Why](#why-not-the-system-python) below.
+- **A Mac with Apple Silicon (M-series chip).** The MLX backend is arm64-only;
+  on an Intel Mac the installer stops before changing anything.
+- **Homebrew Python 3.10+.** The system Python (3.9.6) will not work — see
+  [Why](#why-not-the-system-python) below.
+- **git**, plus disk space for models (a few hundred MB for small ones, tens of GB for large ones).
 
 ```bash
 brew install python@3.13
@@ -58,30 +65,49 @@ cd mlx-tool
 bash deployer/install.sh
 ```
 
-When it finishes, read the "安装结果" (install result) summary at the end and follow its next step —
-usually **open a new terminal** (so PATH takes effect), then start or download a model.
-The installer already ran the 12 checks (`mlx check`) for you. Apple Silicon Macs only.
-
 The installer builds the inference venv and installs `huggingface_hub`, `mlx`,
 `mlx-lm` and `mlx-vlm` (the last one pulls in torch, so the first install takes
-a while). It also generates the two secrets (`backend.api_key` and `api.token`)
-and prints a warning that the gateway listens on all interfaces by default.
-It is safe to re-run: when nothing changed it finishes in seconds without stopping
-your services; otherwise it backs up your settings and model registry before reinstalling.
-Pass `--force` to reinstall anyway.
+a few minutes), generates the two secrets (`backend.api_key` and `api.token`),
+adds `mlx` to the PATH in `~/.zshrc`, and finally runs the 12 checks
+(`mlx check`) itself. **Only the "安装结果" (install result) summary at the end
+matters**: if every line is ✓, follow its next step — usually **open a new
+terminal** so PATH takes effect.
+
+Where things go (three independent directories, each overridable with
+`MLX_ROOT_CODE` / `MLX_ROOT_DATA` / `MLX_ROOT_WEIGHTS`):
+
+| Root | Default | Holds |
+|---|---|---|
+| Code | `~/.local/share/mlx_server` | the tool and its inference venv — the only thing a reinstall replaces |
+| Data | `~/.local/state/mlx_server` | settings, model registry, logs, backups |
+| Weights | `~/.local/share/mlx_models` | downloaded model weights |
+
+**Safe to re-run**: when nothing changed it finishes in seconds without stopping
+your services; otherwise it backs up your settings and model registry before
+reinstalling. Pass `--force` to reinstall anyway.
 
 ### Run a model
 
-Download + register in one step (~27 GB, resumable, shows progress):
+Start with a 0.6B model (~335 MB) to check the whole chain. Download and
+registration happen in one step, resumable, with progress:
 
 ```bash
-mlx model install qwen38 \
-  --repo=mlx-community/Qwen3.8-27B-8bit \
-  --port=8100
-
-mlx up qwen38
-mlx chat qwen38 --prompt="Explain speculative decoding in one sentence"
+mlx model install qwen06b --repo=mlx-community/Qwen3-0.6B-4bit --port=8150
+mlx up qwen06b
+mlx chat qwen06b --prompt="Introduce yourself in one sentence"
 ```
+
+Then move to a bigger model. The 27B multimodal model below is ~28 GB and needs
+36 GB or more of unified memory; if it does not fit, `mlx up` refuses with the
+numbers instead of grinding the machine to a halt:
+
+```bash
+mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
+mlx up qwen38
+```
+
+Where to find models and how to size them against your memory: see "找模型"
+(finding models) in the [user guide](docs/USER-GUIDE.md).
 
 ### Connect an external app
 
@@ -99,7 +125,7 @@ mlx config get api.token --reveal
 |---|---|
 | Base URL | OpenAI-style clients: `http://127.0.0.1:8080/v1` on this Mac; Anthropic clients (Claude Code): the same address **without** `/v1`. A VM or Wi-Fi device uses the matching row from `mlx api info`, which prints both columns |
 | API Key | the gateway token — every source needs it, this Mac included |
-| Model ID | `qwen38` (the id from `mlx model ls`, not the HF repo name) |
+| Model ID | the id you registered, e.g. `qwen06b` (the id from `mlx model ls`, not the HF repo name) |
 
 Per-client settings (Cherry Studio, Claude Code, Codex CLI, Qwen Code) are in the
 guide's [client section](docs/USER-GUIDE.md#clients).
@@ -109,6 +135,23 @@ guide's [client section](docs/USER-GUIDE.md#clients).
 > truncates mid-reasoning, `content` returns empty, and your client renders a
 > **blank reply with no error**.
 
+### Upgrade and uninstall
+
+Upgrade: pull the new code in the source directory and run the installer again.
+Settings, the model registry and weights are left alone; the install summary
+lists any services it had to stop and how to start them again.
+
+```bash
+cd mlx-tool
+git pull
+bash deployer/install.sh
+```
+
+Uninstall: `mlx uninstall` removes the code root and the PATH lines, and
+**keeps** the data and weights roots (tens of GB of models are never deleted as a
+side effect). It asks you to type `yes` in the terminal. See the guide's
+[uninstall section](docs/USER-GUIDE.md#uninstall).
+
 ---
 
 ## ✨ Features
@@ -116,7 +159,8 @@ guide's [client section](docs/USER-GUIDE.md#clients).
 | Feature | What it means in practice |
 |---|---|
 | 🔋 **Zero-dependency CLI** | Every user-facing command imports only the Python standard library. When the inference venv breaks, `mlx check` still runs and still tells you how to fix it. The interpreter falls back venv → Homebrew → system, so there is no single point of failure between you and a working diagnostic. |
-| 🗂️ **Three separate roots** | Code, state, and weights live in three independent directories. Reinstalling the tool rewrites only the first — a 28 GB download and the registry that knows about it both survive. All three are overridable via `MLX_ROOT_*`. |
+| 🗂️ **Three separate roots** | Code, state, and weights live in three independent directories. Reinstalling the tool rewrites only the first — a 28 GB download and the registry that knows about it both survive. All three are overridable via `MLX_ROOT_*`, and a reinstall keeps whatever locations you used last time. |
+| ♾️ **An installer you can re-run** | When the code, config and PATH are unchanged and the self-check passes, it skips the reinstall and leaves your services running; otherwise it reinstalls after backing up settings and the model registry (no duplicate backups when nothing changed). Every run is logged, and on screen your home directory shows as `~`, so pasting the output for help does not leak your username. |
 | 🧭 **Backend picked from the weights** | Every `mlx up` reads the model's `config.json`: a non-empty `vision_config` starts `mlx_vlm.server`, anything else `mlx_lm.server`. Force text mode per model with `modality`. |
 | 🔌 **One gateway, many clients** | `mlx up api` puts every running model behind one endpoint: `/v1/chat/completions`, `/v1/completions` (text models), `/v1/responses` and Anthropic `/v1/messages` (multimodal models), `/v1/models`, plus an unauthenticated `GET /healthz`. The `/v1` prefix is optional. Endpoints a backend can't serve return 404 without touching the model. |
 | 🛡️ **Explicit exposure** | The gateway accepts loopback, Wi-Fi / Ethernet subnets and VM bridges — VPN and Thunderbolt bridges are rejected — and every request needs the token. TLS is optional (`api.tls_cert` / `api.tls_key`). |
@@ -130,6 +174,26 @@ guide's [client section](docs/USER-GUIDE.md#clients).
 ---
 
 ## 🖼️ Showcase
+
+**Install summary — the only part of the install output you need to read**
+
+```console
+$ bash deployer/install.sh
+…
+== 安装结果
+  ✓ 版本      1.1.0（已安装）
+  ✓ 自检      12 项，12 项通过
+  ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）
+  · 网关      http://127.0.0.1:8080/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）
+  · 模型      已登记 0 个
+  → 下一步：新开一个终端（或 source ~/.zshrc），然后 mlx model install <短名> --repo=<仓库>
+            <仓库> 在 huggingface.co/mlx-community 挑，例如 mlx-community/Qwen3-0.6B-4bit
+  · 日志      ~/.local/state/mlx_server/logs/install/20261027-103045.log
+```
+
+The tool's messages are in Chinese. Each line reads: version (installed), self-check
+(12 of 12 passed), secrets ready, gateway address, registered models, the next
+command to run, and the log file.
 
 **Health check — twelve items, every one actionable when it fails**
 
@@ -217,7 +281,7 @@ chat 的第一个参数是**模型 id**，问题用 --prompt= 传：
 
 The [full guide](docs/USER-GUIDE.md) walks through install, finding models,
 download, register, serve, use, connecting external tools (including VMs, Wi-Fi
-devices, TLS, media and streaming), uninstall and troubleshooting.
+devices, TLS, media and streaming), upgrade, uninstall and troubleshooting.
 
 ### Why not the system Python?
 
@@ -277,16 +341,24 @@ result → primitives → policy → resources → orchestration → parsing →
 
 ## 🧪 Development
 
+First create a development venv in the source directory (test tools only —
+unrelated to the tool's own inference venv):
+
+```bash
+/opt/homebrew/bin/python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+```
+
+Run `check.sh` before every commit. It runs ruff, pytest, and a compile of every
+payload file with the real 3.9.6 interpreter; the last line must be 全绿 ✓ (all green):
+
 ```bash
 bash check.sh
 ```
 
-- `bash check.sh`: ruff + pytest + 3.9.6 floor compile; last line must be 全绿 ✓
-
 Tests run in layers. The top layer installs the real product into a sandbox
 and drives the real `mlx` binary — no mocks between the assertion and the
-artifact. Run `check.sh` before every commit; the repository does not install a
-git hook for you.
+artifact. The repository does not install a git hook for you.
 
 Some L3 gateway tests read this machine's real network configuration: they
 need an IPv4 address on Wi-Fi / Ethernet / a VM bridge and an active `utun*`
