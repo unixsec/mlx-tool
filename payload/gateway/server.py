@@ -54,6 +54,10 @@ class GatewayServer(ThreadingHTTPServer):
 
     daemon_threads = True
     allow_reuse_address = True
+    # listen 队列。`socketserver` 默认 5：accept 线程来不及取的连接排在内核队列里，满了内核
+    # 直接 RST，网关一行日志都没有（2026-10-29 真机：12 路并发 4 路 ConnectionReset，而
+    # max_concurrency 默认就是 8）。128 = macOS 的 kern.ipc.somaxconn，再大也会被内核截到它。
+    request_queue_size = 128
 
     def __init__(self, server_address, handler):
         if ":" in server_address[0]:

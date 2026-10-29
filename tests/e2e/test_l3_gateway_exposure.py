@@ -16,6 +16,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -284,3 +285,44 @@ def test_tls_transport_env_token_and_loopback_bind(product, payload, sys_py):
     # 以错误的理由通过，把「网口坏了」误证成「回环收紧生效了」。
     with pytest.raises(ConnectionRefusedError):
         socket.create_connection((lan, port), 2)
+
+
+def test_connection_burst_is_queued_not_reset(product):
+    """N 个客户端同时连进来，每个都要拿到 HTTP 响应（2026-10-29 真机验收 #16）。
+
+    `socketserver` 默认 `request_queue_size = 5`：accept 线程来不及取的连接排在内核的
+    listen 队列里，队列满了内核直接 RST —— 网关代码见不到这些连接，日志里什么都没有，
+    客户端拿到 `ConnectionResetError` / `BrokenPipeError`。真机上 12 路并发有 4 路这样失败，
+    而产品默认的 `max_concurrency` 就是 8。
+
+    40 路用 barrier 同时 connect，逼出 accept 跟不上的那一刻；只认 HTTP 响应行，
+    `401`（没带令牌）也算 —— 要证的是连接进得来，不是鉴权。
+    """
+    mlx, port = product["mlx"], product["port"]
+    r = mlx("up", "api")
+    assert r.returncode == 0, r.stdout + r.stderr
+    n = 40
+    go = threading.Barrier(n)
+    got = [None] * n
+
+    def one(i):
+        s = socket.socket()
+        s.settimeout(15)
+        go.wait()
+        try:
+            s.connect(("127.0.0.1", port))
+            s.sendall(b"GET /v1/models HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            got[i] = s.recv(12)
+        except OSError as exc:
+            got[i] = type(exc).__name__
+        finally:
+            s.close()
+
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    bad = [g for g in got if not (isinstance(g, bytes) and g.startswith(b"HTTP/1."))]
+    assert bad == [], f"{len(bad)}/{n} 个连接没拿到 HTTP 响应：{sorted(set(map(str, bad)))}"
+
