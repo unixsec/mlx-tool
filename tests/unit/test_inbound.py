@@ -132,3 +132,71 @@ def test_build_upstream(payload, sys_py):
     assert got["compl"]["untouched"] is True
     assert got["compl_bare"]["so"] == {"include_usage": True} and got["compl_bare"]["stream"] is True
     assert got["compl_bare"]["meta"] == {"client_stream": False, "client_usage": False}
+
+
+CAPTURED_PROG = r"""
+import copy, json, tempfile
+from gateway import media as M
+from gateway import translate as T
+def fake_fetch(url, peer, nets, max_bytes, kinds):
+    return {"content_type": "image/png", "data": b"\x89PNG" + b"p" * 50, "host": "img.test"}
+store = M.Store(tempfile.mkdtemp())
+VLM = {"backend": "mlx_vlm", "model_arg": "qwen38", "effort_domain": ["low", "medium", "xhigh"],
+       "reads_completion_tokens": False, "native_template_kwargs": False}
+TRANSFORMED = ("model", "stream", "stream_options", "reasoning", "reasoning_effort")
+canon = lambda o: json.dumps(o, sort_keys=True, ensure_ascii=False)
+
+def rewritten_media(o, u):
+    # 唯一允许的差异：http(s) 图片被代取改写
+    if not (isinstance(o, dict) and isinstance(u, dict)):
+        return False
+    if o.get("type") == "image" and isinstance(o.get("source"), dict) and o["source"].get("type") == "url":
+        return (u.get("source") or {}).get("type") == "base64"
+    if o.get("type") == "input_image" and str(o.get("image_url", "")).startswith("http"):
+        return str(u.get("image_url", "")).startswith("data:")
+    return False
+
+def walk(o, u, path, bad):
+    if rewritten_media(o, u):
+        return
+    if isinstance(o, dict) and isinstance(u, dict):
+        if sorted(o) != sorted(u):
+            bad.append(path + " 键集")
+            return
+        for k in o:
+            walk(o[k], u[k], path + "." + k, bad)
+    elif isinstance(o, list) and isinstance(u, list):
+        if len(o) != len(u):
+            bad.append(path + " 长度")
+            return
+        for i, (x, y) in enumerate(zip(o, u)):
+            walk(x, y, "%s[%d]" % (path, i), bad)
+    elif canon(o) != canon(u):
+        bad.append(path)
+
+out = {}
+for name, family, shapes in (("@MSG@", "messages", ('"tool_use"', '"tool_result"')),
+                             ("@RESP@", "responses", ('"function_call"', '"function_call_output"'))):
+    body = json.load(open(name))
+    orig = copy.deepcopy(body)
+    ctx = {"nets": [], "limits": {"media_max_mb": 128, "media_max_parts": 256, "inflight_max_mb": 65536},
+           "ticket": M.Ticket(M.Budget(1 << 34), store), "store": store, "fetcher": fake_fetch}
+    up, meta = T.build_upstream(body, family, VLM, "REMOTE", "BACKEND-ARG", ctx)
+    bad = []
+    walk({k: v for k, v in orig.items() if k not in TRANSFORMED},
+         {k: v for k, v in up.items() if k not in TRANSFORMED}, "$", bad)
+    out[family] = {"shapes": [s in canon(orig) for s in shapes], "bad": bad[:20],
+                   "untouched": canon(body) == canon(orig), "model": up["model"], "stream": up["stream"]}
+print(json.dumps(out, ensure_ascii=False))
+"""
+
+
+def test_captured_client_bodies_pass_through(payload, sys_py):
+    """真实抓取的 Claude Code / Codex 请求体：非媒体节点逐字节不变（spec §8.2「变换 · 多轮协议」）。"""
+    got = run_floor(payload, sys_py, CAPTURED_PROG, with_gateway=True,
+                    MSG=PROTO / "captured_claude_code_messages.json",
+                    RESP=PROTO / "captured_codex_responses.json")
+    for family, g in got.items():
+        assert g["shapes"] == [True, True], f"{family} 抓取夹具缺工具调用轮次 —— 断言走不到多轮结构"
+        assert g["bad"] == [], f"{family} 入站管线改动了非媒体节点：{g['bad']}"
+        assert g["untouched"] is True and (g["model"], g["stream"]) == ("BACKEND-ARG", True)
