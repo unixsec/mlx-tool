@@ -6,6 +6,7 @@
 流式直出（经 `relay`：`read1`、保活、断连即取消上游）与连接生命周期。
 """
 import contextlib
+import errno
 import http.client
 import io
 import ipaddress
@@ -311,6 +312,8 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 super().handle_one_request()
             finally:
                 self._headers_done()
+                if getattr(self.connection, "_mlx_poisoned", False):
+                    self.close_connection = True     # TLS 断连探测读走过客户端的字节，见 relay._tls_alive
 
         def _headers_done(self):
             if self._hdr.deadline is not None:
@@ -800,6 +803,12 @@ def bind_servers(host, port, handler):
         try:
             loops.append(GatewayServer(("::1", port), handler))
         except OSError as e:
+            # 只容忍「本机没有 IPv6 回环」；`::1:P` 已被别人占着（EADDRINUSE）正是要防的情形，
+            # 照常起来等于把 `localhost` 的流量留给那个占用者
+            if e.errno not in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT):
+                for s in loops:
+                    s.server_close()
+                raise
             log_event("warn", "loopback6_unavailable", detail=str(e)[:200])
     try:
         main = GatewayServer((host, port), handler)

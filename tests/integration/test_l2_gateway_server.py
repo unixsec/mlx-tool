@@ -929,3 +929,29 @@ def test_wildcard_bind_claims_loopback_so_it_cannot_be_hijacked(payload, sys_py)
     got = run_floor(payload, sys_py, LOOPBACK_CLAIM, with_gateway=True, timeout=60, TOK=TOK)
     assert got["reuseaddr"] == 48 and got["reuseport"] == 48, f"回环地址应已被网关占住：{got}"
     assert "200" in got["served"], got
+
+
+LOOP6_TAKEN = PRE + r"""
+import gateway.server as server_mod
+probe = socket.socket(); probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]; probe.close()
+squat = socket.socket(socket.AF_INET6); squat.bind(("::1", port)); squat.listen(1)
+try:
+    server_mod.bind_servers("0.0.0.0", port, make_handler(g)); out = "started"
+except OSError as e:
+    out = e.errno
+v4_free = True
+s = socket.socket()
+try:
+    s.bind(("127.0.0.1", port))
+except OSError:
+    v4_free = False
+s.close()
+print(json.dumps({"result": out, "v4_released": v4_free}))
+"""
+
+
+def test_wildcard_bind_refuses_when_ipv6_loopback_is_taken(payload, sys_py):
+    """`::1:P` 已被别人占着时不能照常起来：`localhost` 解析到 ::1 的客户端会连到占用者。"""
+    got = run_floor(payload, sys_py, LOOP6_TAKEN, with_gateway=True, TOK=TOK)
+    assert got["result"] == 48, f"::1 被占应拒绝启动：{got}"
+    assert got["v4_released"] is True, f"已绑的 127.0.0.1 应释放：{got}"

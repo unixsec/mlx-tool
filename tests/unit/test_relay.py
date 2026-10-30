@@ -261,12 +261,36 @@ def srv():
     box["s"] = sctx.wrap_socket(tb, server_side=True)
 th = threading.Thread(target=srv); th.start()
 tc = cctx.wrap_socket(ta, server_hostname="localhost"); th.join()
+r["tls_idle"] = R.client_alive(tc)
 box["s"].send(b"y"); time.sleep(0.2)
 try:
     tc.recv(1, socket.MSG_PEEK); premise = "no-raise"
 except ValueError:
     premise = "ValueError"
-r["tls"] = [premise, R.client_alive(tc), tc.recv(1).decode()]
+# 对端在请求进行中又发了数据（流水线）：判在线；那个字节读走了，连接标记为不可复用
+r["tls"] = [premise, R.client_alive(tc), bool(getattr(tc, "_mlx_poisoned", False))]
+def tls_pair():
+    a, b = socket.socketpair()
+    bx = {}
+    t = threading.Thread(target=lambda: bx.setdefault("s", sctx.wrap_socket(b, server_side=True)))
+    t.start(); cli = cctx.wrap_socket(a, server_hostname="localhost"); t.join()
+    return bx["s"], cli
+# 三种断开方式：直接 close（不发 close_notify）、unwrap（发 close_notify）、半关
+for how in ("close", "unwrap", "shut_wr"):
+    srv_side, cli = tls_pair()
+    if how == "close":
+        cli.close()
+    elif how == "unwrap":
+        # unwrap 发出 close_notify 后会等对端回一个；这里只要「发出」，等不到就算了
+        cli.settimeout(0.3)
+        try:
+            cli.unwrap()
+        except (OSError, ssl.SSLError):
+            pass
+    else:
+        cli.shutdown(socket.SHUT_WR)
+    time.sleep(0.2)
+    r["tls_" + how] = R.client_alive(srv_side)
 print(json.dumps(r))
 """
 
@@ -315,4 +339,7 @@ def test_relay_contract_fixes(payload, sys_py, tmp_path):
     # I5c：peek 不吞数据；对端 RST ⇒ 离线；TLS ⇒ 在线且数据仍在
     assert g["peek"] == [True, "x"]
     assert g["reset"] is False
-    assert g["tls"] == ["ValueError", True, "y"], g["tls"]
+    assert g["tls"] == ["ValueError", True, True], g["tls"]
+    assert g["tls_idle"] is True, g
+    for how in ("close", "unwrap", "shut_wr"):
+        assert g["tls_" + how] is False, f"TLS 对端 {how} 后应判离线：{g}"

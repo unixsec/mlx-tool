@@ -18,6 +18,7 @@ import json
 import queue
 import select
 import socket
+import ssl
 import threading
 import time
 
@@ -63,16 +64,55 @@ def open_upstream(port, path, payload, headers=None, host="127.0.0.1", timeout_s
 
 def client_alive(sock):
     # type: (object) -> bool
-    """客户端还连着吗。**不读走数据**（`MSG_PEEK`）；可读且读到 0 字节 ⇒ 对端已关闭。"""
+    """客户端还连着吗。明文：**不读走数据**（`MSG_PEEK`）；可读且读到 0 字节 ⇒ 对端已关闭。"""
+    if isinstance(sock, ssl.SSLSocket):
+        return _tls_alive(sock)
     try:
         readable, _, _ = select.select([sock], [], [], 0)
         if not readable:
             return True
         return bool(sock.recv(1, socket.MSG_PEEK))
-    except ValueError:
-        return True                      # TLS socket 不支持 peek：靠写失败发现（已知限制）
     except OSError:
         return False
+
+
+def _tls_alive(sock):
+    # type: (object) -> bool
+    """TLS 连接的断连探测。`SSLSocket.recv` 不接受 `MSG_PEEK`，分三步：
+
+    1. TLS 层已有解密好的数据，或底层不可读 ⇒ 在线；
+    2. 绕过 TLS 直接 peek 底层 TCP：读到 0 字节（FIN）或出错（RST）⇒ 离线；
+    3. 底层有字节：可能是 close_notify（TLS 1.3 下它也伪装成应用数据记录），也可能是
+       客户端流水线发来的下一条请求 —— 只能非阻塞地真读一次。读到 EOF / 关闭告警 ⇒ 离线；
+       读到数据 ⇒ 在线，但那个字节已被读走，**这条连接不能再复用**（`_mlx_poisoned`，
+       handler 据此关连接）。数据还不够一条记录 ⇒ 在线。
+    """
+    try:
+        if sock.pending():
+            return True
+        readable, _, _ = select.select([sock], [], [], 0)
+        if not readable:
+            return True
+        if not socket.socket.recv(sock, 1, socket.MSG_PEEK):
+            return False
+    except OSError:
+        return False
+    timeout = sock.gettimeout()
+    try:
+        sock.setblocking(False)
+        try:
+            data = sock.recv(1)
+        except ssl.SSLWantReadError:
+            return True
+        except (ssl.SSLError, OSError):
+            return False
+        if not data:
+            return False
+        sock._mlx_poisoned = True
+        return True
+    finally:
+        with contextlib.suppress(OSError):
+            sock.settimeout(timeout)
 
 
 def _close(state):
