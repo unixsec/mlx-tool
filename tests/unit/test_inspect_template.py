@@ -83,6 +83,8 @@ with open(wrapper, "w") as fh:
     fh.write('exec "{}" "$@"\\n'.format(os.path.join(VENV, "bin", "python3")))
 os.chmod(wrapper, 0o755)
 snap = seed("env_iso", "org/env_iso", 8100, config={}, template=fixture("qwen38/chat_template.jinja"))
+# 注：解释器前缀探测（`templates._prefixes`，不带模板、不进沙箱）也经这个包装脚本、用同一份
+# 隔离环境起进程，env_dump 由它写出；渲染本身在沙箱里，写文件会被拒
 r = templates.inspect_template(snap, wrapper)
 result_valid = (not r.is_unknown() and
                 r.value.get("thinking_default") is True and
@@ -103,12 +105,25 @@ print(json.dumps({
     assert got["result_valid"], "Probe result should still be valid after env isolation"
 
 
-def test_tempfile_errors_map_to_unknown(payload, sys_py):
+def test_renderer_uses_no_temp_files_and_runs_in_an_os_sandbox(payload, sys_py):
+    """1.2.0：模板经 stdin 传入（tmp 目录不可用也照常判定），渲染子进程跑在 sandbox-exec 里：
+    读不到 home 与数据根（含 0600 的 settings.json）、写不了文件，解释器自己的前缀照常可读。"""
     got = _run(payload, sys_py, """
-import tempfile
+import subprocess, tempfile
 tempfile.tempdir = "/nonexistent-mlx-test-dir"
 snap = seed("tmpfail", "org/tmpfail", 8100, config={}, template=fixture("qwen38/chat_template.jinja"))
 r = templates.inspect_template(snap, os.path.join(VENV, "bin", "python3"))
-print(json.dumps({"unknown": r.kind} if r.is_unknown() else {"error": "should be unknown"}))
+secret = os.path.join(DATA, "settings.json")
+open(secret, "w").write("SECRET")
+prof = templates.sandbox_profile("@RENDER_PY@", deny_read=(DATA,))
+code = ("import json\\nr={}\\n"
+        "try:\\n    open(%r).read(); r['read']='allowed'\\nexcept Exception as e: r['read']=type(e).__name__\\n"
+        "try:\\n    open(%r,'w'); r['write']='allowed'\\nexcept Exception as e: r['write']=type(e).__name__\\n"
+        "import jinja2; r['jinja2']='ok'\\nprint(json.dumps(r))") % (secret, os.path.join(DATA, "x"))
+out = subprocess.run(["/usr/bin/sandbox-exec", "-p", prof, "@RENDER_PY@", "-I", "-c", code],
+                     capture_output=True, text=True)
+print(json.dumps({"valid": (not r.is_unknown()) and r.value.get("thinking_default") is True,
+                  "sandbox": json.loads(out.stdout or "{}")}))
 """)
-    assert got.get("unknown") == "TOOL_UNAVAILABLE", f"Expected TOOL_UNAVAILABLE, got {got}"
+    assert got["valid"], f"tmp 目录不可用时模板判定应照常：{got}"
+    assert got["sandbox"] == {"read": "PermissionError", "write": "PermissionError", "jinja2": "ok"}, got

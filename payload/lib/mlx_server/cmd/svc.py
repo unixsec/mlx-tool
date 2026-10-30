@@ -344,9 +344,8 @@ def _v_backend(state, inv, deps):
     # 模板）按 Unknown 处理，`route.decide` 已经把它消化成空证据——不对
     # mlx_lm 引入新的拒绝，`--enable-thinking` 仍然只认 `backends.tsv` 的
     # `thinking` 列（mlx_lm 该列是 `-`，恒不受此影响）。
-    template = templates.inspect_template(
-        state["weights_path"], cfg.venv_python,
-        ps_path=(getattr(ctx, "bins", None) or {}).get("ps", "/bin/ps"))
+    template = templates.inspect_template(state["weights_path"], cfg.venv_python,
+                                          deny_read=(ctx.root_data,))
     out = route.decide(inv.target, facts.value, template, draft, cfg.values,
                        (caps.get(ctx) or {}).get("packages") or [],
                        {r["backend"]: r for r in tv.backends()}, size)

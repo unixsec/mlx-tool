@@ -94,8 +94,7 @@ def run(ctx, stack, inv, deps=None):
                                  else facts.value.get("vision_src"))
             py = os.path.join(ctx.venv, "bin", "python3") if getattr(ctx, "venv", "") else ""
             if py and os.path.exists(py):
-                t = templates.inspect_template(
-                    found, py, ps_path=(getattr(ctx, "bins", None) or {}).get("ps", "/bin/ps"))
+                t = templates.inspect_template(found, py, deny_read=(ctx.root_data,))
                 template = ({"undeterminable": t.reason or t.kind} if is_unknown(t) else
                             {"thinking_default": t.value.get("thinking_default"),
                              "effort_domain": list(t.value.get("effort_domain") or [])})
