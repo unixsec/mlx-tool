@@ -189,6 +189,10 @@ help.config.import.example	mlx config import --from=./mlx-config.json --dry-run
 # 它们此前是 `cmd/check.py` 的一个字典字面量，逃在 `G-PC-05` 射程之外 ——
 # 而它们每一条都提到了某条命令（`mlx install` / `mlx caps refresh` / …），
 # 那正是那条守卫要盯的东西（它刚抓出过「文案指向不存在的 mlx logs」）。
+check.hint.dir.missing	{path} 不存在 —— `mkdir -p {path}`，或重跑安装器
+check.hint.dir.not_writable	当前用户写不进 {path} —— `ls -ld {path}` 看属主；是自己的目录就 `chmod u+rwx {path}`，属主不对就 `sudo chown -R "$(id -un)" {path}`
+check.hint.dir.not_dir	{path} 存在但不是目录 —— 把它移走后 `mkdir -p {path}`
+check.hint.dir.unmounted	{path} 所在的卷 {volume} 没挂载 —— `diskutil mount {volume}`
 check.hint.caps	能力从未采集 —— 跑 `mlx caps refresh`
 check.hint.code_root	代码根不可读 —— 重装：`mlx install`
 check.hint.data_root	数据根不可读 —— 检查权限，或换 MLX_ROOT_DATA 重装
@@ -197,7 +201,7 @@ check.hint.ports	端口冲突或区间探测失败 —— `mlx model ls` 看各�
 check.hint.run_dir	运行记录目录不可写 —— 检查数据根权限
 check.hint.tables	share/ 下的表缺失或损坏 —— 重装：`mlx install`
 check.hint.venv	推理 venv 缺失或解释器太旧（要 ≥ 3.10）—— `mlx up` 会起不来新模型。`mlx version` 看当前版本；修：`brew install python@3.13` 后重跑安装器 `bash <源码目录>/deployer/install.sh`（它会用新解释器重建 venv，权重与注册表不动）
-check.hint.weights_root	权重根不可读 —— 检查权限或磁盘挂载
+check.hint.weights_root	权重根不可写 —— 检查权限或磁盘挂载
 check.hint.gateway_nets	网关算放行网段失败，正沿用上一份（或只放行本机）—— `mlx api info` 看原因，通常是 networksetup 或 ifconfig 执行失败
 check.hint.gateway_port	网关端口上有别的进程在监听 —— `mlx status` 看网关行；停掉那个进程，或换网关端口后 `mlx restart api`
 check.hint.settings_mode	settings.json 权限宽于 0600，两把密钥可被同机其他用户读取 —— chmod 600 数据根下的 settings.json

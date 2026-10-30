@@ -13,6 +13,21 @@ ITEMS = ("code_root", "data_root", "weights_root", "venv", "tables",
 
 # 每项失败时的**下一步**。检查报告的价值在于它告诉你该做什么，
 # 而不是让你拿着一个 False 去猜。
+def _cause_hint(tables, probe):
+    # type: (object, object) -> str
+    """带成因的失败（`checks.fail`）→ 写着真实路径的修法；没有成因 ⇒ 空串（退回按项的通用提示）。"""
+    reason = getattr(probe, "reason", None) or ""
+    cause, sep, path = reason.partition("|")
+    if not sep or tables is None:
+        return ""
+    parts = path.split("/")
+    volume = parts[2] if len(parts) > 2 and parts[1] == "Volumes" else ""
+    try:
+        return tables.text(tables.msg("check.hint.dir." + cause), path=path, volume=volume)
+    except Exception:                              # noqa: BLE001
+        return ""
+
+
 def _hint(tables, item):
     # type: (object, str) -> str
     """某一项失败时的**下一步**。文案在 `messages.tsv`（键 `check.hint.<项>`）。
@@ -44,7 +59,9 @@ def run(ctx, stack, inv, deps=None):
             continue
         r = fn(ctx)
         if is_unknown(r):
-            rows.append((name, "undeterminable", r.kind or ""))
+            # 判不出的也要说出**为什么**（此前只有 kind，如 PARSE_FAILED）
+            rows.append((name, "undeterminable",
+                         (r.kind or "") + (f"：{r.reason}" if r.reason else "")))
             undeterminable.append(name)
         elif r.value is True:
             # `Ok` 是工厂函数不是类型 —— `isinstance(r, Ok)` 会 TypeError。
@@ -53,7 +70,7 @@ def run(ctx, stack, inv, deps=None):
         else:
             # **detail 必须可操作**。此前填 `str(r.value)` ⇒ 用户看到的是
             # `venv  failed  False` —— 既没说哪里不对，也没说该做什么。
-            rows.append((name, "failed", _hint(deps.get("tables"), name)))
+            rows.append((name, "failed", _cause_hint(deps.get("tables"), r) or _hint(deps.get("tables"), name)))
             failed.append(name)
 
     payload = {"rows": rows, "undeterminable": undeterminable, "failed": failed}

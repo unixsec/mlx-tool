@@ -6,15 +6,33 @@
 import os
 import subprocess
 
-from .result import Ok, Unknown
+from .result import Ok, Probe, Unknown
+
+
+def fail(cause, path):
+    # type: (str, str) -> object
+    """`Ok(False)` 并带上成因与路径（`reason` 是给人看的，判定只读 value）—— `cmd.check`
+    据此给出能照做的修法，而不是「检查权限 / 磁盘挂载」。"""
+    return Probe(True, value=False, reason=f"{cause}|{path}")
+
+
+def _dir_cause(path):
+    # type: (str) -> object
+    if os.path.isdir(path):
+        return None if os.access(path, os.W_OK) else "not_writable"
+    if os.path.exists(path):
+        return "not_dir"
+    parts = os.path.abspath(path).split(os.sep)
+    if len(parts) > 2 and parts[1] == "Volumes" and not os.path.isdir(os.sep.join(parts[:3])):
+        return "unmounted"
+    return "missing"
 
 
 def _dir_ok(path, what):
     if not path:
         return Unknown("PARSE_FAILED", f"{what} 未配置")
-    if not os.path.isdir(path):
-        return Ok(False)
-    return Ok(os.access(path, os.W_OK))
+    cause = _dir_cause(path)
+    return Ok(True) if cause is None else fail(cause, path)
 
 
 def code_root(ctx):
@@ -90,7 +108,10 @@ def models_file(ctx):
 def run_dir(ctx):
     """运行记录目录可写（没有也算通过 —— 首次使用时它还不存在）。"""
     d = os.path.join(ctx.root_data, "run")
-    return Ok(True) if not os.path.exists(d) else Ok(os.access(d, os.W_OK))
+    if not os.path.exists(d):
+        return Ok(True)
+    cause = _dir_cause(d)
+    return Ok(True) if cause is None else fail(cause, d)
 
 
 def ports(ctx):
