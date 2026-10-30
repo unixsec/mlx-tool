@@ -52,6 +52,18 @@ def effective_vision(facts_vision, modality):
     return facts_vision
 
 
+def vision_basis(facts_src, modality):
+    # type: (object, object) -> str
+    """`effective_vision` 结论的出处，与它同一处定义：覆盖生效时写覆盖，权重事实留在括号里对照。
+
+    此前 `decide` 的结论走覆盖、出处却直取权重事实 —— `modality=text` 强制 R4 时 dry-run
+    仍写「依据 config.json:vision_config」（2026-10-26 真机）。
+    """
+    if modality in ("text", "vision"):
+        return f"设置 modality={modality}" + (f"（权重 {facts_src}）" if facts_src else "")
+    return facts_src or ""
+
+
 def key_fingerprint(value):
     # type: (object) -> object
     """密钥指纹：`sha256` 前 12 hex。运行记录只存它，用来判「密钥已变更，需 restart」。"""
@@ -98,7 +110,7 @@ def decide(model_id, facts, template, draft, cfg_values, packages, backends, siz
     return Route(backend, row, rule,
                  thinking=bool(tv.get("thinking_default")) and row.get("thinking") == "template",
                  effort_domain=tv.get("effort_domain") or [],
-                 vision_src=facts.get("vision_src") or "",
+                 vision_src=vision_basis(facts.get("vision_src"), cfg_values.get("modality")),
                  size_mb=size_mb,
                  max_concurrency=cfg_values.get("max_concurrency"),
                  key_fp=key_fingerprint(cfg_values.get("backend.api_key")) if needs_key else None,

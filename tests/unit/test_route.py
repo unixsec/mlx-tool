@@ -31,7 +31,7 @@ def go(facts, draft=None, c=None, pk=ALL, size=1.0, tpl=TPL):
     if isinstance(r, route.Route):
         return {"rule": r.rule, "backend": r.backend, "thinking": r.thinking,
                 "effort": r.effort_domain, "fp": r.key_fp, "conc": r.max_concurrency,
-                "note": r.template_note}
+                "note": r.template_note, "src": r.vision_src}
     return {"key": r.msg_key, "rc": r.rc}
 cases = {
   "S1": go(MTP),
@@ -77,6 +77,11 @@ def test_route_rules_frozen(payload, sys_py):
     assert (got["R4"]["rule"], got["R4"]["backend"]) == ("R4", "mlx_lm")
     assert got["R4"]["thinking"] is False and got["R4"]["fp"] is None
     assert got["R4_forced"]["rule"] == "R4" and got["R3_forced"]["rule"] == "R3"
+    # 「依据」与结论同源：覆盖生效时写覆盖，原事实留着对照（2026-10-26 真机：R4 却写 vision_config）
+    assert got["R3"]["src"] == "config.json:vision_config", "没覆盖时依据照旧"
+    assert got["R4_forced"]["src"] == "设置 modality=text（权重 config.json:vision_config）", got["R4_forced"]
+    assert got["R3_forced"]["src"] == "设置 modality=vision（权重 t）", got["R3_forced"]
+    assert got["U1_overridden"]["src"] == "设置 modality=text（权重 t）", got["U1_overridden"]
     assert got["P1"] == {"key": "svc.backend_missing", "rc": 6}
     assert got["P2"] == {"key": "svc.backend_key_missing", "rc": 6}
     assert got["P3"] == {"key": "svc.size_undeterminable", "rc": 9}
