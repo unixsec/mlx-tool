@@ -4,7 +4,7 @@
 
 **Run local LLMs on Apple Silicon — and plug them into any OpenAI- or Anthropic-compatible app.**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.1-brightgreen)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon-black)](https://support.apple.com/en-us/116943)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Backend](https://img.shields.io/badge/backend-mlx--lm%20%7C%20mlx--vlm-orange)](https://github.com/ml-explore/mlx-lm)
@@ -21,6 +21,9 @@
 
 ## 🚀 What's New
 
+- **v1.1.1** (2026-10) — bug fixes: the installer removes files a new version no longer ships,
+  `config set` rejects a `draft_model` that `up` would refuse, and the gateway no longer resets
+  connections under concurrent load. See the `[1.1.1]` section of the [Changelog](CHANGELOG.md).
 - **v1.1.0** (2026-10) — see the `[1.1.0]` section of the
   [Changelog](CHANGELOG.md) for the full list and the upgrade notes.
   - The backend is picked from the weights on every `mlx up`: multimodal models
@@ -181,7 +184,7 @@ side effect). It asks you to type `yes` in the terminal. See the guide's
 $ bash deployer/install.sh
 …
 == 安装结果
-  ✓ 版本      1.1.0（已安装）
+  ✓ 版本      1.1.1（已安装）
   ✓ 自检      12 项，12 项通过
   ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）
   · 网关      http://127.0.0.1:8080/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）

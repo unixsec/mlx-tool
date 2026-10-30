@@ -1,7 +1,7 @@
 # MLX Toolkit 使用指南
 
 > macOS + Apple Silicon 上管理 MLX 本地大模型的命令行工具。
-> 工具版本 1.1.0（改动见 [CHANGELOG](../CHANGELOG.md) 的 `[1.1.0]` 段）。
+> 工具版本 1.1.1（改动见 [CHANGELOG](../CHANGELOG.md) 的 `[1.1.1]` 段）。
 > 带 `$` 提示符的段落取自真实运行，路径、pid、地址等换成了示意值，输出的形状与本版一致。
 
 本文按**你实际会走的顺序**编排：先把工具装上，再找模型、下载、登记、启动、使用，
@@ -100,7 +100,7 @@ $ bash deployer/install.sh
 == 自检
 
 == 安装结果
-  ✓ 版本      1.1.0（已安装）
+  ✓ 版本      1.1.1（已安装）
   ✓ 自检      12 项，12 项通过
   ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）
   · 网关      http://127.0.0.1:8080/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）
@@ -162,7 +162,7 @@ $ mlx status
   ✓ 代码根   ~/.local/share/mlx_server
   ✓ 数据根   ~/.local/state/mlx_server
   ✓ 权重根   ~/.local/share/mlx_models
-  · 工具版本 1.1.0
+  · 工具版本 1.1.1
 
   ✓ PATH 生效  ~/.local/share/mlx_server/bin
   ✓ 分发清单  73 项，完整

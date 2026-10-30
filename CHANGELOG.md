@@ -4,6 +4,35 @@
 
 ---
 
+## [1.1.1] — 2026-10-30
+
+### 修复
+
+- **安装器升级时删掉新版不再带的文件**：此前只复制不清理，旧版留下的文件让「代码没变」的判断永远不成立，
+  每次重跑都重装、停服务。现在代码根下的受管目录按源码对齐（运行时生成的 `constants.env`、`caps.json` 保留），
+  重跑能正确地「已是当前版本，跳过」
+- 安装器的 shell rc 备份行说清是「已备份到 …」还是「内容与上次备份相同，沿用 …」；
+  判断「上一份备份」时不再把名字相近的别的文件认成备份
+- 网关的 listen 队列从默认 5 调到 128：多个客户端同时连上来时不再被内核重置连接（`Connection reset by peer`）
+- `mlx config set <模型> --key=draft_model` 当场拒绝 `mlx up` 会拒绝的 drafter（附属预测头、指向自己、未登记、
+  权重不在盘、与多模态后端冲突），不写入；`mlx config validate` 把已写进去的这类值标为 failed。
+  此前两者都放行，到 `up` 才 rc 6
+- `mlx up <模型> --dry-run` 的「依据」与实际判定同源；`modality` 被设置覆盖时写明「设置 modality=…」
+
+### 变更
+
+- **配置来源层 `cli` 拆成 `install` 与 `env`**：网关端口来自安装时写定的值，显示 `install`；
+  `MLX_GATEWAY_TOKEN` 显示 `env`。`config ls` 末尾给出现过的层名图例。
+  `config get / ls --json` 的 `source` 值随之变化，读这个字段的脚本要改
+- `mlx model ls` 与 `mlx status` 的「状态」列改名为「权重」，值写「已下载 / 未下载」（此前「就绪 / 已登记」，
+  「就绪」容易读成服务已在监听）；`model install` 的输出同样。`--json` 里的 `state` 值不变
+
+### 文档
+
+- USER-GUIDE：Codex 启动时 `/v1/models` 报 `missing field models` 可以忽略，并说明网关为什么不迎合这个格式
+
+---
+
 ## [1.1.0] — 2026-10-27
 
 ### 新增

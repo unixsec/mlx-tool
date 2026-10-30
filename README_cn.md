@@ -4,7 +4,7 @@
 
 **在 Apple Silicon 上跑本地大模型 —— 并接进任何 OpenAI 或 Anthropic 兼容的应用。**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.1-brightgreen)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon-black)](https://support.apple.com/zh-cn/116943)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Backend](https://img.shields.io/badge/backend-mlx--lm%20%7C%20mlx--vlm-orange)](https://github.com/ml-explore/mlx-lm)
@@ -21,6 +21,8 @@
 
 ## 🚀 最新进展
 
+- **v1.1.1**（2026-10）—— 修复版：安装器升级时删掉新版不再带的文件；`config set` 当场拒绝 `up` 会拒的 `draft_model`；
+  并发连接不再被网关重置。详见[变更记录](CHANGELOG.md)的 `[1.1.1]` 段。
 - **v1.1.0**（2026-10）—— 完整清单与升级须知见[变更记录](CHANGELOG.md)的 `[1.1.0]` 段。
   - 每次 `mlx up` 按权重选后端：多模态模型走 `mlx_vlm`，纯文本走 `mlx_lm`。
   - 网关服务本机、虚拟机（Parallels / VMware 共享网络）与同一 Wi-Fi 上的设备。
@@ -154,7 +156,7 @@ bash deployer/install.sh
 $ bash deployer/install.sh
 …
 == 安装结果
-  ✓ 版本      1.1.0（已安装）
+  ✓ 版本      1.1.1（已安装）
   ✓ 自检      12 项，12 项通过
   ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）
   · 网关      http://127.0.0.1:8080/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）
