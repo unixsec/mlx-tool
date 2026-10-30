@@ -1,7 +1,7 @@
 # MLX Toolkit 使用指南
 
 > macOS + Apple Silicon 上管理 MLX 本地大模型的命令行工具。
-> 工具版本 1.1.1（改动见 [CHANGELOG](../CHANGELOG.md) 的 `[1.1.1]` 段）。
+> 工具版本 1.2.0（改动见 [CHANGELOG](../CHANGELOG.md) 的 `[1.2.0]` 段）。
 > 带 `$` 提示符的段落取自真实运行，路径、pid、地址等换成了示意值，输出的形状与本版一致。
 
 本文按**你实际会走的顺序**编排：先把工具装上，再找模型、下载、登记、启动、使用，
@@ -100,7 +100,7 @@ $ bash deployer/install.sh
 == 自检
 
 == 安装结果
-  ✓ 版本      1.1.1（已安装）
+  ✓ 版本      1.2.0（已安装）
   ✓ 自检      12 项，12 项通过
   ✓ 密钥      已就绪（查看：mlx config get api.token --reveal）
   · 网关      http://127.0.0.1:8080/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）
@@ -118,7 +118,7 @@ $ bash deployer/install.sh
 
 - **装 `mlx-vlm`**：多模态模型的后端，会带入 torch 等依赖，第一次装要多等几分钟。
   某个包没装上时打印 `! <包> 未装上` 和补装命令，工具本体不受影响。
-- **生成两把密钥**：`backend.api_key`（访问 mlx_vlm 后端）与 `api.token`（客户端访问网关），只补空值，
+- **生成两把密钥**：`backend.api_key`（访问两种模型后端）与 `api.token`（客户端访问网关），只补空值，
   输出只列键名不打印值（见[密钥](#keys)）。
 - **网关默认对局域网开放**：上面那段 `!!` 警告就是在说这件事；只给本机用就照它给的命令改。
 
@@ -162,7 +162,7 @@ $ mlx status
   ✓ 代码根   ~/.local/share/mlx_server
   ✓ 数据根   ~/.local/state/mlx_server
   ✓ 权重根   ~/.local/share/mlx_models
-  · 工具版本 1.1.1
+  · 工具版本 1.2.0
 
   ✓ PATH 生效  ~/.local/share/mlx_server/bin
   ✓ 分发清单  73 项，完整
@@ -471,8 +471,9 @@ $ mlx up qwen05b --dry-run
 ### 它会等到真的就绪才返回
 
 `up` 起完进程**不会立刻报成功**，而是等端口监听上（mlx_lm 最多等 20 秒；mlx_vlm 加载完权重才监听，
-最多等 `20 + 3 × 体积 GB` 秒）。注意 mlx_lm **先监听、首次请求才加载模型**，所以「已启动」不保证模型能加载成功
-（加载失败要到第一次请求时才暴露，看 `logs/<服务>.log`）。进程若在就绪之前退出
+最多等 `20 + 3 × 体积 GB` 秒）。mlx_lm **先监听、首次请求才加载模型**，所以端口监听上之后，`up` 还会发一次
+1 token 的补全确认模型能用（同样最多等 `20 + 3 × 体积 GB` 秒）：后端报错就停掉进程、返回 **rc 10**
+（`模型加载失败`，附后端的回应）；等满仍没回应返回 rc 4，进程保留。脚本里不想等，加 `--no-wait`。进程若在就绪之前退出
 （最常见是端口被别人占了），返回 **rc 10** 并附日志尾部：
 
 ```
@@ -488,13 +489,18 @@ qwen05b 起来后立刻退出了（端口 8150）。最常见的原因是端口�
 
 ```
 $ mlx up huge
-huge 装不下：它的体积加上已在跑的模型，超过了这台机器的可分配内存预算。
-先 `mlx down <别的模型>` 腾出内存，或换一个更小/量化更狠的版本。
-确实要试就加 --ignore-fitness（起完可能开始换页，机器会很慢）
+huge 装不下：模型 80.0 GB（已在跑的模型另占 27.5 GB），按当前可用内存计需要约 80.0 GB，预算只有 42.6 GB
+（物理内存 128.0 GB、当前可用 53.3 GB，各先预留 20%）。先 `mlx down <别的模型>` 或关掉占内存的应用腾出空间，
+或换一个更小/量化更狠的版本。确实要试就加 --ignore-fitness（起完可能开始换页，机器会很慢）
   rc=6
 ```
 
-判据是「模型体积 + 已在跑的模型占用」对「可分配内存 × (100 − 预留比例)」。
+判据有两道，取更严的那一道：
+- **物理内存**：新模型 + 已在跑的模型（按 max(常驻内存, 登记体积) 计 —— MLX 的显存缓冲不计入常驻内存，
+  实测 27 GB 的模型常驻内存只显示 14 GB）对「物理内存 × (100 − 预留比例)」；
+- **当前可用内存**：新模型对「当前可用内存 × (100 − 预留比例)」—— 可用内存已经扣掉了在跑模型与其它应用的占用。
+
+模型体积测不出时拒绝（rc 9），不会按 0 当成装得下。
 三个比例可调：
 
 ```bash
@@ -535,13 +541,12 @@ mlx restart qwen05b
 
 同时起多个时端口必须各不相同 —— 登记那一步就会拦住重复端口（rc 7）；用 `config set <模型> --key=port` 给模型自设端口时同样检查（与其它模型的端口、网关端口都不能相同）。
 
-**`restart` 分两段检查**：
+**`restart` 的检查全部在停旧服务之前**（1.2.0 起）：目标与登记、权重在不在、生效配置、后端判定
+（后端包、密钥、drafter、网关的令牌与 TLS）、登记端口、容量（把旧进程会让出的内存算回去）、后端能力有没有漂移
+（比如升级了后端包却没 `mlx caps refresh`）、网关端口上有没有别的进程。有一条不过就原样返回拒绝，在跑的服务保持原状。
 
-- **停之前**查的：目标与登记、权重在不在、生效配置、后端判定（后端包在不在、密钥、drafter、网关的令牌与 TLS 配置）、登记端口有没有冲突。
-  这些有一条不过就原样返回拒绝，在跑的服务保持原状。
-- **停之后**才查的：容量够不够（在跑的这个模型自己就占着内存，只能停了再算）、后端能力有没有漂移
-  （比如升级了后端包却没 `mlx caps refresh`）、网关端口有没有被别的进程占着。这几条被拒时，**服务已经停了**，
-  照拒绝文案处理后再 `mlx up <id>`。
+只有一种情况服务会停着：旧网关停下的那一刻端口被别的进程抢占了，报「端口 … 随即被别的进程占了」，
+停掉那个进程后 `mlx up api`。
 
 `--ignore-fitness` 对 `restart` 同样有效。
 
@@ -564,7 +569,8 @@ rc 取其中最差的那个（例如 6 = 模型不存在）；只要有目标真
 - **强制走文本**（放弃视觉，换 mlx_lm 的并发与投机解码）：`mlx config set qwen38 --key=modality --value=text`；撤销：`mlx config unset qwen38 --key=modality`。
 - **思考开关跟随模型模板的默认**：模板默认开的（Qwen3.8）就带 `--enable-thinking` 起；`mlx model info <id>` 能看到「思考默认」与模板接受的 effort 值域。
 - **并发上限**默认 8（`max_concurrency`，1–256）；**输出上限**默认 81920 token（`max_tokens`）。两者都能按模型或全局改，改完 `mlx restart <id>`。
-- mlx_vlm 后端**要求密钥**：安装器已生成 `backend.api_key`（见[密钥](#keys)），`mlx up` 自动带上，`mlx chat` / `mlx bench` 与网关转发也会自动带。
+- 两种后端都**要求密钥**：安装器已生成 `backend.api_key`（见[密钥](#keys)），`mlx up` 自动带上，`mlx chat` / `mlx bench` 与网关转发也会自动带。
+  mlx_lm 上游没有鉴权，工具用一个包装脚本（`<代码根>/libexec/mlx_lm_auth.py`）给它补上；上游结构对不上时包装拒绝启动，不会在无鉴权下起来。
 
 判定不下来时**拒绝启动而不是猜**，文案会给出下一步：
 
@@ -870,11 +876,13 @@ curl -sN http://127.0.0.1:8080/v1/chat/completions \
 | 来源 | 放行依据 |
 |---|---|
 | 本机 | 回环地址 |
-| 同一 Wi-Fi / 有线网段的设备 | 硬件端口类型为 Wi-Fi 或以太网的网卡所在网段 |
+| 同一 Wi-Fi / 有线网段的设备 | 硬件端口类型为 Wi-Fi 或以太网（`Ethernet*`）的网卡所在网段 |
 | Parallels / VMware 虚拟机（共享网络） | 成员含 `vmenet` / `vnic` 的网桥所在网段 |
+| 你额外指定的网卡 | `mlx config set api.allow_ifaces --value=en7`：USB 坞、雷雳坞上的网卡端口名常常不以 Ethernet 开头（例如 `DL-Dock`），`mlx api info` 的「被排除的接口」里能看到它的接口名 |
 | 你额外指定的网段 | `mlx config set api.allow_cidrs --value=192.168.8.0/24,fd00:1::/64` |
 
-VPN（`utun*`）、雷雳网桥、AirDrop 等接口**不放行** —— VPN 对端不是你的局域网。网卡换网（换 Wi-Fi、开热点）后
+VPN（`utun*`）、雷雳网桥、USB 设备模式链路（端口名 `Ethernet Adapter (enN)`，本机被另一台电脑当 USB 网卡用时出现）、AirDrop 等接口**不放行** —— 它们的对端不是你的局域网。
+来源检查在连接建立时就做：被拒的来源回 403 后立即断开，网关不读它的请求头。网卡换网（换 Wi-Fi、开热点）后
 网关 30 秒内自动重算；不在放行网段的地址连进来时，网关会先重算一次再判（两次重算至少隔 2 秒，连串的陌生请求不会每次都重算）。
 
 被拒的来源收到 403 `peer_not_allowed`，**响应体里不含它的地址与网段**（不给探测者信息）；地址记在 `logs/api.log` 的 `peer_denied` 事件里。
@@ -895,12 +903,13 @@ $ mlx api info
 
 ```bash
 mlx config get api.token --reveal
-mlx config set api.token --value=<新值>
+mlx config set api.token --value-stdin
 mlx restart api
 ```
 
 - `mlx config get api.token --reveal`：看原值
-- `mlx config set api.token --value=<新值>`：轮换（32–128 位字母、数字、_ 或 -）
+- `mlx config set api.token --value-stdin`：轮换，在提示下粘贴新值（终端上不回显，不进进程列表与 shell 历史；32–128 个字母、数字、_ 或 -）。
+  也可以从管道读：`printf '%s' "$NEW" | mlx config set api.token --value-stdin`。用 `--value=<新值>` 也行，但值会出现在进程列表里，工具会提示
 
 临时换一个令牌起网关：`MLX_GATEWAY_TOKEN='<32 位以上的串>' mlx up api`（环境变量覆盖配置，只对这次启动有效）。
 
@@ -1007,14 +1016,14 @@ Codex 与 Claude Code 分别只用 responses 与 messages，所以只能配多�
 
 | 配置键 | 默认（域） | 管什么，超出时 |
 |---|---|---|
-| `api.media_max_mb` | 128（1–2048） | **只限网关代取的字节**：单个媒体超出 → 400 `media_fetch_failed`（`too_large`）。请求里内联的 `data:` 媒体不受它管 |
+| `api.media_max_mb` | 128（1–2048） | 单件媒体的上限：代取的超出 → 400 `media_fetch_failed`（`too_large`）；请求里内联的 `data:` / base64 媒体超出 → 413 `media_too_large`（按 base64 长度估算，不解码） |
 | `api.max_body_mb` | 256（1–2048） | 整个请求体（内联 `data:` 媒体算在里面）：超出 → 413 `invalid_request`，在读请求体之前就拒 |
 | `api.media_max_parts` | 32（1–256） | 一个请求里的媒体个数：超出 → 400 `too_many_media_parts`，一个都不代取 |
 | `api.inflight_max_mb` | 2048（64–65536） | 全网关同时在处理的请求体、代取内容与临时文件之和：超出 → 503 `gateway_busy`，带 `Retry-After: 5` |
 
-`api.inflight_max_mb` 不能小于 `api.media_max_mb`：**每一次代取**（本机来源也一样）都先按 `media_max_mb` 整额预留，取完再退回多出的部分，
-预留不下就拒。两个键各自的取值域允许 `inflight_max_mb` 比 `media_max_mb` 小，配置时**不做交叉校验** ——
-这样配了之后**所有代取都会 503 `gateway_busy`**。遇到这种情况调大 `api.inflight_max_mb`（或调小 `api.media_max_mb`）。
+`api.inflight_max_mb` 必须大于 `api.media_max_mb`：**每一次代取**（本机来源也一样）都先按 `media_max_mb` 整额预留，取完再退回多出的部分。
+1.2.0 起 `config set` / `config import` / `config validate` / `mlx up api` 都会拒绝这种组合（rc 6），不会再出现「所有代取都 503」。
+每个远端来源最多占在途预算的四分之一（至少够两件代取媒体）；读请求体超时（408）的来源 30 秒内份额减半。
 改完 `mlx restart api` 生效。
 
 网关日志 `api.log` 的 `media_fetched` 事件记主机名、原因与字节数，**不记完整 URL**（查询串里常有签名）。
@@ -1056,16 +1065,14 @@ responses 与 messages 认 `reasoning.effort`（顶层 `reasoning_effort` 同样
 
 网关对模型**一律用流式**取结果：
 
-- **流式请求**：边生成边转发。收到模型的 200 响应头之后，上游静默满 15 秒（排队、读长上下文、长时间思考），网关发一行 `: keepalive`（SSE 注释，客户端会忽略），连接不会被中间设备当成空闲掐断。网关每秒检查一次，所以实际间隔在 15～16 秒之间。收到响应头之前模型不可达或出错，客户端拿到的是一个正常的 JSON 错误响应。
+- **流式请求**：边生成边转发。上游静默满 15 秒（排队、读长上下文、长时间思考），网关发一行 `: keepalive`（SSE 注释，客户端会忽略），连接不会被中间设备或客户端自己的超时掐断。网关每秒检查一次，所以实际间隔在 15～16 秒之间。
+  模型排队超过 15 秒还没回响应头时，网关先发 200 响应头再保活；此后模型再报错，客户端收到的是流里的错误事件（见下）。15 秒之内出的错仍是正常的 JSON 错误响应与真实状态码。
 - **非流式请求**：网关收齐后拼成一个完整 JSON 返回。这期间没有字节可发，**无法保活，客户端自己的 HTTP 超时可能先到** —— 长输出、Agent 类任务请用流式（Claude Code、Codex、Cherry Studio 默认都是流式）。
 - **客户端断开**（关页面、Ctrl-C、超时）：网关关闭到模型的连接，模型停止生成、腾出并发位；`api.log` 记 `client_disconnected`。
-  - **明文连接**：网关每秒探测一次客户端是否还在（流式、非流式都一样，等响应头期间也探测），断开后约 1 秒内发现。
-  - **TLS 连接无法探测**，断开只能在网关往客户端写失败时发现。流式请求：上游响应头到达之前（mlx_lm 排队可能数分钟）发现不了，模型照常生成；
-    头到达之后，靠转发帧或保活写入发现，静默段最长约 16 秒，且对端已关时第一次写可能仍然成功。
-    非流式请求：没有保活，要等模型生成完、网关写回响应时才发现，这次生成会跑完。
+  - 网关每秒探测一次客户端是否还在（流式、非流式都一样，等响应头期间也探测），断开后约 1 秒内发现。**明文与 TLS 连接都一样**（1.2.0 之前 TLS 连接要到写回失败才发现）。
 - **模型一侧出问题**：连不上模型或上游传输异常，`api.log` 记 `upstream_aborted`（与 `client_disconnected` 是两回事）；响应头还没发出时客户端收到 502 `upstream_error`（1.0.0 是 504）。非流式聚合失败同样记 `upstream_aborted` 并回 502。
   这条说的是按请求体 `model` 路由的端点；按 id 查询 / 删除 / 取消 responses 的扇出端点，后端连不上或回 5xx 是 502，等满 10 秒仍有后端没回话是 504 `upstream_timeout`。
-- **流已经开始后模型断了**：`api.log` 记 `sse_truncated`（流结束时没见到终止帧：半帧、断在帧边界，或上游发了错误帧后不发终止帧就关连接）或 `upstream_aborted`（上游传输异常）。响应头已发出，客户端只看到流结束、没有错误帧；OpenAI 风格客户端可能把缺 `[DONE]` 的流当成正常结束，遇到回答突然截断时看 `api.log`。
+- **流已经开始后模型断了**：`api.log` 记 `sse_truncated`（流结束时没见到终止帧：半帧、断在帧边界）或 `upstream_aborted`（上游传输异常）。网关按协议补一个错误事件，且不发 `[DONE]`：chat / completions 是 `data: {"error": {..., "code": "upstream_aborted"}}`，Responses 是 `event: error`，Anthropic messages 是 `event: error`，客户端 SDK 据此报错，不会把截断当成正常结束。上游自己已经发过错误帧时不重复补。
 - 同时请求超过模型的 `max_concurrency`（默认 8）时排队。mlx_vlm 排队期间保活照常；mlx_lm 排队时连响应头都不回，**此时没有保活**。挂了完整 drafter 的 mlx_lm 实际串行处理，`max_concurrency` 不生效（`mlx status` 并发列显示「串行」）。
 - 没在请求里写 `stream_options.include_usage` 的流式客户端收不到 usage 帧（网关内部为聚合打开了它，但不下发）。
 - 文本模型的流式帧只带 `reasoning`，网关补上多数客户端读的 `reasoning_content`。
@@ -1482,15 +1489,16 @@ mlx config diff
 | `modality` | auto（auto / text / vision） | 模型 | 模态覆盖，见[自动选择后端](#backend) | 该模型 |
 | `draft_model` | 空（模型短名） | 模型 | 投机解码的 drafter，见[投机解码](#draft) | 该模型 |
 | `num_draft_tokens` | 3（1–16） | 模型 | drafter 每次猜几个 token | 该模型 |
-| `backend.api_key` | 空（32–128 位 `[A-Za-z0-9_-]`） | 全局 | mlx_vlm 后端的密钥，见[密钥](#keys) | 多模态模型与网关 |
+| `backend.api_key` | 空（32–128 位 `[A-Za-z0-9_-]`） | 全局 | 两种后端（mlx_vlm 与 mlx_lm）的密钥，见[密钥](#keys) | 模型与网关 |
 | `api.token` | 空（同上） | 全局 | 网关令牌 | 网关 |
 | `api.bind` | 0.0.0.0（IP 地址） | 全局 | 网关绑定地址 | 网关 |
 | `api.allow_cidrs` | 空（逗号分隔的网段） | 全局 | 额外放行的网段，见[远端接入](#remote) | 网关 |
+| `api.allow_ifaces` | 空（逗号分隔的接口名，如 `en7`） | 全局 | 额外放行的有线网卡（USB 坞等），见[远端接入](#remote) | 网关 |
 | `api.tls_cert` / `api.tls_key` | 空（文件路径） | 全局 | 网关 TLS 证书与私钥，两个都设才开 TLS | 网关 |
 | `api.max_body_mb` | 256（1–2048） | 全局 | 请求体上限，超出 413 | 网关 |
 | `api.media_max_mb` | 128（1–2048） | 全局 | 单个代取媒体的上限，见[媒体](#media) | 网关 |
 | `api.media_max_parts` | 32（1–256） | 全局 | 一个请求里的媒体个数上限 | 网关 |
-| `api.inflight_max_mb` | 2048（64–65536） | 全局 | 全网关在途字节上限；**不得小于 `api.media_max_mb`**，否则所有代取 503（配置时不交叉校验） | 网关 |
+| `api.inflight_max_mb` | 2048（64–65536） | 全局 | 全网关在途字节上限；**必须大于 `api.media_max_mb`**（配置时校验） | 网关 |
 | `fit.reserve_pct` | 20（0–99） | 全局 | 容量闸门给系统预留的内存份额 | 不用 |
 | `fit.tight_pct` | 75（1–100） | 全局 | 超过这个比例算「挤」 | 不用 |
 | `fit.over_pct` | 95（1–100） | 全局 | 超过这个比例拒绝启动 | 不用 |
@@ -1537,7 +1545,7 @@ $ mlx config import --from=bad.json
 
 | 键 | 用途 |
 |---|---|
-| `backend.api_key` | 网关、`mlx chat`、`mlx bench` 访问 mlx_vlm 后端时携带；未设置时多模态模型拒绝启动 |
+| `backend.api_key` | 网关、`mlx chat`、`mlx bench` 访问后端时携带（mlx_vlm 与 mlx_lm 都要）；未设置时模型拒绝启动 |
 | `api.token` | 客户端访问网关时携带 |
 
 安装器会自动生成缺失的密钥。手动补：
@@ -1680,7 +1688,7 @@ mlx_vlm 加载完权重才开始监听，28 GB 的模型冷启动要一两分钟
 | 413 `invalid_request` | 请求体超过 `api.max_body_mb`（默认 256 MB，内联 `data:` 媒体也算） | 改用 `http(s)://` 让网关代取，或调大该键后 `mlx restart api` |
 | 502 `upstream_error` | 连不上模型 / 上游传输异常（`api.log` 记 `upstream_aborted`；流已开始后断开则是 200 加 `sse_truncated`，见[流式](#streaming)），后端回了 5xx，或按 id 查询 / 删除 / 取消时后端对 2xx 回了非 JSON | 看 `logs/<模型>.log`，`mlx status` 看它是否还在跑 |
 | 502 `upstream_auth_failed` | 后端拒绝了网关带的 `backend.api_key`：多半是改了密钥，网关或模型没重启 | `mlx status` 末尾的「密钥已变更，需重启」那行列出要重启的服务 |
-| 后端的 4xx | 后端认为请求参数不对（如 400 / 422），状态码原样透传；虚拟机与 Wi-Fi 来源看到的错误信息里，本机路径与异常栈换成了 `<redacted>` | 按 `message` 改请求参数 |
+| 后端的 4xx | 后端认为请求参数不对（如 400 / 422），状态码原样透传；虚拟机与 Wi-Fi 来源看到的错误按白名单重建：像参数校验说明的 `message` 保留，含实现细节的换成 `backend rejected the request (HTTP <状态码>)`，原文记在 `api.log` 的 `upstream_error_redacted` | 按 `message` 改请求参数；看不到原因时在本机重试或看 `api.log` |
 | 503 `gateway_busy` | 同时在处理的媒体太多（`api.inflight_max_mb`），或该键小于 `api.media_max_mb` | 按 `Retry-After` 5 秒后重试；或调大该键后 `mlx restart api` |
 | 503 `auth` | 网关没有令牌（正常情况下 `mlx up api` 会拒绝这样起） | `mlx bootstrap keys` 后 `mlx restart api` |
 | 503 `route_lost` | 请求路由到的模型在这一刻停了 | `mlx up <id>` 后重试 |

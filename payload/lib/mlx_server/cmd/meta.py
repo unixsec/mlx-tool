@@ -4,7 +4,7 @@ from ..result import Done, Refused
 # **版本串的唯一定义点**（`svc.py:309` import 它，注释明写「不在这里写第二遍」）。
 # 文档里的版本由守卫 `test_version_string_is_single_sourced` 钉在这上面 ——
 # 发版时漏改文档是最容易发生的那种不一致。
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 
 def run(ctx, stack, inv, deps=None):
