@@ -9,7 +9,6 @@ import contextlib
 import errno
 import http.client
 import io
-import ipaddress
 import json
 import os
 import socket
@@ -23,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from mlx_server.wire import SseDecoder
 
-from . import aggregate, frames, guard, media, relay, translate
+from . import aggregate, frames, guard, media, peers, relay, translate
 from .app import log_event
 
 _ABORTED = "upstream backend aborted the stream"   # 网关自己的固定文案，不带上游原文
@@ -56,20 +55,6 @@ HEADER_SEC = 30.0
 MAX_CONN = 256
 PEER_CONN_REMOTE = 32
 PEER_CONN_LOCAL = 128
-
-
-def _peer_key(addr):
-    # type: (str) -> tuple
-    """连接计数的键与「是否本机」。IPv4-mapped 先还原；解析不了的地址按原串计、按远端算。"""
-    try:
-        ip = ipaddress.ip_address(str(addr).split("%", 1)[0])
-    except ValueError:
-        return str(addr), False
-    if ip.version == 6 and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    if ip.version == 6 and not ip.is_loopback:
-        return str(ipaddress.ip_network(f"{ip}/64", strict=False)), False
-    return str(ip), ip.is_loopback
 
 
 class _ConnSlots:
@@ -149,7 +134,7 @@ class GatewayServer(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         """起线程之前先占连接名额：全局与每来源都满了就直接关，不起线程、不读一个字节。"""
-        key, local = _peer_key(client_address[0] if client_address else "")
+        key, local = peers.conn_key(client_address[0] if client_address else "")
         if not self.slots.take(key, local):
             log_event("warn", "conn_limit", peer=str(key))
             self.shutdown_request(request)
@@ -164,7 +149,7 @@ class GatewayServer(ThreadingHTTPServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self.slots.give(*_peer_key(client_address[0] if client_address else ""))
+            self.slots.give(*peers.conn_key(client_address[0] if client_address else ""))
 
     def server_bind(self):
         if self.address_family == socket.AF_INET6:
@@ -567,6 +552,9 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             except socket.timeout:
                 log_event("warn", "body_read_timeout", peer=str(self.client_address[0]),
                           declared=n, received=got)
+                k, local = peers.conn_key(self.client_address[0])
+                if not local:
+                    gw.budget.strike(k)          # 声明大体不发的来源：份额暂时减半
                 self.close_connection = True
                 return None, (408, {"error": {"message": "request body not received in time",
                                               "type": "invalid_request"}})
@@ -645,7 +633,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 # **先预留在途预算、再发 100**（终审 B I2）：预算满时直接给 503 + Retry-After，
                 # 不邀请客户端把体传上来再被拒。预留交给 do_POST，不重复计费
                 n, _err = self._parse_content_length()
-                ticket = gw.new_ticket()
+                ticket = gw.new_ticket(self.client_address[0])
                 try:
                     ticket.charge(n)
                 except media.MediaError as exc:
@@ -670,7 +658,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             ticket, self._pre_ticket = self._pre_ticket, None
             try:
                 if ticket is None:
-                    ticket = gw.new_ticket()
+                    ticket = gw.new_ticket(self.client_address[0])
                     try:
                         ticket.charge(n)
                     except media.MediaError as exc:

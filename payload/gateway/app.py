@@ -47,7 +47,10 @@ class Gateway:
         self.nets = nets
         self.limits = dict(LIMIT_DEFAULTS, **(limits or {}))
         # 在途字节预算（请求体 + 代取 + 临时文件，spec §4.4）：全网关一份，按请求的 Ticket 记账
-        self.budget = media.Budget(int(self.limits["inflight_max_mb"]) * 1024 * 1024)
+        total = int(self.limits["inflight_max_mb"]) * 1024 * 1024
+        # 每个远端来源的份额：总额的 1/4，但至少够一个请求体加两件代取媒体
+        share = max(total // 4, 2 * int(self.limits.get("media_max_mb", 128)) * 1024 * 1024)
+        self.budget = media.Budget(total, peer_share=share)
         if media_root is None:
             media_root = (os.path.join(ctx.root_data, "run", "media") if ctx is not None
                           else os.path.join(tempfile.gettempdir(), "mlx-gateway-media"))
@@ -125,10 +128,15 @@ class Gateway:
         ip = peers.normalize_peer(peer)
         return "LOOPBACK" if ip is not None and ip.is_loopback else None
 
-    def new_ticket(self):
-        # type: () -> object
-        """一次请求的在途字节与临时目录。**调用方在 finally 里 `close()`**。"""
-        return media.Ticket(self.budget, self.media_store)
+    def new_ticket(self, peer=None):
+        # type: (object) -> object
+        """一次请求的在途字节与临时目录。**调用方在 finally 里 `close()`**。
+        远端来源按 `peers.conn_key` 计份额；本机来源（或未给 peer）只受总额限制。"""
+        key = None
+        if peer is not None:
+            k, local = peers.conn_key(peer)
+            key = None if local else k
+        return media.Ticket(self.budget, self.media_store, key)
 
     def media_context(self, ticket):
         # type: (object) -> dict
@@ -274,7 +282,7 @@ class Gateway:
             return translate.build_error(503, "no_upstream", "gateway has no upstream transport")
         own_ticket = ticket is None
         if own_ticket:
-            ticket = self.new_ticket()
+            ticket = self.new_ticket(peer)
         try:
             try:
                 up_body, _meta = translate.build_upstream(body, family, snap, peer_class, model_arg,

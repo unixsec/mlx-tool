@@ -160,6 +160,21 @@ def normalize_peer(addr):
     return ip
 
 
+def conn_key(addr):
+    # type: (str) -> list
+    """按来源计数（连接名额、在途预算份额）的键与「是否本机」→ `[键, 本机?]`。
+    IPv4-mapped 先还原；IPv6 按 /64（隐私地址会轮换）；解析不了的地址按原串计、按远端算。"""
+    try:
+        ip = ipaddress.ip_address(str(addr).split("%", 1)[0])
+    except ValueError:
+        return [str(addr), False]
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.version == 6 and not ip.is_loopback:
+        return [str(ipaddress.ip_network(f"{ip}/64", strict=False)), False]
+    return [str(ip), ip.is_loopback]
+
+
 def net_matches(entry, ip, scope=None):
     # type: (dict, object, object) -> bool
     """单条放行网段条目是否覆盖 `ip`：版本一致 + 网段包含 + `scope` 相等

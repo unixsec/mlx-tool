@@ -46,27 +46,60 @@ class MediaError(Exception):
         return (self.status, {"error": err})
 
 
-class Budget:
-    """全网关在途字节（请求体 + 代取 + 临时文件）。**线程安全**。"""
+STRIKE_SEC = 30.0          # 来源被 408 后份额减半的时长
 
-    def __init__(self, limit_bytes):
-        # type: (int) -> None
+
+class Budget:
+    """全网关在途字节（请求体 + 代取 + 临时文件）。**线程安全**。
+
+    `key` 是远端来源（`peers.conn_key`）：每个远端来源最多占 `peer_share`，被 408 过的来源
+    `STRIKE_SEC` 内减半 —— 单个持令牌者声明大体不发、408 后立刻重连，原本能让预算一直满着。
+    `key=None`（本机来源）只受总额限制。仍是「按声明计费、满了就拒」。"""
+
+    def __init__(self, limit_bytes, peer_share=None):
+        # type: (int, object) -> None
         self.limit = int(limit_bytes)
+        self.peer_share = self.limit if peer_share is None else min(self.limit, int(peer_share))
         self.used = 0
+        self._by_key = {}
+        self._strikes = {}
         self._lock = threading.Lock()
 
-    def reserve(self, n):
-        # type: (int) -> bool
+    def reserve(self, n, key=None):
+        # type: (int, object) -> bool
         with self._lock:
             if self.used + n > self.limit:
                 return False
+            if key is not None:
+                cap = self.peer_share
+                if self._strikes.get(key, 0) > time.monotonic():
+                    cap //= 2
+                if self._by_key.get(key, 0) + n > cap:
+                    return False
+                self._by_key[key] = self._by_key.get(key, 0) + n
             self.used += n
             return True
 
-    def release(self, n):
-        # type: (int) -> None
+    def release(self, n, key=None):
+        # type: (int, object) -> None
         with self._lock:
             self.used = max(0, self.used - n)
+            if key is not None:
+                left = self._by_key.get(key, 0) - n
+                if left > 0:
+                    self._by_key[key] = left
+                else:
+                    self._by_key.pop(key, None)
+
+    def strike(self, key):
+        # type: (object) -> None
+        if key is None:
+            return
+        now = time.monotonic()
+        with self._lock:
+            for k in [k for k, until in self._strikes.items() if until <= now]:
+                del self._strikes[k]
+            self._strikes[key] = now + STRIKE_SEC
 
 
 class Store:
@@ -129,27 +162,27 @@ class Store:
 class Ticket:
     """一次请求占用的在途字节与临时目录。**在请求处理的 `finally` 里 `close()`**。"""
 
-    def __init__(self, budget, store):
-        # type: (Budget, Store) -> None
-        self.budget, self.store = budget, store
+    def __init__(self, budget, store, key=None):
+        # type: (Budget, Store, object) -> None
+        self.budget, self.store, self.key = budget, store, key
         self.bytes = 0
         self.dir = None
 
     def charge(self, n):
         # type: (int) -> None
-        if not self.budget.reserve(n):
+        if not self.budget.reserve(n, self.key):
             raise MediaError(503, "gateway_busy", "gateway is busy with other media, retry shortly")
         self.bytes += n
 
     def refund(self, n):
         # type: (int) -> None
         n = min(n, self.bytes)
-        self.budget.release(n)
+        self.budget.release(n, self.key)
         self.bytes -= n
 
     def close(self):
         # type: () -> None
-        self.budget.release(self.bytes)
+        self.budget.release(self.bytes, self.key)
         self.bytes = 0
         if self.dir:
             Store.remove_dir(self.dir)
