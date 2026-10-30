@@ -811,17 +811,13 @@ print(json.dumps(out))
 """
 
 CONN_CAPS = PRE_HEADERS + r"""
-server_mod.MAX_CONN = 3
-server_mod.PEER_CONN_LOCAL = 100
 srv, port = start()
-held = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]
-time.sleep(0.3)
-extra = socket.create_connection(("127.0.0.1", port))
-out = {"global": wait_close(extra, 3)}
-extra.close()
-for h in held:
-    h.close()
-time.sleep(0.3)
+# 远端来源用 _peer_key 之外的入口没法在本机造，直接驱动名额对象：远端占满全局后，
+# 新的远端被拒，本机照样拿得到
+server_mod.MAX_CONN = 3
+slots = server_mod._ConnSlots()
+taken = [slots.take("10.0.0.%d" % i, False) for i in range(4)]
+out = {"remote_taken": taken, "local_after_remote_full": slots.take("127.0.0.1", True)}
 server_mod.MAX_CONN = 100
 server_mod.PEER_CONN_LOCAL = 2
 held = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
@@ -888,9 +884,10 @@ def test_denied_peer_is_closed_before_any_bytes_are_read(payload, sys_py):
 def test_connection_caps_global_and_per_peer(payload, sys_py):
     """线程数原本没有上限：全局与每来源都要有上限，超出的连接立刻关掉，不起线程。"""
     got = run_floor(payload, sys_py, CONN_CAPS, with_gateway=True, timeout=60, TOK=TOK)
-    for k in ("global", "peer"):
-        r, t = got[k]
-        assert _gone(r) and t < 2, f"超出{k}上限的连接应立刻被关：{got}"
+    assert got["remote_taken"] == [True, True, True, False], f"远端超出全局上限应被拒：{got}"
+    assert got["local_after_remote_full"] is True, f"远端占满全局上限不得挤掉本机：{got}"
+    r, t = got["peer"]
+    assert _gone(r) and t < 2, f"超出每来源上限的连接应立刻被关：{got}"
     assert "200" in got["after"], f"占用释放后应恢复服务：{got}"
 
 
@@ -899,3 +896,36 @@ def test_dripping_tls_handshake_hits_total_deadline(payload, sys_py):
     got = run_floor(payload, sys_py, TLS_DRIP, with_gateway=True, timeout=60, TOK=TOK)
     r, t = got["drip"]
     assert _gone(r) and t < 3, f"滴灌握手应在总时限附近被切断：{got}"
+
+
+LOOPBACK_CLAIM = PRE + r"""
+import gateway.server as server_mod
+probe = socket.socket(); probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]; probe.close()
+th = threading.Thread(target=server_mod.serve, args=(g,), kwargs={"host": "0.0.0.0", "port": port},
+                      daemon=True)
+th.start()
+for _ in range(50):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.2).close(); break
+    except OSError:
+        time.sleep(0.1)
+out = {}
+for name, opt in (("reuseaddr", socket.SO_REUSEADDR), ("reuseport", socket.SO_REUSEPORT)):
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, opt, 1)
+    try:
+        s.bind(("127.0.0.1", port)); s.listen(1); out[name] = "hijacked"
+    except OSError as e:
+        out[name] = e.errno
+    s.close()
+out["served"] = raw_request(port, b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")[0]
+print(json.dumps(out))
+"""
+
+
+def test_wildcard_bind_claims_loopback_so_it_cannot_be_hijacked(payload, sys_py):
+    """网关绑 0.0.0.0 时，同用户的进程原本能再绑 127.0.0.1:P，此后本机客户端的连接（连同令牌）
+    全落到它手里（2026-10-31 实测）。网关先占住回环地址，后来者一律 EADDRINUSE。"""
+    got = run_floor(payload, sys_py, LOOPBACK_CLAIM, with_gateway=True, timeout=60, TOK=TOK)
+    assert got["reuseaddr"] == 48 and got["reuseport"] == 48, f"回环地址应已被网关占住：{got}"
+    assert "200" in got["served"], got

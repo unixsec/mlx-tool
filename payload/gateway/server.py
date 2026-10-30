@@ -49,7 +49,8 @@ LINGER_MAX_BYTES = 64 * 1024 * 1024
 # 30 s 对连接池安全：urllib3 复用前探活，httpx / undici 的空闲回收都在 5 s 以内。
 HEADER_SEC = 30.0
 # 连接数上限。超出的连接在 accept 之后立刻关掉，不起线程（每连接一线程，原先没有上限）。
-# 每来源按 IPv4 地址 / IPv6 /64 计数（隐私地址会轮换）；本机来源放得宽些。
+# 每来源按 IPv4 地址 / IPv6 /64 计数（隐私地址会轮换）。`MAX_CONN` 只计**远端**连接：
+# 远端（含一堆轮换的 IPv6 地址）占满它也挤不掉本机客户端，本机另由 `PEER_CONN_LOCAL` 限住。
 MAX_CONN = 256
 PEER_CONN_REMOTE = 32
 PEER_CONN_LOCAL = 128
@@ -67,6 +68,36 @@ def _peer_key(addr):
     if ip.version == 6 and not ip.is_loopback:
         return str(ipaddress.ip_network(f"{ip}/64", strict=False)), False
     return str(ip), ip.is_loopback
+
+
+class _ConnSlots:
+    """连接名额。一个网关的所有监听（通配 + 回环）共用一份，上限才是整个网关的上限。"""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.total = 0
+        self.by_peer = {}
+
+    def take(self, key, local):
+        # type: (str, bool) -> bool
+        limit = PEER_CONN_LOCAL if local else PEER_CONN_REMOTE
+        with self.lock:
+            if (not local and self.total >= MAX_CONN) or self.by_peer.get(key, 0) >= limit:
+                return False
+            if not local:
+                self.total += 1
+            self.by_peer[key] = self.by_peer.get(key, 0) + 1
+            return True
+
+    def give(self, key, local):
+        with self.lock:
+            if not local:
+                self.total -= 1
+            n = self.by_peer.get(key, 0) - 1
+            if n > 0:
+                self.by_peer[key] = n
+            else:
+                self.by_peer.pop(key, None)
 
 
 class _DeadlineIO(io.RawIOBase):
@@ -111,44 +142,27 @@ class GatewayServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler):
         if ":" in server_address[0]:
             self.address_family = socket.AF_INET6
-        self._conn_lock = threading.Lock()
-        self._conn_total = 0
-        self._conn_by_peer = {}
+        self.slots = _ConnSlots()
         super().__init__(server_address, handler)
 
     def process_request(self, request, client_address):
         """起线程之前先占连接名额：全局与每来源都满了就直接关，不起线程、不读一个字节。"""
         key, local = _peer_key(client_address[0] if client_address else "")
-        limit = PEER_CONN_LOCAL if local else PEER_CONN_REMOTE
-        with self._conn_lock:
-            over = self._conn_total >= MAX_CONN or self._conn_by_peer.get(key, 0) >= limit
-            if not over:
-                self._conn_total += 1
-                self._conn_by_peer[key] = self._conn_by_peer.get(key, 0) + 1
-        if over:
+        if not self.slots.take(key, local):
             log_event("warn", "conn_limit", peer=str(key))
             self.shutdown_request(request)
             return
         try:
             super().process_request(request, client_address)
         except Exception:
-            self._conn_release(key)
+            self.slots.give(key, local)
             raise
 
     def process_request_thread(self, request, client_address):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._conn_release(_peer_key(client_address[0] if client_address else "")[0])
-
-    def _conn_release(self, key):
-        with self._conn_lock:
-            self._conn_total -= 1
-            n = self._conn_by_peer.get(key, 0) - 1
-            if n > 0:
-                self._conn_by_peer[key] = n
-            else:
-                self._conn_by_peer.pop(key, None)
+            self.slots.give(*_peer_key(client_address[0] if client_address else ""))
 
     def server_bind(self):
         if self.address_family == socket.AF_INET6:
@@ -772,10 +786,37 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
     return Handler
 
 
+def bind_servers(host, port, handler):
+    # type: (str, int, object) -> list
+    """绑定监听地址。**绑通配地址时先占回环**：网关只绑 `0.0.0.0` / `::` 时，同用户的进程能再绑
+    `127.0.0.1:P`（BSD 允许更具体的地址与通配共存），此后本机客户端的连接连同令牌全落到它手里
+    （2026-10-31 实测，与网关自己的 `allow_reuse_address` 无关）。先绑回环、再绑通配，
+    后来者绑回环一律 EADDRINUSE。返回的第一个是通配（或唯一）那个。"""
+    if host not in ("0.0.0.0", "::"):
+        return [GatewayServer((host, port), handler)]
+    loops = [GatewayServer(("127.0.0.1", port), handler)]
+    port = loops[0].server_address[1]
+    if socket.has_ipv6:
+        try:
+            loops.append(GatewayServer(("::1", port), handler))
+        except OSError as e:
+            log_event("warn", "loopback6_unavailable", detail=str(e)[:200])
+    try:
+        main = GatewayServer((host, port), handler)
+    except OSError:
+        for s in loops:
+            s.server_close()
+        raise
+    for s in loops:
+        s.slots = main.slots
+    return [main] + loops
+
+
 def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0,
           max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_context=None):
     """起服务器 + 后台路由、网段与临时媒体刷新。**阻塞** —— 调用方是 `gateway.__main__`。"""
-    httpd = GatewayServer((host, port), make_handler(gw, max_body_bytes, tls_context))
+    servers = bind_servers(host, port, make_handler(gw, max_body_bytes, tls_context))
+    httpd = servers[0]
 
     stop = threading.Event()
 
@@ -811,8 +852,13 @@ def serve(gw, host="127.0.0.1", port=8080, refresh_sec=5.0,
     t.start()
     log_event("info", "listening", host=host, port=port, tls=tls_context is not None,
               routes=gw.view.route_keys())
+    for extra in servers[1:]:
+        threading.Thread(target=extra.serve_forever, daemon=True).start()
     try:
         httpd.serve_forever()
     finally:
         stop.set()
-        httpd.server_close()
+        for extra in servers[1:]:
+            extra.shutdown()
+        for s in servers:
+            s.server_close()
