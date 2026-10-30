@@ -197,33 +197,42 @@ def _safe_detail(value, status):
     return _safe_msg(value, status)
 
 
+# 远端错误体里允许出现的键（其余一律丢弃，不是「净化后保留」）。帧结构键（`sequence_number`、
+# Responses 的 `response` 快照）只为让流内错误帧在各协议里仍然合法
+_ERR_KEYS = frozenset({"error", "detail", "message", "type", "code", "param", "sequence_number", "response"})
+_RESPONSE_KEYS = frozenset({"id", "object", "status", "created_at", "model", "error"})
+
+
 def scrub_error(value, status=None):
     # type: (object, object) -> object
-    """远端来源的错误对象：`error` / `detail` / 顶层 `message` 按白名单重建，其余部分再经 `sanitize`。
-
-    同时用于非流式错误体与流内错误帧（各协议的错误帧都把细节放在 `error` 或顶层 `message` 里，
-    帧的其他结构 —— `type`、`sequence_number`、`response.status` —— 原样保留，帧仍然合法）。
-    """
+    """远端来源的错误对象：**严格白名单重建**。`error` / `detail` / 顶层 `message` 按安全句式过滤，
+    type / code / param 只留短标识符，其余键丢弃。同时用于非流式错误体与流内错误帧。"""
     if isinstance(value, list):
         return [scrub_error(v, status) for v in value]
     if not isinstance(value, dict):
         return _safe_msg(value, status)
     out = {}
     for k, v in value.items():
+        if k not in _ERR_KEYS:
+            continue
         if k == "error":
             out[k] = _safe_error(v, status)
         elif k == "detail":
             out[k] = _safe_detail(v, status)
-        elif k == "message" and not isinstance(v, (dict, list)):
+        elif k == "message":
             out[k] = _safe_msg(v, status)
-        elif k in ("type", "code", "param"):
-            if _ident(v) is not None:
+        elif k == "sequence_number":
+            if isinstance(v, int) and not isinstance(v, bool):
                 out[k] = v
-        elif isinstance(v, dict):
-            out[k] = scrub_error(v, status)
-        else:
-            out[k] = sanitize(v)
-    return {sanitize(k) if isinstance(k, str) else k: v for k, v in out.items()}
+        elif k == "response":
+            if isinstance(v, dict):
+                out[k] = {rk: (_safe_error(rv, status) if rk == "error" else rv)
+                          for rk, rv in v.items()
+                          if rk in _RESPONSE_KEYS and (rk == "error" or _ident(rv) is not None
+                                                       or (isinstance(rv, int) and not isinstance(rv, bool)))}
+        elif _ident(v) is not None:
+            out[k] = v
+    return out
 
 
 def upstream_error(status, body, peer_class):

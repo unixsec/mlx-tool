@@ -1,7 +1,6 @@
 """T2 · SSE 帧解析与回程改写（spec §4.6、§4.7）。**在完整帧上改**（INV-12），不对字节块做替换。
 
-回程要做的事：`model` 改回短 id（chat / completions 顶层、responses 事件里的 `response.model`、
-Anthropic `message_start` 的 `message.model`）；有 `reasoning` 无 `reasoning_content` 时补上
+回程要做的事：`model` 改回短 id（任何深度的字符串值，用户数据子树除外）；有 `reasoning` 无 `reasoning_content` 时补上
 （客户端普遍读后者；实测只有 mlx_lm 缺）；客户端没要 usage 时丢掉网关为聚合而开的 usage 帧；
 中途错误帧对远端来源净化（mlx_vlm 把异常原文写进错误帧）。
 """
@@ -21,14 +20,29 @@ def parse(frame):
     return event, data
 
 
+# 用户数据所在的子树：工具入参、调用方元数据、JSON schema、工具定义。里面叫 `model` 的键是用户的，不改
+_USER_SUBTREES = frozenset({"input", "metadata", "parameters", "schema", "tools", "input_schema"})
+
+
+def _rewrite_model(value, short_id):
+    # type: (object, str) -> None
+    """任何深度上**字符串值**的 `model` 改成短 id（上游新增嵌套位置时不漏出模型目录名）。"""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == "model" and isinstance(v, str):
+                value[k] = short_id
+            elif k not in _USER_SUBTREES and isinstance(v, (dict, list)):
+                _rewrite_model(v, short_id)
+    elif isinstance(value, list):
+        for v in value:
+            _rewrite_model(v, short_id)
+
+
 def _patch(obj, short_id):
     # type: (dict, str) -> dict
     if "model" in obj:
         obj["model"] = short_id
-    for key in ("response", "message"):
-        inner = obj.get(key)
-        if isinstance(inner, dict) and "model" in inner:
-            inner["model"] = short_id
+    _rewrite_model(obj, short_id)
     for choice in obj.get("choices") or []:
         if not isinstance(choice, dict):
             continue

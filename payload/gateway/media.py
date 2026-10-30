@@ -257,6 +257,16 @@ class _Run:
         self.ticket.refund(max(0, self.max_bytes - len(got["data"])))
         return got
 
+    def inline(self, b64, part):
+        """内联媒体的单件上限：按 base64 长度估算解码后的字节（不解码），超过 `media_max_mb` ⇒ 413。
+        与代取同一个上限 —— 此前内联的一件能大到 `max_body_mb`。"""
+        n = len(b64) * 3 // 4
+        if n > self.max_bytes:
+            raise MediaError(413, "media_too_large",
+                             f"{part} is about {n // (1024 * 1024)} MB, the limit is "
+                             f"{self.max_bytes // (1024 * 1024)} MB", part=part)
+        return _SAME
+
     def local(self, part):
         if self.peer_class != "LOOPBACK":
             raise MediaError(400, "media_source_rejected", _LOCAL_MSG, part=part)
@@ -286,7 +296,7 @@ def _resolve(run, kind, value, part, holder):
             # 后端拼成 data:{media_type};base64,{data}，media_type 不以 image/ 开头就当路径读
             if (not media_type or (isinstance(media_type, str) and media_type.startswith("image/"))) \
                     and isinstance(data, str) and data:
-                return _SAME
+                return run.inline(data, part)
             return run.local(part)
         if source.get("type") == "url" and _is_http(source.get("url")):
             got = run.fetch(source["url"], "image", part)
@@ -301,7 +311,7 @@ def _resolve(run, kind, value, part, holder):
         return run.local(part)                             # 取不到字符串来源：未识别形态不默认放行
     if kind in ("image", "input_image"):
         if value.startswith("data:image/") and "," in value:   # 后端逐字谓词：区分大小写，不去空白
-            return _SAME
+            return run.inline(value.partition(",")[2], part)
         if _is_http(value):
             got = run.fetch(value, "image", part)
             return f"data:{got['content_type']};base64," + base64.b64encode(got["data"]).decode("ascii")
@@ -311,7 +321,7 @@ def _resolve(run, kind, value, part, holder):
         if stripped.startswith("data:"):
             prefix, sep, _ = stripped.partition(",")
             if sep and ";base64" in prefix and prefix.startswith("data:audio/"):   # 后端逐字谓词
-                return _SAME
+                return run.inline(stripped.partition(",")[2], part)
             return run.local(part)                         # 其它 data: 形态后端当路径
         if _is_http(value):
             got = run.fetch(value, "audio", part)
@@ -320,12 +330,13 @@ def _resolve(run, kind, value, part, holder):
             return run.local(part)
         try:
             base64.b64decode(stripped, validate=True)
-            return _SAME                                   # 严格 base64 ⇒ 后端当音频数据解
+            return run.inline(stripped, part)              # 严格 base64 ⇒ 后端当音频数据解
         except (binascii.Error, ValueError):
             return run.local(part)                         # 解不开 ⇒ 后端会把它当路径
     if kind == "video":
         data_uri = _data_uri(value, "video")
         if data_uri:
+            run.inline(data_uri[1], part)                  # 解码前先判：不为超限的视频解码分配内存
             try:
                 data = base64.b64decode(data_uri[1], validate=True)
             except (binascii.Error, ValueError):

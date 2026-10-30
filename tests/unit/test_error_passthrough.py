@@ -57,7 +57,7 @@ def test_upstream_error_mapping(payload, sys_py):
     assert body["error"]["message"] == "backend rejected the request (HTTP 400)", raw
     assert body["error"]["type"] == "invalid_request_error" and body["error"]["code"] == "bad_value"
     assert "param" not in body["error"], "param 只在是短标识符时保留，路径形态的一律去掉"
-    assert body["repo"] == "mlx-community/Qwen3.8-27B-8bit", "仓库名不是路径，不得被净化"
+    assert "repo" not in body, "远端错误体按严格白名单重建，不认识的键一律丢弃"
     assert got["local"] == [400, got["leaky"]], "本机来源应收到原文"
     assert got["auth"] == [502, {"error": {"message": "backend rejected the gateway credentials",
                                            "type": "upstream_auth_failed"}}]
