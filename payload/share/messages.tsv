@@ -93,6 +93,7 @@ help.internal.confirm	（内部）T0 的 /dev/tty 确认通道
 flag.json	输出机读 JSON（默认输出是给人看的）
 flag.ignore_fitness	容量判定说装不下也照样启动（起完可能开始换页，机器会很慢）
 flag.no_wait	不等模型真正加载成功就返回（默认：mlx_lm 模型会发一次 1 token 补全确认能用）
+flag.value_stdin	从标准输入读值（终端上不回显）。设密钥时用它：值不会出现在进程列表与 shell 历史里
 flag.dry_run	只打印将要做什么，不真的做（零外部动作）
 flag.all	作用于全部有运行记录的服务
 flag.yes	跳过确认（仅在非交互场景使用）

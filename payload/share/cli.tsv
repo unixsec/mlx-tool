@@ -27,7 +27,8 @@
 --prompt	chat,bench	yes	<text>	-	-	infer.prompt	flag.prompt
 --session	chat	yes	<session-id>	-	-	chat.session	flag.session
 --key	config set,config get,config unset	yes	<config-key>	-	-	config.key	flag.key
---value	config set	yes	<text>	-	-	config.value	flag.value
+--value	config set	yes	<text>	value_source	-	config.value	flag.value
+--value-stdin	config set	no	-	value_source	false	config.value_stdin	flag.value_stdin
 --expect	self check-version	yes	<text>	-	-	meta.expect	flag.expect
 --ignore-fitness	up,restart	no	-	-	false	fit.override	flag.ignore_fitness
 --no-wait	up,restart	no	-	-	false	svc.no_wait	flag.no_wait

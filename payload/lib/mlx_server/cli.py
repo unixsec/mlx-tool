@@ -356,6 +356,16 @@ def parse(argv, verb_rows, cli_rows=None):
             unknown.append(f"{a}（{bad}）")
             continue
         flags[name.replace("-", "_")] = value
+    # **互斥组**（`cli.tsv#mutex_group`）：同组的 flag 只能出现一个。此前这一列没有任何读者
+    groups_seen = {}
+    for name in flags:
+        r = _by_flag.get("--" + name.replace("_", "-"))
+        g = (r or {}).get("mutex_group")
+        if g and g != "-":
+            groups_seen.setdefault(g, []).append("--" + name.replace("_", "-"))
+    for _group, names in sorted(groups_seen.items()):
+        if len(names) > 1:
+            raise ParseError(f"{' 与 '.join(sorted(names))} 只能用一个")
     if wrong_owner:
         a, owners = wrong_owner[0]
         raise ParseError(f"{a} 不是 `mlx {_full}` 的参数（它属于：{owners}）")

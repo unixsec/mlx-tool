@@ -3,6 +3,23 @@ from .. import schema, store
 from ..result import Aggregate, Done, Refused
 
 
+def _stderr(text):
+    import sys
+    sys.stderr.write(text + "\n")
+    sys.stderr.flush()
+
+
+def _read_value_stdin(key):
+    # type: (str) -> str
+    """`--value-stdin`：终端上不回显地问一次，否则读标准输入的第一行。"""
+    import sys
+    if sys.stdin is not None and sys.stdin.isatty():
+        import getpass
+        return getpass.getpass(f"{key} 的值（不回显）：")
+    line = sys.stdin.readline() if sys.stdin is not None else ""
+    return line.rstrip("\r\n")
+
+
 def _coerce(key, val, defs):
     # type: (str, object, dict) -> tuple
     """`schema.coerce` 的不抛版本 → `(归一后的值, 错误说明 | None)`。
@@ -401,6 +418,14 @@ def run(ctx, stack, inv, deps=None):
     # `set` 排在最后：它是本模块**唯一**做 commit 的分支，
     # 这样所有 Refused 构造点都在资源创建之前（`L0·result-02` 的 AST 判据）。
     key, val = (inv.args or {}).get("key"), (inv.args or {}).get("value")
+    if (inv.args or {}).get("value_stdin"):
+        # 从标准输入读：值不进 argv（同机其他用户 `ps` 可见）也不进 shell 历史
+        read = (deps or {}).get("read_value") or _read_value_stdin
+        val = read(key)
+    elif val is not None and key and schema.is_secret(key, _defs(ctx, deps) or {}):
+        notice = (deps or {}).get("notice") or _stderr
+        notice(f"  提示：{key} 是密钥，--value 会让它出现在进程列表与 shell 历史里；"
+               f"改用 `mlx config set {key} --value-stdin`")
     defs = _defs(ctx, deps)
     if key not in _domain(ctx, deps):
         return Refused(6, "config.unknown_key", key=key)
