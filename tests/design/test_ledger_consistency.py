@@ -617,7 +617,7 @@ def test_g_res_11_config_reads_environ_only_in_ctx():
         f"要么改成从 ctx 取，要么给出理由后登记进豁免集：{unexpected}")
 
 
-# **模块层序台账**。设计要求的 `modules.tsv` 尚未建立（KNOWN-ISSUES 第 2 条：
+# **模块层序台账**。设计要求的 `modules.tsv` 尚未建立（本地已知问题记录第 2 条：
 # 建表要先于改代码，而建表本身要后于「谁消费它」的确定）。在它落地之前，
 # 这张表就是层归属的事实来源 —— 写在守卫里而不是注释里，是为了让它**可求值**。
 #
@@ -759,7 +759,7 @@ def test_every_schema_key_has_a_reader():
     `readers` 列的存在就是为了让这件事可求值。
 
     这里只查列非空（真正的「读取点集合 == readers」要等 `guards.tsv`，
-    见 KNOWN-ISSUES）。列都空着的话，那条更强的断言也无从谈起。
+    见本地已知问题记录）。列都空着的话，那条更强的断言也无从谈起。
     """
     from mlx_server.tables import TablesView  # noqa: PLC0415
     tv = TablesView(str(Path(__file__).resolve().parents[2] / "payload" / "share"))

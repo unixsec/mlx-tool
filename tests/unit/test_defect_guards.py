@@ -1243,7 +1243,7 @@ def test_documented_absolute_paths_exist(payload, repo):
     import re
     pat = re.compile(r"~/dev/projects/[A-Za-z0-9._/-]+")
     bad = []
-    for f in [repo / "docs" / "USER-GUIDE.md", repo / "docs" / "KNOWN-ISSUES.md",
+    for f in [repo / "docs" / "USER-GUIDE.md",
               payload / "share" / "messages.tsv", repo / "README.md",
               repo / "README_cn.md"]:
         if not f.exists():

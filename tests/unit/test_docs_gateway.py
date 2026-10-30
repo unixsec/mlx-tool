@@ -29,9 +29,8 @@ def test_readmes_and_changelog(repo):
     head = _read(repo, "CHANGELOG.md").split("## [1.0.0]")[0]
     for s in ("api.bind", "0.0.0.0", "所有来源都要令牌", "404", "/v1/responses", "/v1/messages", "TLS"):
         assert s in head, f"CHANGELOG Unreleased 缺「{s}」"
-    issues = _read(repo, "docs/KNOWN-ISSUES.md")
-    for s in ("TLS 关闭时", "networksetup", "端口复用"):
-        assert s in issues, f"KNOWN-ISSUES 缺「{s}」"
+    readme = _read(repo, "README_cn.md")
+    assert "不开 TLS 时，同一网段可以旁听" in readme, "README 没说明不开 TLS 的风险"
 
 
 def test_check_count_matches_product(repo, payload, sys_py):

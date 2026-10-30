@@ -82,7 +82,12 @@ def _shipped_code():
 def test_no_personal_environment_in_shipped_files(kind):
     """CHANGELOG 不扫（它记录的就是「从哪个旧值改成哪个新值」）；代码只扫非注释行。"""
     files = USER_DOCS if kind == "docs" else list(_shipped_code())
-    assert len(files) > (3 if kind == "docs" else 20), files
+    if kind == "docs":
+        # 点名而不是数个数：守卫是防「一个文件都没扫到」，文档增删不该让它失效或误报
+        want = {"README.md", "README_cn.md", "docs/USER-GUIDE.md"}
+        assert want <= {str(p.relative_to(REPO)) for p in files}, files
+    else:
+        assert len(files) > 20, files
     bad = []
     for p in files:
         try:

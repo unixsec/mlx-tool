@@ -17,11 +17,12 @@ def test_docs_no_longer_teach_retired_behaviour(repo):
         assert "--type=text" not in txt, f"{rel} 仍教 --type=text（登记不再需要类型）"
         assert "Qwen3.8-27B-MTP-4bit --type" not in txt
 
-    issues = _read(repo, "docs/KNOWN-ISSUES.md")
-    assert "`--type vision` 起不来时不说原因" not in issues
-    assert "在 mlx_lm 上用不了" not in issues
-    assert "#2033" in issues
-    assert "模板渲染沙箱的边界是 jinja2，不是进程隔离" in issues
+    # 已知问题清单是作者的本地记录，不随仓库发布；面向用户的边界写在 README「默认不防的」
+    assert not (repo / "docs" / "KNOWN-ISSUES.md").exists(), "已知问题清单不该放在 docs/ 下发布"
+    for rel in ("README.md", "README_cn.md", "CHANGELOG.md", "docs/USER-GUIDE.md"):
+        assert "KNOWN-ISSUES" not in _read(repo, rel), f"{rel} 仍链接已不发布的 KNOWN-ISSUES"
+    assert "jinja2 沙箱" in _read(repo, "README_cn.md"), "README 没说明模板渲染沙箱的边界"
+    assert "jinja2 sandbox" in _read(repo, "README.md")
 
     log = _read(repo, "CHANGELOG.md")
     head = log.split("## [1.0.0]")[0]

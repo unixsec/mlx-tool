@@ -98,11 +98,6 @@ _COUNTEREXAMPLES = {
     "ls",
     "model search qwen",
     "model search",
-    # KNOWN-ISSUES「未实现的命令」
-    "logs",
-    "bootstrap render",
-    "model convert / quantize",
-    "model upgrade / rollback",
 }
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -397,7 +392,7 @@ def test_help_doc_anchors_exist_in_guide():
     # （终审 C M7：只按 `{#x}` 定义的锚点在 GitHub 上点过去落在文件开头）
     have = set(re.findall(r'<a id="([\w-]+)"', guide))
     want = set()
-    for readme in ("README.md", "README_cn.md", "docs/KNOWN-ISSUES.md", "CHANGELOG.md"):
+    for readme in ("README.md", "README_cn.md", "CHANGELOG.md"):
         f = _REPO / readme
         if f.exists():
             want |= set(re.findall(r"USER-GUIDE\.md#([\w-]+)", f.read_text(encoding="utf-8")))

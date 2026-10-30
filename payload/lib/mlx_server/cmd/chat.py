@@ -70,7 +70,7 @@ def run(ctx, stack, inv, deps=None):
 
     def _one(text):
         """发一轮。返回回复正文；失败返回 None。**取消闭包压清理栈**（INV-06 的
-        意图栈还没有所有者，见 KNOWN-ISSUES 第 7 条；这里先用清理栈占位）。"""
+        意图栈还没有所有者；这里先用清理栈占位）。"""
         cancelled = {"v": False}
         h = stack.push(lambda: cancelled.__setitem__("v", True)) if stack else None
         try:

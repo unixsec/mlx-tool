@@ -185,7 +185,7 @@ def test_gate3_enter_execute_two_readings_agree(payload: Path):
 
 # 设计 `02-architecture.md:1992` 的 `--dry-run` 行**点名了四个命令**
 # （`所有读取点` 列）。`cli.tsv` 把它登记成 `owner_verb == *`（全部动词），
-# 两者登记面不同 —— 那条差异单独记在 KNOWN-ISSUES，本守卫按设计的四个查。
+# 两者登记面不同 —— 那条差异单独记在本地已知问题记录里，本守卫按设计的四个查。
 _DRY_RUN_CMDS = {
     "model install": ("model_acquire.py", ("store.commit",)),
     "up":            ("svc.py", ("enter_execute",)),

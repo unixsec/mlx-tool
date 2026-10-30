@@ -33,7 +33,7 @@ def run(ctx, stack, inv, deps=None):
     # 那句话把实现缺失说成了用户的安装坏了，会把人送进无效的重装循环
     # （而重装本身在这一版还有别的问题）。摘掉之后它报的是「未知命令」，
     # 与 `mlx logs` 等其它未实现动词一致。补全的设计（由动词台账生成）
-    # 与 `install.sh` 的 I13 调用点一并记在 KNOWN-ISSUES。
+    # 与 `install.sh` 的 I13 调用点一并留待以后。
     return Refused(2, "cmd.unknown_verb", verb=inv.verb)
 
 

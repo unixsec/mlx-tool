@@ -79,16 +79,12 @@ def test_guide_covers_media_thinking_streaming(repo):
 
 
 def test_known_issues_and_changelog(repo):
-    issues = _read(repo, "docs/KNOWN-ISSUES.md")
-    for s in (
-        "非流式客户端无法保活",
-        "TLS 下非流式请求的断连",
-        "代取可以跨放行网段",
-        "本机路径原样交给模型",
-        "`model` 位置",
-        "任何公网地址一律放行",
-    ):
-        assert s in issues, f"KNOWN-ISSUES 缺「{s}」"
+    guide = _read(repo, "docs/USER-GUIDE.md")
+    for s in ("无法保活", "非流式请求：没有保活", "任何公网地址一律放行"):
+        assert s in guide, f"手册缺面向用户的限制说明「{s}」"
+    readme = _read(repo, "README_cn.md")
+    for s in ("本机来源不受这些限制", "请求头阶段没有超时", "让模型读取本机文件路径"):
+        assert s in readme, f"README「默认不防的」缺「{s}」"
     head = _read(repo, "CHANGELOG.md").split("## [1.0.0]")[0]
     for s in (
         "上游一律流式",

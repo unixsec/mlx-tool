@@ -27,7 +27,7 @@ PACKAGES = ("mlx", "mlx_lm", "mlx_vlm")
 # **探测面 == 安装面的后端部分。** `install.sh` 装 `huggingface_hub mlx mlx-lm mlx-vlm`；
 # `huggingface_hub` 不是后端、不进 fingerprint，所以不在 `PACKAGES` 里。
 # mlx_vlm 此前是「可选」：它只服务 `--type=vision`，而那条路径根本起不来
-# （KNOWN-ISSUES 1.0.0 #4）。现在多模态模型经 `up` 现场判定路由到它（spec D3），
+# （1.0.0 的已知缺陷）。现在多模态模型经 `up` 现场判定路由到它（spec D3），
 # 缺了它 `up` 就拒绝（P1）—— 一个缺了就拒绝启动的包不是可选包。
 # 「必需」与「可选」仍分两个常量：`mlx version` 只把必需包的缺失报成缺陷。
 REQUIRED = ("mlx", "mlx_lm", "mlx_vlm")

@@ -70,7 +70,7 @@ def client_alive(sock):
             return True
         return bool(sock.recv(1, socket.MSG_PEEK))
     except ValueError:
-        return True                      # TLS socket 不支持 peek：靠写失败发现（KNOWN-ISSUES）
+        return True                      # TLS socket 不支持 peek：靠写失败发现（已知限制）
     except OSError:
         return False
 
