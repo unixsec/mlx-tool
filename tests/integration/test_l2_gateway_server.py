@@ -753,3 +753,149 @@ def test_content_length_digit_cap_boundary_and_gateway_slots(payload, sys_py):
     assert "400" not in got["d20"], f"20 位（含前导零）的合法值应放行：{got}"
     assert "400" in got["d21"] and "400" in got["d5000"], f"超过 20 位应 400：{got}"
     assert got["no_dict"] is True, "Gateway 必须保留 __slots__"
+
+
+PRE_HEADERS = PRE + r"""
+import gateway.server as server_mod
+def wait_close(s, limit):
+    # 等服务端动作：收到首行 / 被关闭 / 到 limit 仍无动静（"timeout"）
+    s.settimeout(limit); t0 = time.time()
+    try:
+        d = s.recv(256)
+        r = d.decode(errors="replace").split("\r\n")[0] if d else "closed"
+    except socket.timeout:
+        r = "timeout"
+    except OSError as e:
+        r = type(e).__name__
+    return [r, round(time.time() - t0, 2)]
+"""
+
+HEADER_DEADLINE = PRE_HEADERS + r"""
+server_mod.HEADER_SEC = 1.5
+srv, port = start()
+out = {}
+# 1. 请求头逐字节滴灌：每次间隔都小于单次 recv 上限，只有「总时限」能切断它
+s = socket.create_connection(("127.0.0.1", port))
+stop = threading.Event()
+def drip(sock=s):
+    for ch in b"GET /healthz HTTP/1.1\r\nHost: x\r\nX-Pad: " + b"a" * 200:
+        if stop.wait(0.2):
+            return
+        try:
+            sock.sendall(bytes([ch]))
+        except OSError:
+            return
+threading.Thread(target=drip, daemon=True).start()
+out["drip"] = wait_close(s, 5)
+stop.set(); s.close()
+# 2. keep-alive 空闲：一条完整请求之后什么也不发，连接到时被关
+s = socket.create_connection(("127.0.0.1", port))
+s.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+s.settimeout(3)
+first = s.recv(4096).decode(errors="replace").split("\r\n")[0]
+out["idle"] = [first] + wait_close(s, 5)
+s.close()
+print(json.dumps(out))
+"""
+
+DENIED_EARLY = PRE_HEADERS + r"""
+class Deny(Gateway):
+    def classify(self, peer):
+        return None
+g = Deny(None, facade, token="@TOK@"); g.refresh_routes()
+srv, port = start()
+s = socket.create_connection(("127.0.0.1", port))
+out = {"denied": wait_close(s, 3)}       # 一个字节都不发
+s.close()
+print(json.dumps(out))
+"""
+
+CONN_CAPS = PRE_HEADERS + r"""
+server_mod.MAX_CONN = 3
+server_mod.PEER_CONN_LOCAL = 100
+srv, port = start()
+held = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]
+time.sleep(0.3)
+extra = socket.create_connection(("127.0.0.1", port))
+out = {"global": wait_close(extra, 3)}
+extra.close()
+for h in held:
+    h.close()
+time.sleep(0.3)
+server_mod.MAX_CONN = 100
+server_mod.PEER_CONN_LOCAL = 2
+held = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+time.sleep(0.3)
+extra = socket.create_connection(("127.0.0.1", port))
+out["peer"] = wait_close(extra, 3)
+for h in held:
+    h.close()
+time.sleep(0.3)
+out["after"] = raw_request(port, b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")[0]
+print(json.dumps(out))
+"""
+
+TLS_DRIP = PRE_HEADERS + r"""
+server_mod._HANDSHAKE_SEC = 1.0
+d = tempfile.mkdtemp()
+cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
+subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=mlx-gateway"],
+               check=True, capture_output=True)
+os.chmod(key, 0o600)
+srv, port = start(tls_context=tls_context(cert, key))
+s = socket.create_connection(("127.0.0.1", port))
+stop = threading.Event()
+def drip(sock=s):
+    # 合法的记录头声明 16 KB 的 ClientHello，之后逐字节慢慢喂：记录永远收不齐，
+    # 每次间隔又都在单次 recv 超时之内
+    for ch in b"\x16\x03\x01\x40\x00\x01\x00\x3f\xfc" + b"\x00" * 300:
+        if stop.wait(0.3):
+            return
+        try:
+            sock.sendall(bytes([ch]))
+        except OSError:
+            return
+threading.Thread(target=drip, daemon=True).start()
+out = {"drip": wait_close(s, 5)}
+stop.set(); s.close()
+print(json.dumps(out))
+"""
+
+
+def _gone(r):
+    return r in ("closed", "ConnectionResetError", "BrokenPipeError")
+
+
+def test_header_read_has_a_total_deadline_and_idle_keepalive_closes(payload, sys_py):
+    """请求头阶段原本没有任何时限：逐字节滴灌、或 keep-alive 之后什么也不发，
+    都能无限期占住一个工作线程，而且发生在来源检查与鉴权之前。"""
+    got = run_floor(payload, sys_py, HEADER_DEADLINE, with_gateway=True, timeout=60, TOK=TOK)
+    r, t = got["drip"]
+    assert _gone(r) and t < 3, f"滴灌请求头应在总时限附近被切断：{got}"
+    first, r, t = got["idle"]
+    assert "200" in first, got
+    assert _gone(r) and t < 3, f"空闲的 keep-alive 连接应在时限后被关：{got}"
+
+
+def test_denied_peer_is_closed_before_any_bytes_are_read(payload, sys_py):
+    """不在放行网段的来源：连上就回 403 并关，不等它发请求头。"""
+    got = run_floor(payload, sys_py, DENIED_EARLY, with_gateway=True, timeout=30, TOK=TOK)
+    r, t = got["denied"]
+    assert ("403" in r or _gone(r)) and t < 2, f"被拒来源应立刻被打发：{got}"
+
+
+def test_connection_caps_global_and_per_peer(payload, sys_py):
+    """线程数原本没有上限：全局与每来源都要有上限，超出的连接立刻关掉，不起线程。"""
+    got = run_floor(payload, sys_py, CONN_CAPS, with_gateway=True, timeout=60, TOK=TOK)
+    for k in ("global", "peer"):
+        r, t = got[k]
+        assert _gone(r) and t < 2, f"超出{k}上限的连接应立刻被关：{got}"
+    assert "200" in got["after"], f"占用释放后应恢复服务：{got}"
+
+
+def test_dripping_tls_handshake_hits_total_deadline(payload, sys_py):
+    """握手原本只有「单次 recv」超时：每次间隔都小于它的滴灌永远不会被切断。"""
+    got = run_floor(payload, sys_py, TLS_DRIP, with_gateway=True, timeout=60, TOK=TOK)
+    r, t = got["drip"]
+    assert _gone(r) and t < 3, f"滴灌握手应在总时限附近被切断：{got}"

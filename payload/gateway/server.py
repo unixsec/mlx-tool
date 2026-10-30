@@ -7,6 +7,8 @@
 """
 import contextlib
 import http.client
+import io
+import ipaddress
 import json
 import os
 import socket
@@ -42,6 +44,53 @@ BODY_MIN_RATE = 256 * 1024
 BODY_MAX_SEC = 1200.0
 LINGER_SEC = 2.0                   # 体未读即拒：回复后最多排空这么久，再关（见 `_lingering_close`）
 LINGER_MAX_BYTES = 64 * 1024 * 1024
+# 请求头阶段的总时限：从一条请求开始等（含 keep-alive 两条请求之间的空闲）到头块读完。
+# 只设单次 recv 的超时挡不住逐字节滴灌；这里按截止时刻算，每次 recv 前取剩余时间。
+# 30 s 对连接池安全：urllib3 复用前探活，httpx / undici 的空闲回收都在 5 s 以内。
+HEADER_SEC = 30.0
+# 连接数上限。超出的连接在 accept 之后立刻关掉，不起线程（每连接一线程，原先没有上限）。
+# 每来源按 IPv4 地址 / IPv6 /64 计数（隐私地址会轮换）；本机来源放得宽些。
+MAX_CONN = 256
+PEER_CONN_REMOTE = 32
+PEER_CONN_LOCAL = 128
+
+
+def _peer_key(addr):
+    # type: (str) -> tuple
+    """连接计数的键与「是否本机」。IPv4-mapped 先还原；解析不了的地址按原串计、按远端算。"""
+    try:
+        ip = ipaddress.ip_address(str(addr).split("%", 1)[0])
+    except ValueError:
+        return str(addr), False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.version == 6 and not ip.is_loopback:
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False)), False
+    return str(ip), ip.is_loopback
+
+
+class _DeadlineIO(io.RawIOBase):
+    """`rfile` 的底层：`deadline` 不为 None 时，每次 recv 前把超时设成剩余时间。
+
+    `BufferedReader.readline` 每次补缓冲只调一次 `readinto`，所以限住的是**总时长**。
+    `deadline` 为 None 时一概不碰超时 —— 读体的时限逻辑（`_read_body`）自己设超时，照旧生效。
+    """
+
+    def __init__(self, sock):
+        super().__init__()
+        self._sock = sock
+        self.deadline = None
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        if self.deadline is not None:
+            left = self.deadline - time.monotonic()
+            if left <= 0:
+                raise socket.timeout("header read deadline")
+            self._sock.settimeout(left)
+        return self._sock.recv_into(b)
 
 
 class GatewayServer(ThreadingHTTPServer):
@@ -62,7 +111,44 @@ class GatewayServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler):
         if ":" in server_address[0]:
             self.address_family = socket.AF_INET6
+        self._conn_lock = threading.Lock()
+        self._conn_total = 0
+        self._conn_by_peer = {}
         super().__init__(server_address, handler)
+
+    def process_request(self, request, client_address):
+        """起线程之前先占连接名额：全局与每来源都满了就直接关，不起线程、不读一个字节。"""
+        key, local = _peer_key(client_address[0] if client_address else "")
+        limit = PEER_CONN_LOCAL if local else PEER_CONN_REMOTE
+        with self._conn_lock:
+            over = self._conn_total >= MAX_CONN or self._conn_by_peer.get(key, 0) >= limit
+            if not over:
+                self._conn_total += 1
+                self._conn_by_peer[key] = self._conn_by_peer.get(key, 0) + 1
+        if over:
+            log_event("warn", "conn_limit", peer=str(key))
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._conn_release(key)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_release(_peer_key(client_address[0] if client_address else "")[0])
+
+    def _conn_release(self, key):
+        with self._conn_lock:
+            self._conn_total -= 1
+            n = self._conn_by_peer.get(key, 0) - 1
+            if n > 0:
+                self._conn_by_peer[key] = n
+            else:
+                self._conn_by_peer.pop(key, None)
 
     def server_bind(self):
         if self.address_family == socket.AF_INET6:
@@ -178,6 +264,21 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
         def setup(self):
             self._linger = False          # 本连接以「体未读即拒」收尾 ⇒ 关之前先排空
             self._pre_ticket = None       # `handle_expect_100` 发 100 前预留的在途预算
+            # **来源先于一切**：不在放行网段的连接不握手、不读请求头（原先要等头块读完，
+            # 被拒来源也能慢慢发头占住线程）。`precheck` 里的同一检查保留作第二道。
+            blocked = guard.peer_guard(gw.classify(self.client_address[0]))
+            self._denied = blocked is not None
+            if self._denied:
+                log_event("warn", "peer_denied", addr=str(self.client_address[0]))
+                super().setup()
+                if tls_context is None:
+                    raw = json.dumps(blocked[1]).encode()
+                    with contextlib.suppress(OSError):
+                        self.wfile.write(b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json"
+                                         b"\r\nConnection: close\r\nContent-Length: "
+                                         + str(len(raw)).encode() + b"\r\n\r\n" + raw)
+                    self._linger = True
+                return
             if tls_context is not None:
                 # **握手在本连接的工作线程里做**：放在 accept 线程里，一个只连不发的明文连接
                 # 就能让网关停止接受新连接
@@ -185,8 +286,31 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 self.request = tls_context.wrap_socket(self.request, server_side=True)
                 self.request.settimeout(None)
             super().setup()
+            self._hdr = _DeadlineIO(self.connection)
+            self.rfile.close()            # 基类那份 makefile 持有 socket 引用，不关它 fd 要等 GC
+            self.rfile = io.BufferedReader(self._hdr, self.rbufsize if self.rbufsize > 0 else 8192)
+
+        def handle_one_request(self):
+            # 每条请求（含 keep-alive 的空闲等待）开始时布防，头块解析完撤防（`_headers_done`）
+            self._hdr.deadline = time.monotonic() + HEADER_SEC
+            try:
+                super().handle_one_request()
+            finally:
+                self._headers_done()
+
+        def _headers_done(self):
+            if self._hdr.deadline is not None:
+                self._hdr.deadline = None
+                with contextlib.suppress(OSError, ValueError):
+                    self.connection.settimeout(None)
 
         def handle(self):
+            if self._denied:
+                with contextlib.suppress(OSError):
+                    self.wfile.flush()
+                if self._linger:
+                    self._lingering_close()
+                return
             try:
                 super().handle()
             finally:
@@ -277,6 +401,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             """
             if not super().parse_request():
                 return False
+            self._headers_done()
             bad = self._framing_defect()
             if bad is None:
                 return True
@@ -480,6 +605,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             （复检 Minor 6）。先跑 `precheck`：不通过就直接回绝，不发 100 Continue。"""
             # 本方法在 `super().parse_request()` **内部**被调用，早于 `parse_request` 里的
             # 分帧不变式：先在这里验，免得在不可信的头上跑 precheck、发出 100（终审 B m2）
+            self._headers_done()
             bad = self._framing_defect()
             if bad is not None:
                 self._reject_unread(400, {"error": {"message": bad, "type": "invalid_request"}})
