@@ -373,10 +373,12 @@ def test_dry_run_ownership_equals_implementation(payload: Path):
                 am = isinstance(a, tuple); bm = isinstance(b, tuple)
                 if am and bm:
                     return ("ALL_MINUS", a[1] & b[1])   # 各自减的越少越宽 ⇒ 交集
+                # 「全部减去提前返回的」∪「某个分支里的一道门」：被减掉的那些动词里，
+                # 分支门覆盖到的要加回来。此前直接取前者，分支门覆盖的动词被整个丢掉
                 if am:
-                    return a                          # ALL_MINUS 比具体集合宽
+                    return ("ALL_MINUS", a[1] - b)
                 if bm:
-                    return b
+                    return ("ALL_MINUS", b[1] - a)
                 return a | b
             reading[f.stem] = _wider(prev, scope)
 
@@ -405,10 +407,14 @@ def test_dry_run_ownership_equals_implementation(payload: Path):
                 if mod == k or mod.startswith(k + "_"):
                     hit |= v
         # 门在某个 verb 分支里 ⇒ 只有那些动词算实现了
+        # 分支里写的是动词在本模块内的名字（`unset`、`trash empty`），按**尾部整段**比对：
+        # 只比最后一个词时，`trash empty` 永远对不上
+        def _named(v, names):
+            return any(v == s or v.endswith(" " + s) for s in names)
         if isinstance(scoped, tuple) and scoped[0] == "ALL_MINUS":
-            hit = {v for v in hit if v.split()[-1] not in scoped[1]}
+            hit = {v for v in hit if not _named(v, scoped[1])}
         elif scoped is not None:
-            hit = {v for v in hit if v.split()[-1] in scoped}
+            hit = {v for v in hit if _named(v, scoped)}
         implemented |= hit
 
     Cardinality.check("登记了 --dry-run 但没实现的动词",
@@ -466,6 +472,9 @@ _DRY_RUN_EXTRA_ARGS = {
     "model install": ["--repo=org/new", "--type=text"],
     "model register": ["--repo=org/new", "--type=text"],
     "config import": ["--from=@IMPORT_SRC@"],
+    "model rm": ["--weights"],
+    "config set": ["--key=max_tokens", "--value=4096"],
+    "config unset": ["--key=max_tokens"],
 }
 
 _DRY_RUN_PROG = r"""
@@ -612,11 +621,20 @@ _DRY_RUN_EVIDENCE = {
     "model gc": '"targets": ["org/orphan"]',
     "model install": "would_commit",
     "model register": "would_commit",
+    "model rm": '"would_remove": "qwen"',
+    "model trash empty": "would_purge",
+    "config set": '"would_set": "max_tokens"',
+    "config unset": '"would_unset": "max_tokens"',
+    "bootstrap keys": "would_generate",
 }
 
 # 允许「被拒而非预览」的用例：`(动词, 形态) -> 理由`。键必须 ∈ 派生用例集。
 # 当前为空 —— 每个正向用例都必须真走到预览。
-_DRY_RUN_ALLOWED_REFUSAL = {}
+_DRY_RUN_ALLOWED_REFUSAL = {
+    # 夹具里 qwen 真在跑（两个 sleep 进程），rm 必须拒（model.rm_running）；
+    # 不在跑的模型的预览由 test_model_rm_dry_run_previews_without_touching_anything 覆盖
+    ("model rm", "single"): "在跑的模型 rm 必拒",
+}
 
 
 def test_dry_run_changes_no_state_for_every_verb_and_target_form(payload: Path, sys_py: str,
@@ -668,3 +686,20 @@ def test_dry_run_changes_no_state_for_every_verb_and_target_form(payload: Path, 
             not_previewed.append(f"mlx {g['case']}: rc={g['rc']}，预览证据 {ev!r} "
                                  f"{'在' if ev in g['payload'] else '不在'} payload：{g['payload'][:120]}")
     assert not not_previewed, "用例没走到预览（零变化可能是空转）：\n  " + "\n  ".join(not_previewed)
+
+
+def test_model_rm_dry_run_previews_without_touching_anything(payload: Path, sys_py: str):
+    """不在跑的模型：`model rm --weights --dry-run` 列出会删的登记与权重路径，注册表与权重原样。"""
+    from floor import WORLD, run_floor
+    got = run_floor(payload, sys_py, WORLD + r"""
+from mlx_server.cmd import model_reclaim
+from mlx_server.cmd.svc import Invocation
+snap = seed("idle", "org/idle", 8150, config="{}")
+before = open(os.path.join(DATA, "models.jsonl")).read()
+out = model_reclaim.run(ctx, None, Invocation("rm", "idle", args={"weights": True}, dry_run=True), {})
+print(json.dumps({"rc": out.rc, "pay": out.payload,
+                  "same": open(os.path.join(DATA, "models.jsonl")).read() == before,
+                  "weights": os.path.exists(snap)}))
+""", timeout=60)
+    assert got["rc"] == 0 and got["pay"]["would_remove"] == "idle", got
+    assert got["pay"]["weights"] and got["same"] and got["weights"], got

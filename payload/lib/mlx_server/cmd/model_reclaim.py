@@ -44,6 +44,9 @@ def run(ctx, stack, inv, deps=None):
 
     if inv.verb == "trash empty":
         items = vault.entries(ctx)
+        if inv.dry_run:
+            return Done({"kind": "trash_empty_dry_run", "would_purge": [i["id"] for i in items],
+                         "freed_mb": round(sum(i.get("size_mb") or 0 for i in items), 1)})
         if not items:
             return Done({"kind": "trash_empty", "purged": [], "freed_mb": 0})
         confirm = deps.get("confirm")
@@ -73,6 +76,22 @@ def run(ctx, stack, inv, deps=None):
         # `--yes`；`trash empty` 问且**三种绕过全拒**（唯一不可逆的动作，
         # 保持最严的约束）。
         take_weights = bool((inv.args or {}).get("weights"))
+        # **在跑的模型不删**：删了登记，服务还占着端口与内存，`mlx down <id>` 却找不到它
+        from .. import supervisor
+        alive = supervisor.running(ctx, inv.target)
+        if not is_unknown(alive) and alive.value is True:
+            return Refused(6, "model.rm_running", id=inv.target)
+        path = None
+        if take_weights:
+            r = weights.resolve(ctx, rec.user.get("repo", ""), rec.machine.get("revision"))
+            if is_unknown(r):
+                # 此前判不出权重位置时照样删登记 ⇒ 权重成了没人认领的孤儿
+                return Refused(9, "model.rm_weights_undeterminable", id=inv.target,
+                               detail=r.reason or r.kind)
+            path = r.value["path"] if r.value else None
+        if inv.dry_run:
+            return Done({"kind": "model_rm_dry_run", "would_remove": inv.target,
+                         "weights": path, "weights_mb": rec.machine.get("size_mb") if path else None})
         confirm = deps.get("confirm")
         if take_weights and confirm is not None and not (inv.args or {}).get("yes"):
             # 附录 A 的过程流：**逐行列出目标 + 确认串**。
@@ -93,17 +112,11 @@ def run(ctx, stack, inv, deps=None):
         # 此前这里**无条件**把权重移进回收站：用户只想删登记，几十 GB 的权重
         # 却一起没了。默认删更多是最坏的一类默认值。
         trashed = None
-        if take_weights:
-            # **`revision` 在 machine 段**（`schema.tsv#revision(scope=machine)`）——
-            # 它是磁盘事实，由 `weights` 产出，不是用户填的。
-            # 这里此前读 `rec.user`，永远取到 `None` ⇒ `resolve` 退化成
-            # 「取最新的那个 revision」。同一个 repo 存了两个版本时，
-            # `model rm --weights` 删的可能不是这条记录登记的那一个。
-            r = weights.resolve(ctx, rec.user.get("repo", ""),
-                                rec.machine.get("revision"))
-            if not is_unknown(r) and r.value:
-                vault.trash(ctx, r.value["path"], stack)    # 委托唯一删除点
-                trashed = r.value["path"]
+        # **`revision` 在 machine 段**（磁盘事实，由 `weights` 产出）：上面 resolve 读的就是它 ——
+        # 此前读 `rec.user` 永远取到 None，同一 repo 存了两个版本时删的可能不是登记的那一个
+        if take_weights and path:
+            vault.trash(ctx, path, stack)    # 委托唯一删除点
+            trashed = path
         store.commit(ctx, store.MODELS, store.ModelsTx(inv.target, {}, mode="delete"), stack)
         return Done({"kind": "model_rm", "removed": inv.target,
                      "trashed": trashed,

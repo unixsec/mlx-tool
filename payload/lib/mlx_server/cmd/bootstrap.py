@@ -11,6 +11,8 @@ def run(ctx, stack, inv, deps=None):
         return Refused(3, "bootstrap.no_tables")
 
     if inv.verb == "keys":
+        if inv.dry_run:
+            return _keys(ctx, stack, tables, dry_run=True)
         return _keys(ctx, stack, tables)
 
     if inv.verb == "verify":
@@ -37,8 +39,8 @@ def run(ctx, stack, inv, deps=None):
     return Refused(2, "cmd.unknown_verb", verb=inv.verb)
 
 
-def _keys(ctx, stack, tables):
-    # type: (object, object, object) -> object
+def _keys(ctx, stack, tables, dry_run=False):
+    # type: (object, object, object, bool) -> object
     """生成缺失的密钥（spec §5.2）。**只输出键名，从不输出值** —— 这条命令的输出会进
     安装日志、终端回滚与 CI 记录，任何一处留下值都等于明文存盘。
 
@@ -55,6 +57,8 @@ def _keys(ctx, stack, tables):
     current = store.load_settings(ctx)
     missing = [k for k in wanted if not current.get(k)]
     kept = [k for k in wanted if current.get(k)]
+    if dry_run:
+        return Done({"kind": "keys_dry_run", "would_generate": missing, "kept": kept})
     if missing:
         store.commit(ctx, store.SETTINGS,
                      store.SettingsTx({k: secrets.token_urlsafe(32) for k in missing}), stack)

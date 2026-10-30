@@ -5,6 +5,8 @@ svc.no_spawner	执行段缺少进程启动器（{detail}）
 model.not_found	没有登记名为 {id} 的模型
 model.uniqueness	端口 {port} 已被 {holder} 占用
 model.confirm_rm	确认删除 {id}？此操作移入回收站
+model.rm_running	{id} 正在运行，先 `mlx down {id}` 再删（删了登记，服务还占着端口与内存，却再也找不到它）
+model.rm_weights_undeterminable	判不出 {id} 的权重在哪（{detail}），这次不删 —— 否则登记删了、权重成了没人认领的孤儿。修好后重试，或先不带 --weights 删登记
 model.confirm_declined	已取消，未删除任何东西
 config.unknown_key	未知配置键 {key}
 config.invalid	配置项 {key} 非法（{kind}）

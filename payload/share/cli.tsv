@@ -17,7 +17,7 @@
 # 内部注入键（`_group` / `layers` / `meta` / `files`）不是 flag，
 # 不登记即意味着用户从命令行传它们会被拒 —— 这正是要的。
 --json	*	no	-	output_format	false	output.machine_readable	flag.json
---dry-run	up,down,restart,bench,install,uninstall,config import,model gc,model install,model register	no	-	-	false	exec.plan_only	flag.dry_run
+--dry-run	up,down,restart,bench,install,uninstall,config import,config set,config unset,model gc,model install,model register,model rm,model trash empty,bootstrap keys	no	-	-	false	exec.plan_only	flag.dry_run
 --all	down,status	no	-	target_selection	false	target.all	flag.all
 --repo	model register,model install	yes	<hf-repo>	-	-	model.source_repo	flag.repo
 --type	model register,model install	yes	#modality	-	-	model.backend_type	flag.type

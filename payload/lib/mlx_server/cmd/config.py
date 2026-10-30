@@ -351,6 +351,10 @@ def run(ctx, stack, inv, deps=None):
         rec = store.load(ctx, store.MODELS).by_id(inv.target) if per_model else None
         if per_model and rec is None:
             return Refused(6, "model.not_found", id=inv.target)
+        was = (key in rec.user) if per_model else (key in store.load_settings(ctx))
+        if inv.dry_run:
+            return Done({"kind": "config_unset_dry_run", "would_unset": key,
+                         "scope": inv.target if per_model else "global", "was_set": was})
         if per_model:
             if key not in rec.user:
                 return Done({"kind": "config_unset", "unset": key,
@@ -461,6 +465,9 @@ def run(ctx, stack, inv, deps=None):
         bad = draft_problem(ctx, inv.target, str(val).strip(), modality)
         if bad is not None and bad.code == 6:
             return bad
+    if inv.dry_run:
+        return Done({"kind": "config_set_dry_run", "would_set": key,
+                     "value": _mask1(key, val, defs), "scope": inv.target if per_model else "global"})
     if not per_model:
         store.commit(ctx, store.SETTINGS, store.SettingsTx({key: val}), stack)
         scope = "global"
