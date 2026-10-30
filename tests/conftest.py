@@ -6,6 +6,7 @@
 - 任何断言产品行为的测试，必须经 SYS_PY 调起被测对象，
   不得 import 产品模块后在 venv 解释器里直接调用 —— 那测的是另一个解释器。
 """
+import socket
 import subprocess
 from pathlib import Path
 
@@ -63,6 +64,13 @@ def _never_touch_real_rc(tmp_path_factory, monkeypatch):
     for name in ("MLX_GATEWAY_TOKEN", "MLX_BACKEND_API_KEY",
                  "MLX_ROOT_CODE", "MLX_ROOT_DATA", "MLX_ROOT_WEIGHTS"):
         monkeypatch.delenv(name, raising=False)
+    # **本机真实的网关端口同样不得进入测试**。三根是沙箱，端口却不是：没设端口的安装用例
+    # 装出来的是默认 8080，自检探到开发者正在跑的网关 → `gateway_port failed` →
+    # 「没变就跳过」不成立（2026-10-29 验收期间 2 个重跑用例必红，停掉网关才绿）。
+    # 默认给每个用例一个空闲端口；需要固定端口的用例经自己的 env dict 显式传入，不受影响。
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        monkeypatch.setenv("MLX_GATEWAY_PORT", str(s.getsockname()[1]))
     # **开发者的终端同样不得进入测试**：产品的确认只读 `/dev/tty`，`stdin=DEVNULL`
     # 挡不住它。在交互终端里跑时子进程继承控制终端，提示会弹到开发者屏幕上并真等输入
     # （2026-10-26 实测：卸载用例卡到超时，`rm --weights` 被键入的 qwen 确认）。
