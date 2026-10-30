@@ -14,5 +14,5 @@
 #   completion_tokens  后端读哪个输出长度字段：`max_completion_tokens` = 也读它（mlx_lm 优先读）；`-` = 只读 max_tokens（mlx_vlm，spec §0.4）
 #   thinking_params    思考参数写在哪：`template_kwargs` = chat_template_kwargs（mlx_lm）；`top_level` = 请求顶层 enable_thinking / reasoning_effort（mlx_vlm）
 # 列（顺序即 tables.COLUMNS）：backend module host offline concurrency_args draft_args thinking ready key_env env_clear endpoints completion_tokens thinking_params
-mlx_lm	mlx_lm.server	127.0.0.1	1	--decode-concurrency {n} --prompt-concurrency {n}	--draft-model {alias} --num-draft-tokens {k}	-	bind	-	-	chat,completions	max_completion_tokens	template_kwargs
+mlx_lm	mlx_lm_auth	127.0.0.1	1	--decode-concurrency {n} --prompt-concurrency {n}	--draft-model {alias} --num-draft-tokens {k}	-	bind	MLX_LM_SERVER_API_KEY	-	chat,completions	max_completion_tokens	template_kwargs
 mlx_vlm	mlx_vlm.server	127.0.0.1	1	--max-num-seqs {n}	-	template	load	MLX_VLM_SERVER_API_KEY	MLX_VLM_DRAFT_MODEL,MLX_VLM_DRAFT_KIND,MLX_VLM_DRAFT_BLOCK_SIZE,MLX_TRUST_REMOTE_CODE,MLX_VLM_MAX_NUM_SEQS	chat,responses,messages	-	top_level

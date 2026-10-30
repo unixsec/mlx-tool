@@ -1,6 +1,7 @@
 # path	kind	on_uninstall
 # 分发清单：安装写入面 ⊇ 卸载扫描面（G-DEPLOY-01）
 bin/mlx	代码	删除
+libexec/mlx_lm_auth.py	代码	删除
 lib/mlx_server/__init__.py	代码	删除
 lib/mlx_server/__main__.py	代码	删除
 lib/mlx_server/result.py	代码	删除

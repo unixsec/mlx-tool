@@ -5,6 +5,13 @@
 """
 
 
+import os
+
+# 代码根的 `libexec/`：本文件在 `<代码根>/lib/mlx_server/` 下（只算路径，不读盘）
+LIBEXEC = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "libexec")
+
+
 class SpecRefusal(Exception):
     """用户显式设置的参数其能力状态未知 ⇒ 指名参数并拒绝（code 9）。"""
 
@@ -120,6 +127,10 @@ def spec(service, cfg, route):
         name = raw_name.strip()
         if name and name != "-":
             env[name] = ""                   # 置空中和父进程继承（上游以真值判断）
+    # 模块名不带点 ⇒ 是代码根 `libexec/` 下的包装脚本（如 mlx_lm 的鉴权包装 `mlx_lm_auth`），
+    # 让 venv 解释器找得到它；上游模块一律带点（`mlx_lm.server` / `mlx_vlm.server`）
+    if "." not in row["module"]:
+        env["PYTHONPATH"] = LIBEXEC
     key_env = row.get("key_env")
     if key_env not in ("", "-", None) and v.get("backend.api_key"):
         env[key_env] = str(v["backend.api_key"])

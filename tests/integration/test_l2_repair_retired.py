@@ -52,7 +52,7 @@ def test_repair_clears_old_fields_and_retired_keys_only(payload, sys_py):
     assert got["after"]["old"]["machine"] == want_machine, "B 顺带改了 machine 段其余字段"
     assert got["after"]["old"]["user"] == {"repo": "org/old", "max_tokens": 2048}
     assert got["after"]["new"] == got["before"]["new"], "没有旧字段的记录被改动了"
-    assert got["settings"] == {"fit.reserve_pct": 30}
+    assert {k: v for k, v in got["settings"].items() if k != "backend.api_key"} == {"fit.reserve_pct": 30}
     assert got["mode"] == 0o600, f"C 动作之后 settings.json 权限是 {oct(got['mode'])}"
 
     for head in ("重建了", "旧字段", "退役配置键"):

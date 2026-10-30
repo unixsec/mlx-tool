@@ -75,7 +75,8 @@ def test_export_json_imports_back(payload, sys_py):
     got = run_floor(payload, sys_py, PROG, timeout=120)
     rt = got["roundtrip"]
     assert rt["rc"] == 0 and rt["rejected"] == [], f"信封不应被当成配置键拒掉：{rt}"
-    assert rt["after"] == {"max_tokens": 4096, "api.media_max_parts": 7}, f"往返后值不一致：{rt}"
+    after = {k: v for k, v in rt["after"].items() if k != "backend.api_key"}   # 夹具自带的后端密钥
+    assert after == {"max_tokens": 4096, "api.media_max_parts": 7}, f"往返后值不一致：{rt}"
     assert got["bad_envelope"] == [6, "config.import_bad_json"], got["bad_envelope"]
 
 
@@ -147,4 +148,5 @@ def test_level_mismatch_hint_and_diff_rows(payload, sys_py):
     rc, key, text = got["model_bind"]
     assert (rc, key) == (6, "config.level_mismatch"), got
     assert "config set api.bind --value" in text and "<模型id>" not in text, text
-    assert got["diff_keys"] == ["max_tokens"], f"diff 只列改过的键：{got['diff_keys']}"
+    keys = [k for k in got["diff_keys"] if k != "backend.api_key"]   # 夹具自带的后端密钥
+    assert keys == ["max_tokens"], f"diff 只列改过的键：{got['diff_keys']}"

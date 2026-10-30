@@ -45,7 +45,7 @@ seed("t", "org/t", 8101, config={})
 print(json.dumps(up("t")))
 """)
     assert got["rc"] == 0, got
-    assert got["route"]["rule"] == "R4" and got["argv"][2] == "mlx_lm.server"
+    assert got["route"]["rule"] == "R4" and got["argv"][2] == "mlx_lm_auth"
     assert "--decode-concurrency" in got["argv"] and got["timeout"] == 20
 
 
@@ -98,6 +98,7 @@ seed("nokey", "org/nokey", 8103, config=VIS_CFG, template=VIS_TPL)
 seed("mtp", "org/mtp", 8104, config=fixture("qwen38-mtp/config.json"))
 seed("withmtp", "org/withmtp", 8105, config={}, user={"draft_model": "mtp"})
 r = {}
+put_settings({"backend.api_key": ""})      # 这一组测的就是「没有后端密钥」
 put_caps(["mlx", "mlx_lm"])
 r["no_pkg_no_key"] = up("nokey")
 put_caps(["mlx", "mlx_lm", "mlx_vlm"])
@@ -194,7 +195,7 @@ print(json.dumps(up("forced2")))
 """)
     assert got["rc"] == 0, got
     assert got["route"]["rule"] == "R4" and got["route"]["backend"] == "mlx_lm"
-    assert got["argv"][2] == "mlx_lm.server"
+    assert got["argv"][2] == "mlx_lm_auth"
     assert got["route"]["effort_domain"] == ["low", "medium", "xhigh"], got["route"]
 
 

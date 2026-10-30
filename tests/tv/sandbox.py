@@ -11,6 +11,8 @@ class Sandbox:
         self.root = Path(root)
         for d in ("code", "data", "weights", "share", "run", "logs"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
+        # 装好的系统总有后端密钥（安装器 `bootstrap keys`）；1.2.0 起 mlx_lm 后端也要它
+        (self.root / "data" / "settings.json").write_text('{"backend.api_key": "' + "B" * 43 + '"}')
 
     def write_constants(self, **extra):
         """造 `share/constants.env`，并**拷入真实的 `*.tsv` 表**。

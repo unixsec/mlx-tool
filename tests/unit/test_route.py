@@ -54,7 +54,7 @@ cases = {
   "order_P1_P2": go(VIS, pk=["mlx_lm"], c=cfg(**{"backend.api_key": ""})),
   "order_P2_P3": go(VIS, c=cfg(**{"backend.api_key": ""}), size=None),
   "tpl_unknown": go(VIS, tpl=Unknown("TIMEOUT", "x")),
-  "vis_text_model_no_key_ok": go(TXT, c=cfg(**{"backend.api_key": ""})),
+  "text_model_no_key": go(TXT, c=cfg(**{"backend.api_key": ""})),
 }
 cases["ev"] = [route.effective_vision(v, m) for v, m in
                [(True, "text"), (False, "vision"), (None, "auto"), (True, "auto"), (False, None)]]
@@ -75,7 +75,8 @@ def test_route_rules_frozen(payload, sys_py):
     assert got["R3"]["thinking"] is True and got["R3"]["effort"] == ["low", "medium", "xhigh"]
     assert got["R3"]["fp"] and len(got["R3"]["fp"]) == 12 and got["R3"]["conc"] == 8
     assert (got["R4"]["rule"], got["R4"]["backend"]) == ("R4", "mlx_lm")
-    assert got["R4"]["thinking"] is False and got["R4"]["fp"] is None
+    # 1.2.0：mlx_lm 经鉴权包装启动，与 mlx_vlm 同样带后端密钥指纹
+    assert got["R4"]["thinking"] is False and got["R4"]["fp"] == got["R3"]["fp"]
     assert got["R4_forced"]["rule"] == "R4" and got["R3_forced"]["rule"] == "R3"
     # 「依据」与结论同源：覆盖生效时写覆盖，原事实留着对照（2026-10-26 真机：R4 却写 vision_config）
     assert got["R3"]["src"] == "config.json:vision_config", "没覆盖时依据照旧"
@@ -93,7 +94,8 @@ def test_route_rules_frozen(payload, sys_py):
     assert got["tpl_unknown"]["thinking"] is False and got["tpl_unknown"]["effort"] == []
     assert got["tpl_unknown"]["note"] == "x" and got["R3"]["note"] is None, \
         "模板判不出要带原因，判得出不带"
-    assert got["vis_text_model_no_key_ok"]["rule"] == "R4", "mlx_lm 不需要后端密钥"
+    assert got["text_model_no_key"] == {"key": "svc.backend_key_missing", "rc": 6}, \
+        "1.2.0：mlx_lm 经鉴权包装启动，同样需要后端密钥"
     assert got["ev"] == [False, True, None, True, False]
 
     hit = {k.split("_")[0] for k in got if k[:2] in {"S1", "U1", "U2", "R0", "R1", "R2",

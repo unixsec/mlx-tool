@@ -174,7 +174,7 @@ def test_l3_dry_run_never_touches_disk(cli, tmp_path):
              for p in data.rglob("*") if p.is_file()}
     assert rc == 0 and isinstance(out, list)
     assert out[0] != "mlx_lm", f"argv[0] 仍是包名，不可执行：{out}"
-    assert out[1:3] == ["-m", "mlx_lm.server"], out
+    assert out[1:3] == ["-m", "mlx_lm_auth"], out
     assert before == after, f"dry-run 动了盘：{set(after) ^ set(before)}"
 
 

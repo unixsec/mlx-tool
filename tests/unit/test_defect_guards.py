@@ -214,6 +214,8 @@ def test_d4_ports_conflict_wins_over_spec(payload: Path, sys_py: str):
             _fh.write(json.dumps({"id": "qwen",
                                   "user": {"repo": "org/qwen", "type": "text"},
                                   "machine": {"port": 8177, "revision": "main"}}) + "\\n")
+        with open(os.path.join(_d, "data", "settings.json"), "w") as _fh:
+            _fh.write(json.dumps({"backend.api_key": "B" * 43}))   # 装好的系统总有后端密钥
         ctx = Ctx(_d, os.path.join(_d, "data"), os.path.join(_d, "w"),
                   os.path.join(_d, "venv"), 8340, (8100, 8199), None, share_root="@SHARE@")
         calls = []

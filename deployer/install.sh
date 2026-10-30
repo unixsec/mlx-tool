@@ -151,7 +151,7 @@ _backup_said() {                    # _backup_said <_backup 的输出> → 给�
 # 两边各写一份时，比较要求逐文件相同、拷贝却只增不删 —— 旧版装过、新版删掉的文件让比较永远不等
 # （2026-10-28 真机：1.0.0 的 `payload/share/types.tsv`，每次重跑都停服务重装）。
 # 「源目录:代码根目录」；生成物是安装器在 share/ 里写出来、源码树里没有的文件。
-TREES="payload/bin:bin payload/lib:lib payload/gateway:gateway payload/share:share payload:payload deployer:deployer"
+TREES="payload/bin:bin payload/lib:lib payload/libexec:libexec payload/gateway:gateway payload/share:share payload:payload deployer:deployer"
 SHARE_GENERATED="constants.env caps.json"
 _up_to_date() {
   local t f x gen=""
@@ -225,9 +225,10 @@ say "== 建三根"
 mkdir -p "$CODE_ROOT" "$DATA_ROOT" "$WEIGHTS_ROOT"
 
 say "== 拷载荷"
-mkdir -p "$CODE_ROOT/bin" "$CODE_ROOT/lib" "$CODE_ROOT/share" "$CODE_ROOT/gateway"
+mkdir -p "$CODE_ROOT/bin" "$CODE_ROOT/lib" "$CODE_ROOT/libexec" "$CODE_ROOT/share" "$CODE_ROOT/gateway"
 cp -R "$SRC/payload/bin/." "$CODE_ROOT/bin/"
 cp -R "$SRC/payload/lib/." "$CODE_ROOT/lib/"
+cp -R "$SRC/payload/libexec/." "$CODE_ROOT/libexec/"
 cp -R "$SRC/payload/gateway/." "$CODE_ROOT/gateway/"
 cp -R "$SRC/payload/share/." "$CODE_ROOT/share/"
 # 部署器与载荷副本进代码根（R-DEPLOY-37）：

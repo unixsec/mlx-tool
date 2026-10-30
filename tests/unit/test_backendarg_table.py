@@ -36,11 +36,13 @@ print(json.dumps(out))
 
 def test_argv_and_env_come_only_from_table_row(payload, sys_py):
     got = run_floor(payload, sys_py, PROG, KEY=KEY)
-    assert got["text"]["argv"] == ["/py", "-m", "mlx_lm.server", "--model", "m", "--port", "8123",
+    assert got["text"]["argv"] == ["/py", "-m", "mlx_lm_auth", "--model", "m", "--port", "8123",
                                    "--max-tokens", "81920", "--host", "127.0.0.1",
                                    "--decode-concurrency", "8", "--prompt-concurrency", "8"]
-    assert got["text"]["env"] == {"HF_HUB_OFFLINE": "1"}
-    assert got["text"]["secret"] == []
+    # 1.2.0：mlx_lm 经鉴权包装（libexec/mlx_lm_auth.py）启动，与 mlx_vlm 对等要后端密钥
+    assert got["text"]["env"] == {"HF_HUB_OFFLINE": "1", "MLX_LM_SERVER_API_KEY": KEY,
+                                  "PYTHONPATH": str(payload / "libexec")}
+    assert got["text"]["secret"] == ["MLX_LM_SERVER_API_KEY"]
     assert got["vision"]["argv"] == ["/py", "-m", "mlx_vlm.server", "--model", "m", "--port", "8123",
                                      "--max-tokens", "81920", "--host", "127.0.0.1",
                                      "--max-num-seqs", "8", "--enable-thinking"]

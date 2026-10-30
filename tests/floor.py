@@ -38,6 +38,9 @@ WEIGHTS = os.path.join(_ROOT, "weights")
 VENV = os.path.join(_ROOT, "venv")
 for _d in (DATA, WEIGHTS, os.path.join(VENV, "bin")):
     os.makedirs(_d, exist_ok=True)
+# 装好的系统总有后端密钥（安装器 `bootstrap keys`）；1.2.0 起 mlx_lm 后端也要它
+with open(os.path.join(DATA, "settings.json"), "w") as _fh:
+    _fh.write(json.dumps({"backend.api_key": "B" * 43}))
 if "@RENDER_PY@" not in ("", "@" + "RENDER_PY@"):
     # 包装脚本而不是符号链接：venv 的 python 经符号链接调起时找不到 pyvenv.cfg，
     # site-packages（jinja2）会丢
@@ -71,6 +74,13 @@ def seed(mid, repo, port, config=None, template=None, user=None, machine=None):
     return snap
 
 def put_settings(d):
+    # 装好的系统总有两把密钥（安装器 `bootstrap keys`）：没写 backend.api_key 时补上一把，
+    # 要测「没有后端密钥」就显式写空串 —— 1.2.0 起 mlx_lm 后端也要后端密钥
+    d = dict(d)
+    if "backend.api_key" not in d:
+        d["backend.api_key"] = "B" * 43
+    elif d["backend.api_key"] == "":
+        del d["backend.api_key"]
     with open(os.path.join(DATA, "settings.json"), "w") as fh:
         fh.write(json.dumps(d))
 

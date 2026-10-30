@@ -44,6 +44,8 @@ def _run_on_floor(payload: Path, sys_py: str, body: str):
             _fh.write(json.dumps({"id": "qwen",
                                   "user": {"repo": "org/qwen", "type": "text"},
                                   "machine": {"port": 8177, "revision": "main"}}) + "\\n")
+        with open(os.path.join(_d, "data", "settings.json"), "w") as _fh:
+            _fh.write(json.dumps({"backend.api_key": "B" * 43}))   # 装好的系统总有后端密钥
         ctx = Ctx(os.path.join(_d, "code"), os.path.join(_d, "data"),
                   os.path.join(_d, "w"), os.path.join(_d, "venv"),
                   8340, (8100, 8199), None, share_root=SHARE)
@@ -128,7 +130,7 @@ def test_gate1_dry_run_prints_spec_argv(payload: Path, sys_py: str):
     # （`mlx_lm` 是包名），而那正是 `--dry-run` 存在的全部理由（INV-02）。
     argv = got["payload"]["argv"]
     assert argv[0] != "mlx_lm", f"argv[0] 仍是包名，不可执行：{argv}"
-    assert argv[1:3] == ["-m", "mlx_lm.server"], \
+    assert argv[1:3] == ["-m", "mlx_lm_auth"], \
         f"后端模块名应来自产品 DEFAULTS，不是测试字面量：{argv}"
 
 
@@ -507,6 +509,8 @@ os.environ.update({"MLX_ROOT_CODE": code, "MLX_ROOT_DATA": data, "MLX_ROOT_WEIGH
                    "MLX_PORT_RANGE": "8100-8199", "MLX_VENV": venv,
                    "HOME": home, "MLX_RC_FILES": os.path.join(home, "zshrc")})
 
+# 装好的系统总有后端密钥（1.2.0 起 mlx_lm 后端也要它）
+open(os.path.join(data, "settings.json"), "w").write(json.dumps({"backend.api_key": "B" * 43}))
 # 两个登记模型 + 两个**真在跑**的进程（不是死 pid：死 pid 的 down 只删记录，
 # 走不到 kill 分支，那会让「没杀」由「本来就没东西可杀」空真满足）。
 procs = {}

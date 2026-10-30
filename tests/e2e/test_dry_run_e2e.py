@@ -30,6 +30,8 @@ def installed(tmp_path: Path, payload: Path):
         shutil.copy2(tsv, share / tsv.name)
     for d in ("code", "data", "weights"):
         (tmp_path / d).mkdir()
+    # 装好的系统总有后端密钥（安装器 `bootstrap keys`）；1.2.0 起 mlx_lm 后端也要它
+    (tmp_path / "data" / "settings.json").write_text('{"backend.api_key": "' + "B" * 43 + '"}')
     (share / "constants.env").write_text(
         f"MLX_ROOT_CODE={tmp_path}/code\n"
         f"MLX_ROOT_DATA={tmp_path}/data\n"

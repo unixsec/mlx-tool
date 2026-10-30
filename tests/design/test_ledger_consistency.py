@@ -599,6 +599,7 @@ def test_g_res_11_config_reads_environ_only_in_ctx():
         "lib/mlx_server/cmd/svc.py": "② 子进程环境转发：PATH",
         "lib/mlx_server/cmd/self_deploy.py": "② 子进程环境转发：部署器的 _t0_env",
         "gateway/__main__.py": "③ 网关进程自己的 ctx 构造",
+        "libexec/mlx_lm_auth.py": "④ 后端进程（venv 解释器、mlx_lm 内）：读出后端密钥并立即移出环境，没有 ctx",
     }
     hits = {}
     for f in sorted(root.rglob("*.py")):

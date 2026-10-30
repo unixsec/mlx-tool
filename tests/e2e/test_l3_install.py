@@ -75,7 +75,7 @@ def test_l3_dry_run_on_installed_product(installed):
     assert argv[0] != "mlx_lm", f"argv[0] 仍是包名，不可执行：{argv}"
     assert os.path.isabs(argv[0]) and os.access(argv[0], os.X_OK), \
         f"argv[0] 不是可执行的绝对路径：{argv[0]}"
-    assert argv[1:3] == ["-m", "mlx_lm.server"], argv
+    assert argv[1:3] == ["-m", "mlx_lm_auth"], argv
     assert "--model" in argv and "qwen" in argv
 
 
@@ -407,7 +407,7 @@ def test_l3_route_follows_config_on_installed_product(installed):
     settings.write_text(json.dumps(s))
     rc, argv, err = dry()
     assert rc == 0, err
-    assert argv[1:3] == ["-m", "mlx_lm.server"], argv
+    assert argv[1:3] == ["-m", "mlx_lm_auth"], argv
     assert argv[-4:] == ["--decode-concurrency", "2", "--prompt-concurrency", "2"], argv
     assert "判定  R4" in err and "已退役的键：backend" in err, err
     assert "Traceback" not in err

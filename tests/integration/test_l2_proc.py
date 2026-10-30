@@ -104,7 +104,7 @@ def test_l2_dry_run_zero_external_commands(payload: Path, sys_py: str, tmp_path:
         f"dry-run 动了盘：+{added} -{removed} ~{changed}"
     argv = json.loads([ln for ln in r.stdout.splitlines() if ln.startswith("[")][-1])
     assert argv[0] != "mlx_lm", f"argv[0] 仍是包名，不可执行：{argv}"
-    assert argv[1:3] == ["-m", "mlx_lm.server"], argv
+    assert argv[1:3] == ["-m", "mlx_lm_auth"], argv
 
     # `--dry-run` 在 stage_split **之前**返回，压根到不了 `ps` ——
     # 所以这条用例里桩本就不该被调用。它一直注着 `MLX_BIN_PS`（连同那句

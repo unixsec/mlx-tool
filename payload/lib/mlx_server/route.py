@@ -108,13 +108,14 @@ def decide(model_id, facts, template, draft, cfg_values, packages, backends, siz
     if row is None:
         return Refused(3, "tables.unreadable", detail=f"backends.tsv 里没有 {backend}")
     needs_key = row.get("key_env") not in ("", "-", None)
-    if row.get("ready") == "load" or needs_key:
-        if backend not in set(packages or ()):
-            return Refused(6, "svc.backend_missing", id=model_id, pkg=backend)
-        if needs_key and not cfg_values.get("backend.api_key"):
-            return Refused(6, "svc.backend_key_missing", id=model_id)
-        if row.get("ready") == "load" and size_mb is None:
-            return Refused(9, "svc.size_undeterminable", id=model_id)
+    # 包检查只对「加载完才监听」的后端做（起不来要等很久才暴露）；密钥检查对所有要密钥的后端做。
+    # 1.2.0 起 mlx_lm 也要密钥（鉴权包装），但它的包检查行为不变
+    if row.get("ready") == "load" and backend not in set(packages or ()):
+        return Refused(6, "svc.backend_missing", id=model_id, pkg=backend)
+    if needs_key and not cfg_values.get("backend.api_key"):
+        return Refused(6, "svc.backend_key_missing", id=model_id)
+    if row.get("ready") == "load" and size_mb is None:
+        return Refused(9, "svc.size_undeterminable", id=model_id)
     ok = template is not None and not template.is_unknown()
     tv = template.value if ok else {}
     return Route(backend, row, rule,
