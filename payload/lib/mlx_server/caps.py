@@ -33,6 +33,27 @@ PACKAGES = ("mlx", "mlx_lm", "mlx_vlm")
 REQUIRED = ("mlx", "mlx_lm", "mlx_vlm")
 OPTIONAL = {}
 
+# **钉住的上游副本**：`share/drafters.tsv`（附属 drafter 的 model_type 集合）与
+# `gateway/effort.py` 的 effort 取值顺序，都取自这个版本的 mlx-vlm。升级上游后它们可能
+# 静默过时（新增的 drafter 类型被当成完整模型、新的 effort 档被丢），所以版本不一致要说出来。
+PINNED = {"mlx_vlm": "0.6.17"}
+
+
+def pin_notes(view):
+    # type: (dict) -> list
+    """已装版本与钉住版本不一致时的复核提示（每包一条）。没装 / 一致 ⇒ 空列表。"""
+    try:
+        fp = json.loads((view or {}).get("fingerprint") or "{}")
+    except (TypeError, ValueError):
+        fp = {}
+    out = []
+    for pkg, pinned in sorted(PINNED.items()):
+        got = fp.get(pkg) if isinstance(fp, dict) else None
+        if got and got != pinned:
+            out.append(f"{pkg} 已装 {got}，判定用的副本钉自 {pinned}：请复核 share/drafters.tsv"
+                       f"（附属 drafter 类型）与 gateway/effort.py（effort 取值顺序）")
+    return out
+
 
 def path(ctx):
     # type: (object) -> str

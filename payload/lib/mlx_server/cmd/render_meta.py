@@ -28,18 +28,19 @@ def _caps(p):
     rows = [("后端包", "、".join(pkgs) if pkgs else "venv 未建，后端包未装"),
             ("指纹", p.get("fingerprint") or "（无）"),
             ("采集于", p.get("collected_at") or "（未记录）")]
-    return "\n".join(ui._kv(rows))
+    return "\n".join(ui._kv(rows) + [f"  ⚠ {n}" for n in p.get("pin_notes") or []])
 
 
 def _caps_diff(p):
     # type: (dict) -> str
     ch = p.get("changes")
+    notes = [f"  ⚠ {n}" for n in p.get("pin_notes") or []]
     if not ch:
-        return f"  能力无变化（采集于 {p.get('collected_at', '')}）"
+        return "\n".join([f"  能力无变化（采集于 {p.get('collected_at', '')}）"] + notes)
     lines = [f"  {len(ch)} 项变化："]
     for c in ch:
         lines.append(f"    {c['item']}  {ui._flat(c.get('before'))} → {ui._flat(c.get('after'))}")
-    return "\n".join(lines)
+    return "\n".join(lines + notes)
 
 
 def _self_deploy(p):

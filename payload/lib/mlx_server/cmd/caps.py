@@ -27,7 +27,8 @@ def run(ctx, stack, inv, deps=None):
     deps = deps or {}
     if inv.verb == "show":
         c = caps.get(ctx)
-        return Done(dict(c, kind="caps")) if c else Refused(6, "caps.not_collected")
+        return Done(dict(c, kind="caps", pin_notes=caps.pin_notes(c))) if c \
+            else Refused(6, "caps.not_collected")
     if inv.verb == "refresh":
         prev = caps.get(ctx)               # 写盘**之前**取旧值，用于算差异
         fp = deps.get("fingerprint")
@@ -40,5 +41,5 @@ def run(ctx, stack, inv, deps=None):
             return Refused(9, "caps.undeterminable", kind=cur.kind)
         caps.write(ctx, view)
         return Done({"kind": "caps_diff", "changes": caps.diff(prev, view),
-                     "collected_at": view.get("collected_at")})
+                     "collected_at": view.get("collected_at"), "pin_notes": caps.pin_notes(view)})
     return Refused(2, "cmd.unknown_verb", verb=inv.verb)

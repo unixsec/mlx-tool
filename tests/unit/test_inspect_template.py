@@ -127,3 +127,20 @@ print(json.dumps({"valid": (not r.is_unknown()) and r.value.get("thinking_defaul
 """)
     assert got["valid"], f"tmp 目录不可用时模板判定应照常：{got}"
     assert got["sandbox"] == {"read": "PermissionError", "write": "PermissionError", "jinja2": "ok"}, got
+
+
+def test_single_huge_allocation_is_stopped(payload, sys_py):
+    """一次 C 级的超大分配期间子进程不释放 GIL：方法参数在沙箱里就被拦下，内存看门狗在父进程里。"""
+    t0 = time.time()
+    got = _run(payload, sys_py, """
+out = {"ljust": probe("lj", template='{{ "a".ljust(10000000000) }}'),
+       "center": probe("ce", template='{{ "a".center(10000000000) }}'),
+       "raise_big": probe("rb", template='{{ raise_exception("x" * 90000) }}')}
+from mlx_server import templates
+out["rss_self"] = (templates._resident_bytes(os.getpid()) or 0) > 0
+print(json.dumps(out))
+""", timeout=60)
+    assert got["ljust"] == {"unknown": "PARSE_FAILED"} and got["center"] == {"unknown": "PARSE_FAILED"}, got
+    assert got["raise_big"] == {"unknown": "PARSE_FAILED"}, got
+    assert got["rss_self"] is True, "libproc 读不到常驻内存：父进程的内存看门狗形同虚设"
+    assert time.time() - t0 < 30, got

@@ -20,6 +20,8 @@ from .result import Ok, Unknown
 
 WALL_SEC = 5.0
 MAX_OUT_BYTES = 1 << 20
+MAX_RSS_BYTES = 1 << 30
+POLL_SEC = 0.05
 EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _CHILD_ENV = {"PATH": "/usr/bin:/bin"}  # Untrusted template code must not see parent secrets
 
@@ -41,19 +43,17 @@ class Bounded(ImmutableSandboxedEnvironment):
                     raise SecurityError("repeat too large")
         return super().call_binop(context, operator, left, right)
 
+    def call(self, context, obj, *args, **kwargs):
+        # 方法调用里的超大整数参数（"a".ljust(10**10)、center、zfill……）一次 C 调用就分配几十 GB，
+        # 期间不释放 GIL，任何线程里的看门狗都来不及动作
+        for v in list(args) + list(kwargs.values()):
+            if isinstance(v, int) and not isinstance(v, bool) and abs(v) > 100000:
+                raise SecurityError("argument too large")
+        return super().call(context, obj, *args, **kwargs)
+
 def raise_exception(msg):
     raise jinja2.TemplateError(msg)
 
-import os, resource, threading, time
-def _watch():
-    # macOS 的 ru_maxrss 单位是字节：峰值超过 1 GB 立即退出
-    while True:
-        if resource.getrusage(resource.RUSAGE_SELF).ru_maxrss > (1 << 30):
-            sys.stderr.write("MEM_LIMIT")
-            sys.stderr.flush()
-            os._exit(3)
-        time.sleep(0.05)
-threading.Thread(target=_watch, daemon=True).start()
 src = sys.stdin.read()
 env = Bounded(trim_blocks=True, lstrip_blocks=True, extensions=["jinja2.ext.loopcontrols"])
 env.globals["raise_exception"] = raise_exception
@@ -77,9 +77,34 @@ if "reasoning_effort" in src:
         out["effort_domain"].append(e)
 sys.stdout.write(json.dumps(out))
 '''
+# 渲染器包一层：异常只写截断后的类型与消息（模板可以 raise 一个巨大的字符串）
+_RENDERER = ("import sys\ntry:\n" + "".join("    " + ln + "\n" for ln in _RENDERER.strip("\n").split("\n"))
+             + "except BaseException as _e:\n"
+             + "    sys.stderr.write((type(_e).__name__ + ': ' + str(_e))[:2000])\n"
+             + "    sys.exit(1)\n")
 
 
 _SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+
+
+def _resident_bytes(pid):
+    # type: (int) -> object
+    """子进程的常驻内存（字节），经 libproc 的 `proc_pidinfo(PROC_PIDTASKINFO)`，**不起子进程**。
+    取不到 ⇒ None（此时只剩墙钟兜底）。"""
+    import ctypes
+    try:
+        lib = _resident_bytes.lib
+    except AttributeError:
+        try:
+            lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+        except OSError:
+            lib = None
+        _resident_bytes.lib = lib
+    if lib is None:
+        return None
+    buf = (ctypes.c_uint64 * 12)()                  # struct proc_taskinfo：96 字节
+    n = lib.proc_pidinfo(int(pid), 4, ctypes.c_uint64(0), buf, ctypes.sizeof(buf))
+    return int(buf[1]) if n == ctypes.sizeof(buf) else None
 _PREFIXES = {}                     # 解释器路径 → 它的 sys.prefix / base_prefix（本进程内缓存）
 
 
@@ -171,14 +196,35 @@ def _run_renderer(python, source, deny_read=()):
                              stdin=subprocess.PIPE, env=dict(_CHILD_ENV))
     except OSError as exc:
         return Unknown("TOOL_UNAVAILABLE", str(exc)[:120])
-    try:
-        out, err = p.communicate(source.encode("utf-8"), timeout=WALL_SEC)
-    except subprocess.TimeoutExpired:
+    import threading
+    import time
+    box = {}
+
+    def _talk():
+        try:
+            box["out"] = p.communicate(source.encode("utf-8"))
+        except (OSError, ValueError) as exc:
+            box["exc"] = exc
+    th = threading.Thread(target=_talk, daemon=True)
+    th.start()
+    # **内存看门狗在父进程**：子进程里的线程要拿 GIL，一次巨大的 C 级分配期间它动不了
+    deadline, stop = time.monotonic() + WALL_SEC, None
+    while th.is_alive():
+        if time.monotonic() > deadline:
+            stop = f"渲染超过 {WALL_SEC:.0f} 秒"
+            break
+        rss = _resident_bytes(p.pid)
+        if rss is not None and rss > MAX_RSS_BYTES:
+            stop = "渲染进程内存超过 1 GB"
+            break
+        th.join(POLL_SEC)
+    if stop is not None:
         p.kill()
-        p.communicate()
-        return Unknown("TIMEOUT", f"渲染超过 {WALL_SEC:.0f} 秒")
-    if p.returncode == 3 and b"MEM_LIMIT" in (err or b""):
-        return Unknown("TIMEOUT", "渲染进程内存超过 1 GB")
+        th.join(5)
+        return Unknown("TIMEOUT", stop)
+    if "exc" in box:
+        return Unknown("TOOL_UNAVAILABLE", str(box["exc"])[:120])
+    out, err = box["out"]
     if p.returncode != 0:
         return Unknown("PARSE_FAILED", (err or b"").decode("utf-8", "replace").strip()[-200:])
     if len(out) > MAX_OUT_BYTES:
