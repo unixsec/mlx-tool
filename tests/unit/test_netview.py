@@ -11,6 +11,8 @@ PROG = r"""
 import json, os, stat, tempfile
 from gateway import peers
 HW = open("@NET@/networksetup.txt").read()
+# 冻结夹具里 en3 是隐藏的 USB 设备模式链路（不放行）；这里把它当成普通以太网口用
+HW = HW.replace("Hardware Port: Ethernet Adapter (en3)", "Hardware Port: Ethernet")
 IF = open("@NET@/ifconfig.txt").read()
 def inject(ifc, iface, line):
     out = []
@@ -100,6 +102,8 @@ PROG_PENDING = r"""
 import json
 from gateway import peers
 HW = open("@NET@/networksetup.txt").read()
+# 冻结夹具里 en3 是隐藏的 USB 设备模式链路（不放行）；这里把它当成普通以太网口用
+HW = HW.replace("Hardware Port: Ethernet Adapter (en3)", "Hardware Port: Ethernet")
 IF = open("@NET@/ifconfig.txt").read()
 t = [0.0]
 loader_calls = []
@@ -138,6 +142,8 @@ PROG_RACE = r"""
 import json, threading
 from gateway import peers
 HW = open("@NET@/networksetup.txt").read()
+# 冻结夹具里 en3 是隐藏的 USB 设备模式链路（不放行）；这里把它当成普通以太网口用
+HW = HW.replace("Hardware Port: Ethernet Adapter (en3)", "Hardware Port: Ethernet")
 IF = open("@NET@/ifconfig.txt").read()
 def inject(ifc, iface, line):
     out = []
@@ -223,6 +229,8 @@ PROG_CLASSIFY_RACE = r"""
 import json, threading
 from gateway import peers
 HW = open("@NET@/networksetup.txt").read()
+# 冻结夹具里 en3 是隐藏的 USB 设备模式链路（不放行）；这里把它当成普通以太网口用
+HW = HW.replace("Hardware Port: Ethernet Adapter (en3)", "Hardware Port: Ethernet")
 IF = open("@NET@/ifconfig.txt").read()
 calls = []
 def loader():

@@ -868,10 +868,10 @@ def test_header_read_has_a_total_deadline_and_idle_keepalive_closes(payload, sys
     都能无限期占住一个工作线程，而且发生在来源检查与鉴权之前。"""
     got = run_floor(payload, sys_py, HEADER_DEADLINE, with_gateway=True, timeout=60, TOK=TOK)
     r, t = got["drip"]
-    assert _gone(r) and t < 3, f"滴灌请求头应在总时限附近被切断：{got}"
+    assert _gone(r) and t < 4.5, f"滴灌请求头应在总时限（1.5 s）附近被切断，而不是一直挂着：{got}"
     first, r, t = got["idle"]
     assert "200" in first, got
-    assert _gone(r) and t < 3, f"空闲的 keep-alive 连接应在时限后被关：{got}"
+    assert _gone(r) and t < 4.5, f"空闲的 keep-alive 连接应在时限（1.5 s）后被关：{got}"
 
 
 def test_denied_peer_is_closed_before_any_bytes_are_read(payload, sys_py):

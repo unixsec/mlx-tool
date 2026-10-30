@@ -32,14 +32,21 @@ _IFACE = re.compile(r"^([A-Za-z0-9]+): flags=\w+<([^>]*)>")
 
 def parse_hardware_ports(text):
     # type: (str) -> dict
-    """`networksetup -listallhardwareports` → `{设备名: 硬件端口名}`。"""
-    out, port = {}, None
-    for line in (text or "").splitlines():
-        if line.startswith("Hardware Port:"):
-            port = line.split(":", 1)[1].strip()
-        elif line.startswith("Device:") and port is not None:
-            out[line.split(":", 1)[1].strip()] = port
-            port = None
+    """`networksetup -listallhardwareports` → `{设备名: 硬件端口名}`。
+
+    **按空行分块**，每块恰好一个 `Hardware Port:` 与一个 `Device:`；两者都没有的块（结尾的
+    VLAN 段）忽略，只有其一或重复 ⇒ `ValueError`，整份输出作废（调用方沿用上一份结果）。
+    此前跨块配对：格式一变，雷雳设备可能被配上上一块的 Wi-Fi 端口名。
+    """
+    out = {}
+    for block in re.split(r"\n\s*\n", text or ""):
+        ports = [ln.split(":", 1)[1].strip() for ln in block.splitlines() if ln.startswith("Hardware Port:")]
+        devs = [ln.split(":", 1)[1].strip() for ln in block.splitlines() if ln.startswith("Device:")]
+        if not ports and not devs:
+            continue
+        if len(ports) != 1 or len(devs) != 1 or not devs[0]:
+            raise ValueError("networksetup 输出的端口块不成对")
+        out[devs[0]] = ports[0]
     return out
 
 
@@ -92,8 +99,13 @@ def _reason(name, port):
     return "非 Wi-Fi / 以太网 / 虚拟机网桥"
 
 
-def compute_nets(hw, ifs, allow_cidrs=""):
-    # type: (dict, dict, str) -> dict
+# USB 设备模式链路（本机被另一台主机当 USB 网卡用）：端口名形如 `Ethernet Adapter (en3)`，
+# 与雷雳网桥同属主机间直连，不算局域网
+_HIDDEN_NCM = re.compile(r"Ethernet Adapter \(en\d+\)$")
+
+
+def compute_nets(hw, ifs, allow_cidrs="", allow_ifaces=""):
+    # type: (dict, dict, str, str) -> dict
     """放行网段、排除接口与本机自身地址。**同一网段同一 scope 只列一次**（同一 /64 常有多个地址）。
 
     `own`：**全部接口（含回环与被排除接口）的全部地址**，不带 zone、不去重网段 —— 代取目标的
@@ -110,13 +122,16 @@ def compute_nets(hw, ifs, allow_cidrs=""):
     allowed = [{"net": n, "iface": "lo0", "kind": "loopback", "scope": None, "addr": a}
                for n, a in zip(LOOPBACK_NETS, ("127.0.0.1", "::1"))]
     excluded = []
+    opted = {x.strip() for x in (allow_ifaces or "").split(",") if x.strip()}
     for name in sorted(ifs):
         if name.startswith("lo"):
             continue                           # 回环网段已固定列出
         info, port = ifs[name], hw.get(name)
         if port == "Wi-Fi":
             kind = "wifi"
-        elif port and port.startswith("Ethernet"):
+        elif name in opted:
+            kind = "ethernet"                  # `api.allow_ifaces`：USB 坞等名字不以 Ethernet 开头的有线网卡
+        elif port and port.startswith("Ethernet") and not _HIDDEN_NCM.match(port):
             kind = "ethernet"
         elif name.startswith("bridge") and any(
                 m.startswith(VM_MEMBER_PREFIXES) for m in info["members"]):
@@ -255,11 +270,12 @@ class NetView:
     不覆盖 loader/网络命令（那些在 `refresh()` 里，不持这把锁）。
     """
 
-    def __init__(self, loader, allow_cidrs="", clock=None, wall=None,
+    def __init__(self, loader, allow_cidrs="", clock=None, wall=None, allow_ifaces="",
                  period_sec=30.0, min_gap_sec=2.0, on_change=None):
         # type: (object, str, object, object, float, float, object) -> None
         self._loader = loader
         self._cidrs = allow_cidrs or ""
+        self._ifaces = allow_ifaces or ""
         self._clock = clock or time.monotonic
         self._wall = wall or time.time
         self._period, self._gap = period_sec, min_gap_sec
@@ -319,7 +335,7 @@ class NetView:
             ifs = parse_ifconfig(if_text)
             if not ifs:
                 raise ValueError("ifconfig 输出里解析不出任何接口")
-            nets, source, err = (compute_nets(parse_hardware_ports(hw_text), ifs, self._cidrs),
+            nets, source, err = (compute_nets(parse_hardware_ports(hw_text), ifs, self._cidrs, self._ifaces),
                                  "parsed", "")
         except Exception as exc:                        # noqa: BLE001
             nets, source, err = None, "fallback", str(exc)[:200]

@@ -65,6 +65,7 @@ def spec(service, cfg, route):
                # 空值写空串而不是不设：网关进程据此知道「配置里明确为空」，
                # 不会从继承的环境里拿到一个陈旧值
                "MLX_GATEWAY_ALLOW_CIDRS": str(v.get("api.allow_cidrs") or ""),
+               "MLX_GATEWAY_ALLOW_IFACES": str(v.get("api.allow_ifaces") or ""),
                "MLX_GATEWAY_TLS_CERT": str(v.get("api.tls_cert") or ""),
                "MLX_GATEWAY_TLS_KEY": str(v.get("api.tls_key") or ""),
                "MLX_GATEWAY_MAX_BODY_MB": str(v.get("api.max_body_mb") or 256),

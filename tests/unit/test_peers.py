@@ -29,7 +29,8 @@ WANT_ALLOWED = sorted([
     ["172.20.10.0/28", None], ["fe80::/64", "en0"], ["2001:db8:0:1::/64", None],
     ["10.211.55.0/24", None], ["fe80::/64", "bridge100"], ["fda8:69e7:f901:187b::/64", None],
 ], key=str)
-WANT_EXCLUDED = sorted(["anpi0", "anpi1", "anpi2", "ap1", "awdl0", "bridge0", "en1", "en2", "en6",
+WANT_EXCLUDED = sorted(["anpi0", "anpi1", "anpi2", "ap1", "awdl0", "bridge0", "en1", "en2", "en3", "en4",
+                        "en5", "en6",
                         "gif0", "llw0", "stf0", "utun0", "utun1", "utun2", "utun3", "utun4",
                         "utun5", "utun6", "vmenet0"])
 
@@ -58,10 +59,12 @@ print(json.dumps({"allowed": sorted([[a["net"], a["scope"]] for a in n["allowed"
 
 
 def test_injected_addresses(payload, sys_py):
-    """雷雳网桥即使有地址也排除（D14 否决前缀匹配的理由）；以太网口一旦有地址即放行。"""
+    """雷雳网桥即使有地址也排除（D14 否决前缀匹配的理由）；以太网口一旦有地址即放行
+    （夹具里的 en3 是隐藏的 USB 设备模式链路，这里改名成普通以太网口来测）。"""
     got = _run(payload, sys_py, """
 tb = nets_of(ifc=inject(IF, "bridge0", "inet 169.254.10.1 netmask 0xffff0000 broadcast 169.254.255.255"))
-eth = nets_of(ifc=inject(IF, "en3", "inet 192.168.50.10 netmask 0xffffff00 broadcast 192.168.50.255"))
+eth = nets_of(hw=HW.replace("Hardware Port: Ethernet Adapter (en3)", "Hardware Port: Ethernet"),
+              ifc=inject(IF, "en3", "inet 192.168.50.10 netmask 0xffffff00 broadcast 192.168.50.255"))
 cfg = nets_of(cidrs="192.168.2.0/24, fd00:1::/64")
 print(json.dumps({
     "tb_allowed": [a["net"] for a in tb["allowed"] if a["iface"] == "bridge0"],
@@ -98,3 +101,42 @@ print(json.dumps({"base": {c: peers.classify_peer(c, n) for c in cases},
         "8.8.8.8": None, "garbage": None, "": None,
     }
     assert got["cfg"] == R
+
+
+def test_hardware_ports_parsed_by_block_and_malformed_output_rejected(payload, sys_py):
+    """按空行分块，每块恰好一个 Hardware Port 与一个 Device。此前跨块配对：格式一变，
+    雷雳设备可能被配上上一块的 Wi-Fi 端口名（fail open）。"""
+    got = _run(payload, sys_py, r'''
+ok = "Hardware Port: Wi-Fi\nDevice: en0\nEthernet Address: x\n\nHardware Port: Thunderbolt Bridge\nDevice: bridge0\n"
+bad = "Hardware Port: Wi-Fi\n\nDevice: en0\nHardware Port: Thunderbolt Bridge\nDevice: bridge0\n"
+out = {"ok": peers.parse_hardware_ports(ok)}
+try:
+    peers.parse_hardware_ports(bad); out["bad"] = "accepted"
+except ValueError:
+    out["bad"] = "rejected"
+out["vlan_tail"] = peers.parse_hardware_ports(ok + "\nVLAN Configurations\n===================\n")
+print(json.dumps(out))
+''')
+    assert got["ok"] == {"en0": "Wi-Fi", "bridge0": "Thunderbolt Bridge"}, got
+    assert got["bad"] == "rejected", got
+    assert got["vlan_tail"] == got["ok"], "结尾的 VLAN 段不是端口块，忽略"
+
+
+def test_hidden_usb_ncm_links_excluded_and_allow_ifaces_opts_in(payload, sys_py):
+    """USB 设备模式链路（端口名 `Ethernet Adapter (enN)`）与雷雳网桥同类，排除；
+    USB 坞等名字不以 Ethernet 开头的网卡，用 `api.allow_ifaces` 显式放行。"""
+    got = _run(payload, sys_py, r'''
+hw = "Hardware Port: Wi-Fi\nDevice: en0\n\nHardware Port: Ethernet Adapter (en3)\nDevice: en3\n\nHardware Port: DL-Dock\nDevice: en7\n"
+ifc = ("en0: flags=8863<UP,BROADCAST,RUNNING> mtu 1500\n\tinet 192.168.2.11 netmask 0xffffff00 broadcast 192.168.2.255\n"
+       "en3: flags=8863<UP,BROADCAST,RUNNING> mtu 1500\n\tinet 169.254.10.2 netmask 0xffff0000 broadcast 169.254.255.255\n"
+       "en7: flags=8863<UP,BROADCAST,RUNNING> mtu 1500\n\tinet 10.9.0.5 netmask 0xffffff00 broadcast 10.9.0.255\n")
+def kinds(n):
+    return sorted([a["iface"], a["kind"]] for a in n["allowed"] if a["iface"] not in ("lo0", None))
+plain = peers.compute_nets(peers.parse_hardware_ports(hw), peers.parse_ifconfig(ifc))
+opted = peers.compute_nets(peers.parse_hardware_ports(hw), peers.parse_ifconfig(ifc), "", "en7")
+print(json.dumps({"plain": kinds(plain), "excluded": sorted(e["iface"] for e in plain["excluded"]),
+                  "opted": kinds(opted)}))
+''')
+    assert got["plain"] == [["en0", "wifi"]], got
+    assert got["excluded"] == ["en3", "en7"], got
+    assert got["opted"] == [["en0", "wifi"], ["en7", "ethernet"]], got

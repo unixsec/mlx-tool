@@ -88,6 +88,7 @@ def main(argv):
 
     nets = peers.NetView(peers.command_loader(c.bins),
                          allow_cidrs=os.environ.get("MLX_GATEWAY_ALLOW_CIDRS", ""),
+                         allow_ifaces=os.environ.get("MLX_GATEWAY_ALLOW_IFACES", ""),
                          on_change=make_reporter(facade, c))
     gw = Gateway(c, facade, bind_addr=bind, token=token, backend_key=backend_key, nets=nets,
                  limits={"media_max_mb": _int_env("MLX_GATEWAY_MEDIA_MAX_MB", 128),

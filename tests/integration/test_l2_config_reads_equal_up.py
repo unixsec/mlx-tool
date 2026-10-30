@@ -45,6 +45,8 @@ def sample(k, tag):
         return ["10.1.1.1", "10.2.2.2"][tag]
     if dom == "#cidrs":
         return ["10.0.0.0/8", "172.16.0.0/12"][tag]
+    if k == "api.allow_ifaces":             # 正则域按键给样本：接口名不是令牌的形状
+        return ["en7", "en8"][tag]
     if dom.startswith("^"):
         return ("S", "U")[tag] * 40
     if "|" in dom:

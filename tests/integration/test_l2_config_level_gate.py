@@ -41,6 +41,7 @@ def sample(k):
         return v + 2 if v == dflt.get(k) else v
     if dom == "#ip": return "10.1.1.1"
     if dom == "#cidrs": return "10.0.0.0/8"
+    if k == "api.allow_ifaces": return "en7"     # 正则域按键给样本：接口名不是令牌的形状
     if dom.startswith("^"): return "S" * 40
     if "|" in dom: return [o for o in dom.split("|") if o != dflt.get(k)][0]
     return "v-" + k

@@ -42,6 +42,7 @@ num_draft_tokens	int	1-16	3	user	model	model	yes	no	service	backendarg
 # `#ip` / `#cidrs` 是 `schema.check_domain` 的具名值域；TLS 两个路径不导出（机器相关）。
 api.bind	str	#ip	0.0.0.0	user	global	gateway	yes	no	api	backendarg,gw.server,gw.peers,cmd.api
 api.allow_cidrs	str	#cidrs		user	global	gateway	yes	no	api	backendarg,gw.peers,cmd.api
+api.allow_ifaces	str	^[a-z][a-z0-9]*[0-9](,[a-z][a-z0-9]*[0-9])*$		user	global	gateway	yes	no	api	backendarg,gw.peers
 api.tls_cert	str	<证书路径>		user	global	gateway	no	no	api	backendarg,gw.server,cmd.svc,cmd.api
 api.tls_key	str	<私钥路径>		user	global	gateway	no	no	api	backendarg,gw.server,cmd.svc
 api.max_body_mb	int	1-2048	256	user	global	gateway	yes	no	api	backendarg,gw.server
