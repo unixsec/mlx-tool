@@ -64,7 +64,7 @@ def is_error_frame(event, obj):
 def rewrite(frame, short_id, peer_class="REMOTE", drop_usage=False):
     # type: (bytes, str, str, bool) -> bytes
     """缺省 `peer_class="REMOTE"`：漏传时 fail closed。只有 LOOPBACK 看到上游原文。"""
-    from .translate import sanitize
+    from .translate import sanitize, scrub_error
     event, data = parse(frame)
     if data is None or data.strip() == "[DONE]":
         return frame
@@ -80,7 +80,7 @@ def rewrite(frame, short_id, peer_class="REMOTE", drop_usage=False):
                 and not is_error_frame(event, obj):
             return b""
         if peer_class != "LOOPBACK" and is_error_frame(event, obj):
-            obj = sanitize(obj)
+            obj = scrub_error(obj)
         _patch(obj, short_id)
     elif peer_class == "LOOPBACK":
         return frame

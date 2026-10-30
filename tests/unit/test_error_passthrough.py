@@ -1,4 +1,4 @@
-"""spec §4.7 / D21：后端 4xx 对本机来源原文、对远端来源去掉路径与异常片段。"""
+"""spec §4.7 / D21：后端 4xx 对本机来源原文；对远端来源按白名单重建错误（1.2.0 起），其余部分再去掉路径。"""
 import sys
 from pathlib import Path
 
@@ -25,7 +25,24 @@ out = {
                         "param": ["/Users/alex/img1.png", "/Users/alex/img2.png"]}}, "REMOTE"),
     "tilde_user": T.sanitize("open ~alex/secret.txt failed"),
     "leaky": leaky,
+    "exc_text": T.upstream_error(400, {"error": {"message": "KeyError: 'vision_tower' in mlx_vlm.models.qwen",
+                                                 "type": "invalid_request_error"}}, "REMOTE"),
+    "ctx_len": T.upstream_error(400, {"error": {"message": "This model's maximum context length is 32768 tokens",
+                                                "type": "invalid_request_error", "code": "context_length_exceeded"}},
+                                "REMOTE"),
+    "pydantic": T.upstream_error(422, {"detail": [{"loc": ["body", "messages", 0, "content"], "msg": "Field required",
+                                                   "type": "missing", "input": {"api_key": "SECRET_IN"}}]}, "REMOTE"),
+    "frame_remote": T.scrub_error({"type": "error", "error": {"type": "api_error",
+                                                              "message": "RuntimeError: Metal OOM at 0x7f00"}}),
 }
+from gateway import frames as F
+from gateway.app import aggregate_error_reply
+from gateway.aggregate import AggregateError
+fr = b'data: {"error": {"message": "IndexError: list index out of range", "type": "x"}}\n\n'
+out["frame_rewrite"] = F.rewrite(fr, "qwen", "REMOTE").decode()
+out["frame_local"] = F.rewrite(fr, "qwen", "LOOPBACK").decode()
+out["agg"] = aggregate_error_reply(AggregateError(json.dumps({"message": "ValueError: shape mismatch", "code": "x1"})),
+                                   "REMOTE")
 print(json.dumps(out))
 """
 
@@ -37,24 +54,38 @@ def test_upstream_error_mapping(payload, sys_py):
     assert st == 400
     for s in ("/Users", "~/secret", "Traceback", "x.py"):
         assert s not in raw, f"REMOTE 错误体里仍有「{s}」：{raw}"
-    assert "<redacted>" in raw
+    assert body["error"]["message"] == "backend rejected the request (HTTP 400)", raw
     assert body["error"]["type"] == "invalid_request_error" and body["error"]["code"] == "bad_value"
-    assert body["error"]["param"] == "/keep/me", "type / code / param 必须原样保留"
+    assert "param" not in body["error"], "param 只在是短标识符时保留，路径形态的一律去掉"
     assert body["repo"] == "mlx-community/Qwen3.8-27B-8bit", "仓库名不是路径，不得被净化"
     assert got["local"] == [400, got["leaky"]], "本机来源应收到原文"
     assert got["auth"] == [502, {"error": {"message": "backend rejected the gateway credentials",
                                            "type": "upstream_auth_failed"}}]
     assert got["5xx"][0] == 502 and got["5xx"][1]["error"]["type"] == "upstream_error"
     assert "/Users" not in str(got["5xx"]), "5xx 体一律不透传"
-    assert got["422"] == [422, {"error": {"message": "bad", "type": "t"}}]
+    assert got["422"] == [422, {"error": {"message": "backend rejected the request (HTTP 422)", "type": "t"}}], \
+        "不在安全句式里的 message 换成通用文案，状态码与 type 保留"
+    gen = "backend rejected the request (HTTP 400)"
+    assert got["exc_text"][1]["error"]["message"] == gen, f"异常原文不得回给远端：{got['exc_text']}"
+    assert got["ctx_len"][1]["error"] == {"message": "This model's maximum context length is 32768 tokens",
+                                          "type": "invalid_request_error", "code": "context_length_exceeded"}
+    det = got["pydantic"][1]["detail"]
+    assert det == [{"loc": ["body", "messages", 0, "content"], "msg": "Field required", "type": "missing"}], \
+        f"422 detail 只留 loc / msg / type，input 一律丢：{det}"
+    assert got["frame_remote"]["error"]["message"] == "backend rejected the request", got["frame_remote"]
+    assert got["frame_remote"]["type"] == "error" and got["frame_remote"]["error"]["type"] == "api_error"
+    assert "IndexError" not in got["frame_rewrite"] and "backend rejected the request" in got["frame_rewrite"]
+    assert "IndexError" in got["frame_local"], "本机来源的流内错误帧看原文"
+    agg = got["agg"][1]["error"]
+    assert "ValueError" not in agg["message"] and agg.get("code") == "x1", f"聚合失败也按白名单：{agg}"
     assert got["text_remote"][0] == 400
     assert got["text_remote"][1]["error"]["type"] == "upstream_error"
     assert "/Users" not in str(got["text_remote"])
     assert got["key_path"] == {"<redacted>": "not found"}, \
         f"错误体的 key 本身是路径也得净化：{got['key_path']}"
     param_body = got["param_list"][1]
-    assert param_body["error"]["param"] == ["<redacted>", "<redacted>"], (
-        f"param 是容器（列表）时仍应递归净化元素，只有字符串标量才原样保留：{param_body}"
+    assert "param" not in param_body["error"], (
+        f"param 不是短标识符（这里是一串图片路径）时整个去掉：{param_body}"
     )
     assert got["tilde_user"] == "open <redacted> failed", \
         f"~user/ 形式的路径也要净化：{got['tilde_user']}"

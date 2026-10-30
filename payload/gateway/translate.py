@@ -138,6 +138,94 @@ def sanitize(value):
     return value
 
 
+# ── 远端来源的错误：按白名单重建（1.2.0）────────────────────────────────────────────
+# 只去掉路径与异常栈不够：`KeyError: 'vision_tower' in mlx_vlm.models.qwen`、`<object at 0x…>`、
+# 相对路径都还在。远端来源的 message 只有**像参数校验说明**、且**不像实现细节**时才保留，
+# 否则换成通用文案；type / code / param 只留短标识符。原文由调用方记进 api.log。
+_IDENT = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+_SAFE_MSG = re.compile(
+    r"context|token|length|too (?:long|large|many|big)|exceed|maximum|limit|field required|"
+    r"input should|not (?:a )?valid|invalid|unsupported|not supported|must be|should be|"
+    r"is required|missing|not found|unknown (?:model|parameter|field)|expected", re.I)
+_IMPL_DETAIL = re.compile(r"[/\\~`]|0x[0-9a-fA-F]|Traceback|File \"|\.py\b|\bline \d+|"
+                          r"\b[A-Z]\w*(?:Error|Exception|Warning)\b|\b(?:mlx|torch|numpy|transformers)\.")
+_GENERIC = "backend rejected the request"
+
+
+def _safe_msg(value, status=None):
+    # type: (object, object) -> str
+    if isinstance(value, str) and len(value) <= 300 and _SAFE_MSG.search(value) \
+            and not _IMPL_DETAIL.search(value):
+        return value
+    return f"{_GENERIC} (HTTP {status})" if status else _GENERIC
+
+
+def _ident(value):
+    # type: (object) -> object
+    return value if isinstance(value, str) and _IDENT.fullmatch(value) else None
+
+
+def _safe_error(value, status):
+    # type: (object, object) -> object
+    if isinstance(value, dict):
+        out = {"message": _safe_msg(value.get("message"), status)}
+        for k in ("type", "code", "param"):
+            v = _ident(value.get(k))
+            if v is not None:
+                out[k] = v
+        return out
+    if isinstance(value, list):
+        return [_safe_error(v, status) for v in value]
+    return _safe_msg(value, status)
+
+
+def _safe_detail(value, status):
+    # type: (object, object) -> object
+    """FastAPI 的 `detail`：字符串按 message 处理；422 列表只留 `loc` / `msg` / `type`（`input` / `ctx` 是请求原文）。"""
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            row = {"loc": [x for x in (item.get("loc") or [])
+                           if isinstance(x, int) or _ident(x) is not None],
+                   "msg": _safe_msg(item.get("msg"), None)}
+            if _ident(item.get("type")) is not None:
+                row["type"] = item["type"]
+            out.append(row)
+        return out
+    return _safe_msg(value, status)
+
+
+def scrub_error(value, status=None):
+    # type: (object, object) -> object
+    """远端来源的错误对象：`error` / `detail` / 顶层 `message` 按白名单重建，其余部分再经 `sanitize`。
+
+    同时用于非流式错误体与流内错误帧（各协议的错误帧都把细节放在 `error` 或顶层 `message` 里，
+    帧的其他结构 —— `type`、`sequence_number`、`response.status` —— 原样保留，帧仍然合法）。
+    """
+    if isinstance(value, list):
+        return [scrub_error(v, status) for v in value]
+    if not isinstance(value, dict):
+        return _safe_msg(value, status)
+    out = {}
+    for k, v in value.items():
+        if k == "error":
+            out[k] = _safe_error(v, status)
+        elif k == "detail":
+            out[k] = _safe_detail(v, status)
+        elif k == "message" and not isinstance(v, (dict, list)):
+            out[k] = _safe_msg(v, status)
+        elif k in ("type", "code", "param"):
+            if _ident(v) is not None:
+                out[k] = v
+        elif isinstance(v, dict):
+            out[k] = scrub_error(v, status)
+        else:
+            out[k] = sanitize(v)
+    return {sanitize(k) if isinstance(k, str) else k: v for k, v in out.items()}
+
+
 def upstream_error(status, body, peer_class):
     # type: (int, object, str) -> tuple
     """后端错误 → 回给客户端的 `(status, body)`（spec §4.7、D21）。
@@ -152,4 +240,4 @@ def upstream_error(status, body, peer_class):
         return build_error(502, "upstream_error", "backend returned an error")
     if not isinstance(body, dict):
         body = {"error": {"message": str(body), "type": "upstream_error"}}
-    return (status, body if peer_class == "LOOPBACK" else sanitize(body))
+    return (status, body if peer_class == "LOOPBACK" else scrub_error(body, status))

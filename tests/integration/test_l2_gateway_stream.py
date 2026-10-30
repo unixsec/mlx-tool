@@ -361,7 +361,7 @@ SNAP_CALLS.clear()
 st, _ = call(LOCAL, "/v1/chat/completions", {"model": "auth", "stream": True, "messages": MSG})
 r["snap_stream"] = [st, SNAP_CALLS.get("auth"), SEEN["auth"][-1]]
 st, text = call(REMOTE, "/v1/chat/completions", {"model": "err", "stream": True, "messages": MSG})
-r["remote_stream_err"] = [st, "/Users/" in text, "<redacted>" in text, "半句" in text]
+r["remote_stream_err"] = [st, "/Users/" in text, "backend rejected the request" in text, "半句" in text]
 st, text = call(REMOTE, "/v1/chat/completions", {"model": "err", "messages": MSG})
 r["remote_agg_err"] = [st, json.loads(text)["error"]["type"], "/Users/" in text]
 st, text = call(REMOTE, "/v1/chat/completions", {"model": "struct", "messages": MSG})
@@ -431,8 +431,8 @@ def test_gateway_carry_rulings(payload, sys_py):
     assert got["remote_stream_err"] == [200, False, True, True], \
         "远端来源：SSE 已开始后的帧内错误按 frames.rewrite(peer_class) 净化，正常帧照常下发"
     assert got["remote_agg_err"] == [502, "upstream_error", False], "远端来源：聚合错误净化"
-    assert got["remote_struct"] == [502, "upstream_error", False, "/model/load"], \
-        "结构化上游错误先还原再净化：路径去掉，字符串型 code 保留"
+    assert got["remote_struct"] == [502, "upstream_error", False, None], \
+        "结构化上游错误先还原再按白名单重建：路径形态的 code 不是短标识符，去掉"
     assert got["local_struct"] == [502, True], "本机来源看上游原文"
     assert got["inbound_after_media"] == [400, "thinking_budget_unsupported", False, []], \
         "媒体已落盘后入站管线才报错：400、后端零请求、临时目录删除"

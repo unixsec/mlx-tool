@@ -107,6 +107,8 @@ class Gateway:
         if status == 401:
             # 网关带的后端密钥被拒 —— 多半是改了 backend.api_key 却没重启网关或模型
             log_event("error", "backend_auth_failed", model=short_id)
+        if peer_class != "LOOPBACK":
+            log_event("warn", "upstream_error_redacted", status=status, detail=str(body)[:500])
         return translate.upstream_error(status, body, peer_class)
 
     def healthz(self):
@@ -342,13 +344,15 @@ def aggregate_error_reply(exc, peer_class):
         obj = json.loads(raw)
     except ValueError:
         obj = raw
+    log_event("warn", "upstream_error_redacted", detail=raw[:500])
     if not isinstance(obj, (dict, list)):
-        return translate.build_error(502, "upstream_error", translate.sanitize(raw))
-    clean = translate.sanitize(obj)
+        return translate.build_error(502, "upstream_error", translate.scrub_error(raw))
+    clean = translate.scrub_error(obj)
+    if isinstance(clean, dict) and isinstance(clean.get("error"), dict):
+        clean = clean["error"]
     message = clean.get("message") if isinstance(clean, dict) else None
     status, body = translate.build_error(
-        502, "upstream_error",
-        message if isinstance(message, str) else json.dumps(clean, ensure_ascii=False))
+        502, "upstream_error", message if isinstance(message, str) else "backend rejected the request")
     if isinstance(clean, dict):
         for key in ("code", "param"):
             if isinstance(clean.get(key), str):
