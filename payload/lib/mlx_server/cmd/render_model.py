@@ -14,8 +14,9 @@ def _models(p):
     ms = p.get("models") or []
     if not ms:
         return "（尚未登记任何模型。`mlx model register <id>` 登记一个）"
+    ms = [dict(m, state=ui.weights_said(m.get("state"))) for m in ms]   # 先换屏幕用语，列宽按换后的算
     cols = ["id", "modality_display", "port", "state"]
-    hdr = {"id": "ID", "modality_display": "模态", "port": "端口", "state": "状态"}
+    hdr = {"id": "ID", "modality_display": "模态", "port": "端口", "state": "权重"}
     w = {c: max(ui._w(hdr[c]), max((ui._w(m.get(c, "")) for m in ms), default=0)) for c in cols}
     lines = ["  " + "  ".join(ui._pad(hdr[c], w[c]) for c in cols),
              "  " + "  ".join("─" * w[c] for c in cols)]
@@ -139,8 +140,15 @@ def _install_dry_run(p):
     return "\n".join(lines)
 
 
+def _model_install(p):
+    # type: (dict) -> str
+    """与通用 kv 同形，只把 `state` 换成屏幕用语（`ui.weights_said`）。"""
+    return ui._generic(dict(p, state=ui.weights_said(p.get("state"))))
+
+
 ui.register({
     "models": _models,
+    "model_install": _model_install,
     "model_install_dry_run": _install_dry_run,
     "model_info": _model_info,
     "model_register": _model_register,

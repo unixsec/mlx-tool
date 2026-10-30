@@ -31,6 +31,15 @@ _MARK = {"ok": "✓", "failed": "✗", "undeterminable": "?", True: "✓", False
 # 「未运行」是**正常状态**不是故障 —— 用中性点，不用 ✗。
 # 一屏全是红叉会让用户以为哪里坏了，而实际只是服务没起。
 _RUN = {True: "✓", False: "·", None: "?"}
+# `store.model_state` 的值是**数据**（进 `--json`，不改）；屏幕上的那一列说的是权重在不在盘上。
+# 屏幕不写「就绪」：这个词在 `up` 里指「服务已在监听」，`status` 又把这一列放在运行标记旁边 ——
+# 没在跑的模型、甚至不能单独起的 drafter 都显示「就绪」（2026-10-29 真机；D4 选 A）。
+WEIGHTS_SAID = {"就绪": "已下载", "已登记": "未下载", "已登记未下载": "未下载"}
+
+
+def weights_said(state):
+    # type: (object) -> str
+    return WEIGHTS_SAID.get(state, state or "—")
 
 
 def _mark(v):

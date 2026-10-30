@@ -190,10 +190,10 @@ $ mlx check
 $ mlx status
 …
 模型（2）
-     ID       模型                            状态  端口   后端     并发  PID    内存      体积
-  ─  ───────  ──────────────────────────────  ────  ─────  ───────  ────  ─────  ────────  ────────
-  ✓  qwen38   mlx-community/Qwen3.8-27B-8bit  就绪  :8100  mlx_vlm  8     43699  27788 MB  28164 MB
-  ·  qwen05b  mlx-community/Qwen3-0.6B-4bit   就绪  :8150  —        —     —      —         335 MB
+     ID       模型                            权重    端口   后端     并发  PID    内存      体积
+  ─  ───────  ──────────────────────────────  ──────  ─────  ───────  ────  ─────  ────────  ────────
+  ✓  qwen38   mlx-community/Qwen3.8-27B-8bit  已下载  :8100  mlx_vlm  8     43699  27788 MB  28164 MB
+  ·  qwen05b  mlx-community/Qwen3-0.6B-4bit   已下载  :8150  —        —     —      —         335 MB
 
   2 个已登记，1 个在跑，共占 27788 MB 内存
 
@@ -210,7 +210,7 @@ $ mlx model install qwen38 --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
   installed  qwen38
   modality   auto
   path       ~/.local/share/mlx_models/hub/models--mlx-community--Qwen3.8-27B-8bit/snapshots/main
-  state      就绪
+  state      已下载
 ```
 
 **报错说清怎么修，而不只是说哪儿疼**

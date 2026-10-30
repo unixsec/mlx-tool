@@ -45,6 +45,11 @@ out["tool_row"] = [m for m in (tool["models"] or []) if m["id"] == "vis"]
 out["tool_text"] = ui.human(tool)
 out["up_text"] = ui.human({"kind": "svc", "started": "vis", "pid": 1, "port": 8102,
                            "backend": "mlx_vlm", "max_concurrency": 8})
+out["install_text"] = ui.human({"kind": "model_install", "installed": "vis", "modality": "auto",
+                                "path": "/p", "state": "就绪"})
+out["ls_states"] = sorted({m["state"] for m in ls["models"]})
+out["ls_all_ready"] = ui.human({"kind": "models", "models": [
+    {"id": "a", "modality_display": "text", "port": 1, "state": "就绪"}]})
 print(json.dumps(out))
 """
 
@@ -69,6 +74,17 @@ def test_display_surfaces(payload, sys_py):
 
     assert got["config_dropped"] == ["backend"]
     assert "已退役的键：backend" in got["config_text"]
+    # 「就绪」只留给「服务在监听」：权重列在屏幕上说「已下载 / 未下载」，`--json` 的 state 值不变（2026-10-30 D4·A）
+    assert "就绪" in got["ls_states"] and "已登记" in got["ls_states"], got["ls_states"]
+    for name in ("ls_text", "tool_text", "install_text"):
+        text = got[name]
+        assert "就绪" not in text, (name, text)
+        assert "已下载" in text, (name, text)
+    assert "权重" in got["ls_text"].splitlines()[0] and "未下载" in got["ls_text"], got["ls_text"]
+    assert "权重" in got["tool_text"], got["tool_text"]
+    rule = got["ls_all_ready"].splitlines()[1]
+    assert rule.rstrip().endswith("  ──────"), \
+        f"列宽要按换后的「已下载」算：\n{got['ls_all_ready']}"
     # 「来源」列是层名；出现过的每个层名都要在图例里有一句人话（2026-10-29 真机：`cli` 被读成命令行）
     rows = [ln.split() for ln in got["config_text"].splitlines() if ln.startswith("  ") and len(ln.split()) >= 3]
     used = {r[-1] for r in rows if r[-1] in {"default", "machine", "user", "install", "env", "cli"}}

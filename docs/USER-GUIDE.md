@@ -168,10 +168,10 @@ $ mlx status
   ✓ 分发清单  73 项，完整
 
 模型（2）
-     ID       模型                            状态  端口   后端     并发  PID    内存      体积
-  ─  ───────  ──────────────────────────────  ────  ─────  ───────  ────  ─────  ────────  ────────
-  ·  qwen05b  mlx-community/Qwen3-0.6B-4bit   就绪  :8150  —        —     —      —         335 MB
-  ✓  qwen38   mlx-community/Qwen3.8-27B-8bit  就绪  :8100  mlx_vlm  8     43699  27788 MB  28164 MB
+     ID       模型                            权重    端口   后端     并发  PID    内存      体积
+  ─  ───────  ──────────────────────────────  ──────  ─────  ───────  ────  ─────  ────────  ────────
+  ·  qwen05b  mlx-community/Qwen3-0.6B-4bit   已下载  :8150  —        —     —      —         335 MB
+  ✓  qwen38   mlx-community/Qwen3.8-27B-8bit  已下载  :8100  mlx_vlm  8     43699  27788 MB  28164 MB
 
   2 个已登记，1 个在跑，共占 27788 MB 内存
 
@@ -258,7 +258,7 @@ model 没有子命令 'search'；可用：gc · info · install · ls · registe
 ```
 
 这是 HuggingFace 的缓存布局，工具按它解析。**放错地方的后果是静默的**：
-登记能成功，但状态一直停在「已登记」（变不成「就绪」），启动时才报错。
+登记能成功，但权重列一直是「未下载」，启动时才报错。
 
 不确定权重根在哪就先问工具：
 
@@ -279,7 +279,7 @@ mlx model install qwen05b \
   installed  qwen05b
   modality   auto
   path       ~/.local/share/mlx_models/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/main
-  state      就绪
+  state      已下载
 ```
 
 `path` 那行就是它落下去的地方 —— 和 3.1 的规划目录一致，不需要你算。
@@ -290,7 +290,7 @@ mlx model install qwen05b \
 下载失败时它**不会假装成功**：
 
 ```
-下载器不可用 —— venv 里没有 hf 命令。<repo> 未下载，登记已写入但没有权重（`mlx model ls` 显示「已登记」，没给 --port 时显示「已登记未下载」）
+下载器不可用 —— venv 里没有 hf 命令。<repo> 未下载，登记已写入但没有权重（`mlx model ls` 的权重列显示「未下载」）
   已落地（需收敛）：models.jsonl:qwen05b
   rc=3
 ```
@@ -367,9 +367,9 @@ mlx model ls
 ```
 
 - `mlx model repair`：用磁盘事实校对注册表
-- `mlx model ls`：状态应该是「就绪」
+- `mlx model ls`：权重列应该是「已下载」
 
-**状态还是「已登记」** = 路径算错了。用这条对一下工具到底在找哪里：
+**权重列还是「未下载」** = 路径算错了。用这条对一下工具到底在找哪里：
 
 ```bash
 mlx model info qwen05b
@@ -408,23 +408,24 @@ $ mlx model register qwen27b --repo=mlx-community/Qwen3.8-27B-8bit --port=8100
 
 ```
 $ mlx model ls
-  ID                       模态    端口  状态  
-  ───────────────────────  ────    ────  ──────
-  mlx-community/NoSuch-7B  vision  8199  已登记
-  qwen27b                  vision  8100  就绪  
+  ID                       模态    端口  权重  
+  ───────────────────────  ──────  ────  ──────
+  mlx-community/NoSuch-7B  vision  8199  未下载
+  qwen27b                  vision  8100  已下载
 
   共 2 个
 ```
 
-**状态列的含义**：
+**权重列的含义**（只说权重在不在盘上，不说服务在不在跑 —— 在跑看 `mlx status` 的 ✓ 与 PID）：
 
-- `就绪` —— 权重在盘上，记录也完整
-- `已登记` —— 记录有了，但权重的版本（`revision`）还没回填：权重找不到，或刚登记还没 `repair`
-- `已登记未下载` —— 记录里还没有任何磁盘事实，连端口都没有：只在 `model install` / `register` 没给 `--port` 且没找到权重时出现（`model install` 带 `--port` 下载失败，显示的是「已登记」）
+- `已下载` —— 权重在盘上，记录也完整
+- `未下载` —— 记录有了，但权重的版本（`revision`）还没回填：权重找不到，或刚登记还没 `repair`；没给 `--port` 时端口列也是 `—`
+
+`--json` 里的 `state` 字段保持原值（`就绪` / `已登记` / `已登记未下载`），脚本照旧按它分派。
 
 <a id="repair"></a>
 
-如果状态是「已登记」而你确信权重下好了，多半是目录布局不对。跑一次：
+如果权重列是「未下载」而你确信权重下好了，多半是目录布局不对。跑一次：
 
 ```
 $ mlx model repair
@@ -1566,7 +1567,7 @@ grep -n 'mlx_server' ~/.zshrc
 
 首次使用，能力还没采过。跑 `mlx caps refresh`。
 
-### 模型状态一直是「已登记」，变不成「就绪」
+### 权重列一直是「未下载」
 
 权重目录布局不对，或权重根路径不对（第 3.1 节讲了规划目录长什么样）。
 用 `mlx model install` 下载的不会出这个问题，手工下载的要对一下路径：
@@ -1581,7 +1582,7 @@ mlx model repair
 - `ls ~/.local/share/mlx_models/hub/`：看目录名对不对
 - `mlx model repair`：让工具按磁盘事实重建
 
-`model install` 下载失败留下的记录显示「已登记」（没给 `--port` 时是「已登记未下载」）：补下完权重后同样跑 `mlx model repair`。
+`model install` 下载失败留下的记录权重列显示「未下载」：补下完权重后同样跑 `mlx model repair`。
 
 ### `venv` 检查项失败
 

@@ -86,13 +86,13 @@ def _model_table(models):
     在不在跑、占多少内存、端口是几号。
 
     列取自 v5.3.1 的形态（状态 / 短名 / 模型 / 端口 / PID / 内存），
-    并补上本版有的两项：**状态**（就绪 / 已登记未下载）与**体积**。
+    并补上本版有的两项：**权重**（已下载 / 未下载，`ui.weights_said`）与**体积**。
     v5.3.1 的表是本项目在这件事上唯一的既有参照，Alex 点名要它。
     """
     cols = [("", lambda m: ui._RUN.get(m.get("running"), "·")),
             ("ID", lambda m: m.get("id") or ""),
             ("模型", lambda m: m.get("repo") or "—"),
-            ("状态", lambda m: m.get("state") or "—"),
+            ("权重", lambda m: ui.weights_said(m.get("state"))),
             ("端口", lambda m: f":{m['port']}" if m.get("port") else "—"),
             ("后端", lambda m: m.get("backend") or "—"),
             ("并发", lambda m: _concurrency_display(m.get("rule"), m.get("max_concurrency"))),
