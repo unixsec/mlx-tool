@@ -30,6 +30,7 @@
 --value	config set	yes	<text>	-	-	config.value	flag.value
 --expect	self check-version	yes	<text>	-	-	meta.expect	flag.expect
 --ignore-fitness	up,restart	no	-	-	false	fit.override	flag.ignore_fitness
+--no-wait	up,restart	no	-	-	false	svc.no_wait	flag.no_wait
 --yes	model rm	no	-	-	false	confirm.skip	flag.yes
 --from	config import	yes	<路径>	-	-	config.import_source	flag.from
 --reveal	config get	no	-	-	false	config.reveal_secret	flag.reveal

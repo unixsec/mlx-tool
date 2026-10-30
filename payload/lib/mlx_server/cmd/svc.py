@@ -356,13 +356,19 @@ def _v_backend(state, inv, deps):
     return None
 
 
+def load_timeout(size_mb):
+    # type: (object) -> int
+    """加载权重的等待上限：20 s + 每 GB 3 s。"""
+    import math
+    return 20 + 3 * int(math.ceil((size_mb or 0) / 1024.0))
+
+
 def ready_timeout(rt):
     # type: (object) -> int
     """就绪超时（spec §3.3）：先监听后加载的后端 20 s；加载完才监听的按体积算。"""
-    import math
     if rt is None or rt.row.get("ready") != "load":
         return 20
-    return 20 + 3 * int(math.ceil((rt.size_mb or 0) / 1024.0))
+    return load_timeout(rt.size_mb)
 
 
 def _v_ports(state, inv, deps):
@@ -815,6 +821,29 @@ def run(ctx, stack, inv, deps):
                                           sec=timeout, service=spec.service)
             return Failed(rc, key, [f"run/{spec.service}.json"],
                           service=spec.service, port=port, detail=detail)
+        # 先监听、首次请求才加载的后端（mlx_lm）：端口监听上不等于模型能用，再发一次真实补全确认
+        rt = state.get("route")
+        verify = deps.get("service_ready")
+        if verify is not None and rt is not None and rt.row.get("ready") == "bind" \
+                and not (inv.args or {}).get("no_wait"):
+            sec = load_timeout(rt.size_mb)
+            notice = deps.get("notice")
+            if notice is not None:
+                from ..tables import open_tables
+                tvv = open_tables(ctx)
+                notice(tvv.text(tvv.msg("svc.verify_notice"), backend=rt.backend,
+                                gb=round((rt.size_mb or 0) / 1024.0, 1), sec=sec))
+            bad = verify(spec, port, sec)
+            if bad is not None:
+                reason, detail = bad
+                if reason == "load_failed":
+                    # 进程还挂着但什么也服务不了：停掉它，不留一个「在跑」的坏服务
+                    out = supervisor.down(ctx, spec.service)
+                    left = [] if out.rc == 0 else [f"run/{spec.service}.json"]
+                    return Failed(10, "svc.load_failed", left, service=spec.service, port=port,
+                                  detail=detail or "（后端没有给出原因）")
+                return Failed(4, "svc.verify_timeout", [f"run/{spec.service}.json"],
+                              service=spec.service, port=port, sec=sec)
     rt = state.get("route")
     extra_pay = {}
     if rt is not None:

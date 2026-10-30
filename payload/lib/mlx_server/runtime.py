@@ -348,6 +348,7 @@ def build_deps(ctx):
         "confirm": confirm,
         "caps_drift": lambda: _drift(ctx, venv_py),
         "checks": checks.ALL,          # 十二项健康检查的生产实现
+        "service_ready": service_ready,
         "wait_ready": lambda spec, port, timeout_sec: wait_ready(
             ctx, spec, port, timeout_sec=timeout_sec,
             log_path=os.path.join(ctx.root_data, "logs", f"{spec.service}.log")),
@@ -605,6 +606,50 @@ def wait_ready(ctx, spec, port, log_path=None, timeout_sec=20, poll_sec=0.25):
             return None                      # 确认是我们在监听 ⇒ 就绪
         time.sleep(poll_sec)
     return ("timeout", _log_tail(log_path))
+
+
+def service_ready(spec, port, timeout_sec):
+    # type: (object, int, float) -> object
+    """端口归我们之后，发一次真实的 1 token 补全，确认模型**能用**（设计 `service_ready`）。
+
+    → `None` 能用 · `("load_failed", 说明)` 后端明确报错或连不上 · `("timeout", "")` 等满仍无回应。
+    mlx_lm 先监听、首次请求才加载：端口监听上时模型还没碰过，加载失败进程也不退出
+    （实测：绑了不支持的 drafter，`up` 报已启动，五分钟后 chat 仍连不上）。
+    """
+    import json as _json
+    import socket
+    import urllib.error
+    import urllib.request
+    body = _json.dumps({"model": spec.model_arg or spec.service, "max_tokens": 1, "stream": False,
+                        "messages": [{"role": "user", "content": "hi"}]}).encode()
+    headers = {"Content-Type": "application/json"}
+    for k in getattr(spec, "secret_env", None) or ():
+        if k.endswith("API_KEY") and spec.env.get(k):
+            headers["Authorization"] = "Bearer " + spec.env[k]
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=body,
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as r:  # noqa: S310
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        try:
+            raw = e.read()[:400].decode("utf-8", "replace")
+        except OSError:
+            raw = ""
+        return ("load_failed", f"HTTP {e.code} {raw}".strip())
+    except socket.timeout:
+        return ("timeout", "")
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, socket.timeout):
+            return ("timeout", "")
+        return ("load_failed", str(e.reason)[:300])
+    except OSError as e:
+        return ("load_failed", str(e)[:300])
+    try:
+        ok = bool(_json.loads(raw).get("choices"))
+    except (ValueError, AttributeError):
+        ok = False
+    return None if ok else ("load_failed", raw[:300].decode("utf-8", "replace"))
 
 
 def _log_tail(path, lines=12):

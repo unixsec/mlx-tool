@@ -243,3 +243,73 @@ print(json.dumps({"rc": out.rc, "payload": out.payload, "spawned": len(spawned)}
         "真实（非 dry-run）up 成功 payload 丢了 rule —— R2「串行」判据读不到它："
         + json.dumps(got))
     assert got["payload"]["backend"] == "mlx_lm"
+
+
+def test_mlx_lm_up_waits_for_a_real_completion_and_cleans_up_on_load_failure(payload, sys_py):
+    """B1：mlx_lm 先监听、首次请求才加载模型，端口监听上不等于模型能用（实测：绑了不支持的
+    drafter 报「已启动」，五分钟后 chat 仍连不上）。端口归我们之后再发一次 1 token 补全：
+    后端报错 ⇒ rc 10 svc.load_failed 并停掉进程；`--no-wait` 跳过这一步。"""
+    got = _run(payload, sys_py, """
+from mlx_server import supervisor
+from mlx_server.result import Done
+seed("t", "org/t", 8101, config={}, machine={"size_mb": 2048.0})
+put_caps(["mlx", "mlx_lm", "mlx_vlm"])
+stopped, asked = [], []
+supervisor.down = lambda c, t, *a, **k: stopped.append(t) or Done({"stopped": t})
+deps.update({"spawn": lambda spec, cwd: {"pid": 999999, "pgid": 999999, "started_at": "t"},
+             "wait_ready": lambda spec, port, timeout_sec: None,
+             "service_ready": lambda spec, port, timeout_sec: asked.append(timeout_sec)
+                 or ("load_failed", "ValueError: Model type qwen3_5_mtp not supported"),
+             "notice": lambda s: None})
+bad = run(ctx, None, Invocation("up", "t"), deps)
+r = {"bad": [bad.rc, bad.msg_key, (bad.args or {}).get("detail"), list(stopped), list(asked)]}
+stopped.clear(); asked.clear()
+os.unlink(os.path.join(DATA, "run", "t.json")) if os.path.exists(os.path.join(DATA, "run", "t.json")) else None
+skip = run(ctx, None, Invocation("up", "t", args={"no_wait": True}), deps)
+r["skip"] = [skip.rc, list(asked)]
+print(json.dumps(r))
+""")
+    rc, key, detail, stopped, asked = got["bad"]
+    assert (rc, key) == (10, "svc.load_failed"), got
+    assert "qwen3_5_mtp" in detail and stopped == ["t"], got
+    assert asked == [26], f"等待上限与 mlx_vlm 同：20 + 3 × 2 GB = 26 秒：{got}"
+    assert got["skip"] == [0, []], f"--no-wait 不做加载验证：{got}"
+
+
+SERVICE_READY = WORLD + r'''
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from mlx_server import runtime
+class Up(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        mode = self.server.mode
+        if mode == "slow":
+            import time; time.sleep(3)
+        if mode == "fail":
+            raw = b'{"error": "ValueError: Model type qwen3_5_mtp not supported"}'
+            self.send_response(500)
+        else:
+            raw = json.dumps({"choices": [{"message": {"content": "h"}}],
+                              "usage": {"completion_tokens": 1}}).encode()
+            self.send_response(200)
+        self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+def up(mode):
+    s = ThreadingHTTPServer(("127.0.0.1", 0), Up); s.mode = mode; s.daemon_threads = True
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    return s.server_address[1]
+class S:
+    service, model_arg, env = "t", "t", {}
+out = {m: runtime.service_ready(S(), up(m), 1.0) for m in ("ok", "fail", "slow")}
+out["dead"] = runtime.service_ready(S(), 1, 1.0)
+print(json.dumps(out))
+'''
+
+
+def test_service_ready_probe_outcomes(payload, sys_py):
+    got = run_floor(payload, sys_py, SERVICE_READY, timeout=60)
+    assert got["ok"] is None, got
+    assert got["fail"][0] == "load_failed" and "qwen3_5_mtp" in got["fail"][1], got
+    assert got["slow"][0] == "timeout", got
+    assert got["dead"][0] == "load_failed", got
