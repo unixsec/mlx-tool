@@ -51,7 +51,12 @@ CREATORS = {"mkdir", "makedirs", "commit", "spawn", "spawn_supervised",
 # **限定名**匹配的创建点。末段单独拿出来太常见 —— `str.replace` / `bytes.replace`
 # 遍地都是，把 `replace` 放进 `CREATORS` 会把一大片无关调用判红（守卫的提取面
 # 比不变式宽 ⇒ 假阳性）。所以这一类按 `模块.函数` 的全名匹配。
-QUALIFIED_CREATORS = {"atomic.replace", "_atomic.replace"}
+QUALIFIED_CREATORS = {"atomic.replace", "_atomic.replace",
+                      # **销毁也是副作用**（1.2.0）：只数「创建」时，`restart` 先 `supervisor.down`
+                      # 再 Refused 的 7 处违规一处都看不见 —— Refused 的承诺是「什么都没动」，
+                      # 停掉一个在跑的服务、删掉文件同样违背它
+                      "supervisor.down", "vault.trash", "vault.purge", "os.unlink", "os.remove",
+                      "os.rename", "shutil.rmtree", "os.kill", "os.killpg"}
 
 
 def _dotted(func):
@@ -198,6 +203,10 @@ def _violations(tree):
 
 # 语义样本：(id, 源码, 是否应报)。前七条逐字取自 P2-pre A 简报。
 _R02_SAMPLES = [
+    ("stop-service-then-refused",
+     'def f():\n    supervisor.down(c, t)\n    return Refused(6, "k")\n', True),
+    ("unlink-then-refused",
+     'def f():\n    os.unlink(p)\n    return Refused(6, "k")\n', True),
     ("probe-deep-commit-then-top-refused",
      'def f():\n    if a:\n        with b:\n            store.commit(x)\n'
      '    return Refused(6, "k")\n', True),

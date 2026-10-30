@@ -174,3 +174,31 @@ def test_capacity_counts_running_models_once_and_by_their_real_size(payload, sys
     key, args = got["avail_over"]
     assert key == "fit.over" and args.get("bound") == "当前可用内存", got
     assert got["nosize"][0] == "fit.undeterminable", f"体积为 0 / 缺失不能当成装得下：{got}"
+
+
+RESTART_PREFLIGHT = WORLD + r"""
+from mlx_server import backendarg, supervisor
+from mlx_server.cmd.svc import Invocation, run
+from mlx_server.result import Done, Ok
+put_settings({})
+put_caps(["mlx_lm", "mlx_vlm", "mlx"])
+seed("big", "org/big", 8100, config="{}", machine={"size_mb": 900000})
+calls = []
+supervisor.down = lambda c, t, *a, **k: calls.append(t) or Done({"stopped": t})
+base = {"backendarg_spec": backendarg.spec, "avail_mem_mb": lambda: Ok(1024),
+        "phys_mem_mb": lambda: Ok(131072)}
+over = run(ctx, None, Invocation("restart", "big"), dict(base))
+r = {"over": [over.rc, getattr(over, "msg_key", None), list(calls)]}
+calls.clear()
+drift = run(ctx, None, Invocation("restart", "big"), dict(base, caps_drift=lambda: Ok(True)))
+r["drift"] = [drift.rc, getattr(drift, "msg_key", None), list(calls)]
+print(json.dumps(r))
+"""
+
+
+def test_restart_checks_capacity_and_drift_before_stopping_the_old_service(payload, sys_py):
+    """C1：容量、后端能力漂移原先在 `down` 之后才查，被拒时旧服务已经停了，而结论是 Refused
+    （「什么都没动」）。现在这几项挪到停服之前。"""
+    got = run_floor(payload, sys_py, RESTART_PREFLIGHT, timeout=60)
+    assert got["over"] == [6, "fit.over", []], f"容量被拒时不得先停旧服务：{got}"
+    assert got["drift"] == [3, "caps.drift.detected", []], f"漂移被拒时不得先停旧服务：{got}"

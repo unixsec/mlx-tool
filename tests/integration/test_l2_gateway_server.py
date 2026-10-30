@@ -792,7 +792,15 @@ stop.set(); s.close()
 s = socket.create_connection(("127.0.0.1", port))
 s.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
 s.settimeout(3)
-first = s.recv(4096).decode(errors="replace").split("\r\n")[0]
+# 读完整个响应（头与体可能分两段到）再等：否则「等关闭」收到的是响应体
+buf = b""
+while b"\r\n\r\n" not in buf:
+    buf += s.recv(4096)
+head, _, rest = buf.partition(b"\r\n\r\n")
+n = int(re.search(rb"Content-Length: (\d+)", head).group(1))
+while len(rest) < n:
+    rest += s.recv(4096)
+first = head.decode(errors="replace").split("\r\n")[0]
 out["idle"] = [first] + wait_close(s, 5)
 s.close()
 print(json.dumps(out))

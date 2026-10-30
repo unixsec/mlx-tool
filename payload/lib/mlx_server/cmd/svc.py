@@ -48,8 +48,29 @@ def enter_execute():
     return None
 
 
-def _fit_verdict(ctx, target, deps, cfg, size_mb=None):
-    # type: (object, str, dict, object, object) -> object
+def _outgoing_mb(ctx, target, outgoing, deps):
+    # type: (object, str, object, dict) -> int
+    """`restart` 时即将停掉的旧进程会让出的内存：max(RSS, 登记体积)。不是 restart ⇒ 0。"""
+    if not outgoing or not outgoing.get("pid"):
+        return 0
+    from .. import store
+    r = store.load(ctx, store.MODELS).by_id(target)
+    reg = int((r.machine.get("size_mb") or 0) if r is not None else 0)
+    rss_of = deps.get("rss_mb_of")
+    m = rss_of(outgoing["pid"]) if rss_of is not None else None
+    rss = int(m.value) // 1024 if m is not None and not is_unknown(m) and m.value else 0
+    return max(rss, reg)
+
+
+def _strangers(pids, outgoing):
+    # type: (object, object) -> list
+    """端口上的监听者里**不是**即将停掉的旧服务的那些（`restart api` 时旧网关自己在听）。"""
+    mine = {(outgoing or {}).get("pid")} - {None}
+    return [p for p in (pids or []) if p not in mine]
+
+
+def _fit_verdict(ctx, target, deps, cfg, size_mb=None, release_mb=0):
+    # type: (object, str, dict, object, object, int) -> object
     """把探针值喂给 `fitness.classify_detail`。**探针在这里取，判定在那里做**
     （`fitness` 是纯函数，不调探针 —— 那是它能被逐样例对拍的前提）。
 
@@ -77,8 +98,11 @@ def _fit_verdict(ctx, target, deps, cfg, size_mb=None):
     th = fitness.FitThresholds(cfg.values["fit.reserve_pct"],
                                cfg.values["fit.tight_pct"],
                                cfg.values["fit.over_pct"])
+    avail = deps["avail_mem_mb"]()
+    if release_mb and not is_unknown(avail):
+        avail = Ok(int(avail.value) + int(release_mb))   # restart：旧进程停掉后让出的那份
     return fitness.classify_detail(phys() if phys is not None else Ok(1 << 40),
-                                   deps["avail_mem_mb"](), size, Ok(total), th)
+                                   avail, size, Ok(total), th)
 
 
 def _collect(ctx, stack, deps, verb, targets, args=None, dry_run=False):
@@ -624,17 +648,7 @@ def run(ctx, stack, inv, deps):
         if refusal is not None:
             return refusal
 
-    if inv.verb == "restart":
-        # 校验全过了才动手停。到这一行为止零资源创建、零外部效应。
-        out = supervisor.down(ctx, inv.target)
-        if out.rc not in (0,):
-            return out
-        # **`args` 必须带过去**（收尾评审 Important 8）：此前这里重造
-        # `Invocation("up", inv.target, dry_run=inv.dry_run)`，把 `inv.args`
-        # 整个丢掉，而 `cli.tsv:32` 把 `--ignore-fitness` 登记给了 `up,restart`
-        # ⇒ 那个 flag 在 restart 上是死的，执行段的容量闸门照样 `fit.over`，
-        # 而 `fit.over` 的文案还让用户去加他已经加过的这个 flag。
-        inv = Invocation("up", inv.target, args=inv.args, dry_run=inv.dry_run)
+    restarting = inv.verb == "restart"
     spec = state["spec"]
 
     # `--dry-run` 在 stage_split **之前**返回 —— 这是 BCR-4-08 的答案（格 1）：
@@ -656,11 +670,17 @@ def run(ctx, stack, inv, deps):
     # ── 执行段（这里才允许碰外部命令；此后只能 Failed 且带 committed）──
     from .. import supervisor
 
-    already = supervisor.running(ctx, inv.target)
-    if is_unknown(already):
-        return Failed(4, "owns.undeterminable", [], kind=already.kind)
-    if already.value is True:
-        return Done({"already_running": inv.target})
+    # `restart`：**停旧服务排在执行段全部检查之后**（容量、能力漂移、外来端口都在下面）。
+    # 此前 `down` 在这些检查之前，被拒时旧服务已经停了，结论却是 Refused（「什么都没动」）。
+    outgoing = None
+    if restarting:
+        outgoing = supervisor.snapshot(ctx, inv.target) or {}
+    else:
+        already = supervisor.running(ctx, inv.target)
+        if is_unknown(already):
+            return Failed(4, "owns.undeterminable", [], kind=already.kind)
+        if already.value is True:
+            return Done({"already_running": inv.target})
 
     drift = deps.get("caps_drift")
     # **网关不查 venv 漂移**：它跑在下限解释器上、零依赖（标准库 HTTP 服务器），
@@ -691,7 +711,8 @@ def run(ctx, stack, inv, deps):
     avail = deps.get("avail_mem_mb")
     if avail is not None and inv.target != "api":
         verdict = _fit_verdict(ctx, inv.target, deps, state["cfg"],
-                               getattr(state.get("route"), "size_mb", None))
+                               getattr(state.get("route"), "size_mb", None),
+                               release_mb=_outgoing_mb(ctx, inv.target, outgoing, deps))
         if is_unknown(verdict):
             return Refused(9, "fit.undeterminable", detail=verdict.reason)
         v = verdict.value
@@ -712,9 +733,10 @@ def run(ctx, stack, inv, deps):
             fl = foreign(spec_port(spec))
             if is_unknown(fl):
                 return Refused(9, "ports.probe_undeterminable", port=spec_port(spec), kind=fl.kind)
-            if fl.value:
+            strangers = _strangers(fl.value, outgoing)
+            if strangers:
                 return Refused(7, "ports.foreign_listener", port=spec_port(spec),
-                               pids=",".join(str(p) for p in fl.value))
+                               pids=",".join(str(p) for p in strangers))
         # ── 网关解释器（spec D20）──
         pick = deps.get("gateway_interpreter")
         if pick is not None:
@@ -728,6 +750,20 @@ def run(ctx, stack, inv, deps):
                          "interpreter_source": interp["source"],
                          "interpreter_version": interp["version"],
                          "tls_max": interp["tls_max"]}
+
+    if restarting:
+        # 检查全过了才停。到这一行为止零资源创建（只跑过只读探测）。
+        out = supervisor.down(ctx, inv.target)
+        if out.rc not in (0,):
+            return out
+        # **`args` 必须带过去**（收尾评审 Important 8）：`--ignore-fitness` 登记给了 `up,restart`
+        inv = Invocation("up", inv.target, args=inv.args, dry_run=inv.dry_run)
+        if inv.target == "api" and deps.get("foreign_listeners") is not None:
+            # 停止与再起之间的竞态窗口：旧网关一走，别人可能抢先绑上端口。此刻服务已停 ⇒ Failed
+            fl = deps["foreign_listeners"](spec_port(spec))
+            if not is_unknown(fl) and fl.value:
+                return Failed(1, "ports.foreign_listener_after_stop", [f"run/{inv.target}.json"],
+                              port=spec_port(spec), pids=",".join(str(p) for p in fl.value))
 
     spawn = deps.get("spawn")
     if spawn is None:
