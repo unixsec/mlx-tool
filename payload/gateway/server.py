@@ -26,6 +26,7 @@ from mlx_server.wire import SseDecoder
 from . import aggregate, frames, guard, media, relay, translate
 from .app import log_event
 
+_ABORTED = "upstream backend aborted the stream"   # 网关自己的固定文案，不带上游原文
 DEFAULT_MAX_BODY_MB = 256          # `api.max_body_mb` 出厂值（spec D22：多图与长上下文请求体）
 _HANDSHAKE_SEC = 10.0
 _MAX_CL_DIGITS = 20                # `Content-Length` 最长位数，见 `_parse_content_length`
@@ -246,7 +247,7 @@ def forward(port, path, payload, host="127.0.0.1", timeout_sec=600, headers=None
 def forward_stream(port, path, payload, on_chunk, host="127.0.0.1",
                    timeout_sec=relay.READ_TIMEOUT_SEC, headers=None, client_alive=None,
                    keepalive=None, on_head=None, keepalive_sec=relay.KEEPALIVE_SEC,
-                   probe_sec=relay.PROBE_SEC):
+                   probe_sec=relay.PROBE_SEC, on_prehead_idle=None, prehead_sec=relay.STREAM_COMMIT_SEC):
     """流式转发（经 `relay`：读取线程 `read1`、按 `probe_sec` 探测客户端、静默满 `keepalive_sec` 保活）。
 
     本函数不碰字节内容（INV-12：改写只发生在 Frame 上，由调用方的 `on_chunk` 分帧改写）。
@@ -258,7 +259,8 @@ def forward_stream(port, path, payload, on_chunk, host="127.0.0.1",
         lambda register: relay.open_upstream(port, path, payload, headers=headers, host=host,
                                              timeout_sec=timeout_sec, register=register),
         on_head or (lambda head: None), on_chunk, client_alive or (lambda: True),
-        keepalive=keepalive, keepalive_sec=keepalive_sec, probe_sec=probe_sec)
+        keepalive=keepalive, keepalive_sec=keepalive_sec, probe_sec=probe_sec,
+        on_prehead_idle=on_prehead_idle, prehead_sec=prehead_sec)
     if res["outcome"] == "upstream_error":
         return (res["head"][1], res["head"][2])
     if res["outcome"] == "client_disconnected":
@@ -737,12 +739,16 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             # 网关为聚合强制开了 usage；客户端自己没要 ⇒ 丢掉 usage 帧
             drop_usage = family in ("chat", "completions") and not meta["client_usage"]
             dec = SseDecoder()
-            state = {"started": False, "terminal": False}
+            state = {"started": False, "terminal": False, "errored": False, "seq": -1}
+
+            def commit():
+                if not state["started"]:
+                    self._stream_headers()
+                    state["started"] = True
 
             def on_head(head):
                 if head[0] == "stream":
-                    self._stream_headers()
-                    state["started"] = True
+                    commit()
 
             def on_chunk(chunk):
                 for frame in dec.feed(chunk):
@@ -750,8 +756,17 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                         state["terminal"] = True
                     out = frames.rewrite(frame, short_id, peer_class, drop_usage)
                     if out:
+                        frames.track(out, state)
                         self.wfile.write(out)
                 self.wfile.flush()
+
+            def fail(message, err_type="upstream_error", code="upstream_aborted"):
+                """响应头已发之后出错：补一个协议内的错误事件，不发 `[DONE]`。上游已发过错误帧就不重复。"""
+                if state["errored"] or state["terminal"]:
+                    return
+                with contextlib.suppress(OSError):
+                    self.wfile.write(frames.error_event(family, message, err_type, code, state["seq"] + 1))
+                    self.wfile.flush()
 
             def keepalive():
                 self.wfile.write(b": keepalive\n\n")
@@ -760,10 +775,18 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
             hdrs = gw.upstream_headers(short_id, snap)
             res = forward_stream(port, upstream, up_body, on_chunk, headers=hdrs or None,
                                  client_alive=self._alive, keepalive=keepalive, on_head=on_head,
-                                 keepalive_sec=gw.keepalive_sec, probe_sec=gw.probe_sec)
+                                 keepalive_sec=gw.keepalive_sec, probe_sec=gw.probe_sec,
+                                 on_prehead_idle=commit, prehead_sec=gw.stream_commit_sec)
             ticket.close()                       # 可重复调用；do_POST 的 finally 兜底
             if isinstance(res, tuple):
-                return self._reply(*gw.upstream_reply(res[0], res[1], peer_class, short_id))
+                st, err_body = gw.upstream_reply(res[0], res[1], peer_class, short_id)
+                if not state["started"]:
+                    return self._reply(st, err_body)
+                # 排队超过阈值后才回的错：状态码已经是 200，只能以错误事件告知
+                e = (err_body or {}).get("error") or {}
+                fail(e.get("message") or "backend returned an error", e.get("type") or "upstream_error",
+                     e.get("code") or "upstream_error")
+                return None
             if res == "client_disconnected":
                 log_event("info", "client_disconnected", model=short_id)
                 self.close_connection = True
@@ -778,12 +801,15 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
                 # 响应中途断开，relay 在 HTTP 层判不出来，只能在这里发现
                 log_event("error", "sse_truncated", model=short_id,
                           pending_bytes=len(dec.pending()))
+                fail(_ABORTED)
             elif res is False:
                 log_event("error", "upstream_aborted", model=short_id)
+                fail(_ABORTED)
             elif not state["terminal"]:
                 # 以关连接标界的上游（mlx_lm 是 HTTP/1.0）断在**帧边界**：relay 判 ok、没有半帧，
                 # 只有「没见过终止帧」能说明后端没把流写完（崩溃 / OOM 最常见的形态）
                 log_event("error", "sse_truncated", model=short_id, pending_bytes=0)
+                fail(_ABORTED)
             return None
 
     return Handler

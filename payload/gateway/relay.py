@@ -22,6 +22,9 @@ import ssl
 import threading
 import time
 
+# 上游排队超过它还没回响应头 ⇒ 先给客户端发响应头再保活（调用方提供 `on_prehead_idle` 时）。
+# 之内出的错仍能回真实状态码；之后只能以协议内错误事件告知
+STREAM_COMMIT_SEC = 15.0
 KEEPALIVE_SEC = 15.0
 PROBE_SEC = 1.0
 READ_TIMEOUT_SEC = 600.0
@@ -142,10 +145,14 @@ def _close(state):
 
 
 def relay(open_fn, on_head, on_chunk, client_alive_fn, keepalive=None,
-          keepalive_sec=KEEPALIVE_SEC, probe_sec=PROBE_SEC, clock=time.monotonic):
-    # type: (object, object, object, object, object, float, float, object) -> dict
+          keepalive_sec=KEEPALIVE_SEC, probe_sec=PROBE_SEC, clock=time.monotonic,
+          on_prehead_idle=None, prehead_sec=STREAM_COMMIT_SEC):
+    # type: (object, object, object, object, object, float, float, object, object, float) -> dict
     """`open_fn(register)` 在读取线程里调用，把 `register` 交给 `open_upstream`。
-    任何退出路径（含回调抛出任意异常）都会关闭上游，读取线程随之结束。"""
+    任何退出路径（含回调抛出任意异常）都会关闭上游，读取线程随之结束。
+
+    `on_prehead_idle`：上游响应头 `prehead_sec` 内没到时调一次（调用方借此先发响应头），
+    此后即使头还没到也照常保活。"""
     items = queue.Queue()
     state = {"head": None, "conn": None, "sock": None, "cancelled": False}
 
@@ -177,7 +184,8 @@ def relay(open_fn, on_head, on_chunk, client_alive_fn, keepalive=None,
 
     threading.Thread(target=reader, daemon=True).start()
     result = {"outcome": "ok", "head": None, "bytes": 0}
-    last = last_probe = clock()
+    last = last_probe = started = clock()
+    committed = False
     try:
         while True:
             # **按时间间隔探测，不依附于「取不到数据」**：上游持续出 token 时队列永远不空，
@@ -190,7 +198,17 @@ def relay(open_fn, on_head, on_chunk, client_alive_fn, keepalive=None,
             try:
                 kind, value = items.get(timeout=probe_sec)
             except queue.Empty:
-                if keepalive is not None and result["head"] is not None and clock() - last >= keepalive_sec:
+                if result["head"] is None and on_prehead_idle is not None and not committed \
+                        and clock() - started >= prehead_sec:
+                    try:
+                        on_prehead_idle()
+                    except OSError:
+                        result["outcome"] = "client_disconnected"
+                        return result
+                    committed = True
+                    last = clock()
+                if keepalive is not None and (result["head"] is not None or committed) \
+                        and clock() - last >= keepalive_sec:
                     try:
                         keepalive()
                     except OSError:

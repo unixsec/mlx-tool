@@ -32,10 +32,11 @@ class Gateway:
 
     __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key", "nets",
                  "_key_missing_logged", "_key_missing_had_key", "limits",
-                 "budget", "media_store", "keepalive_sec", "probe_sec")
+                 "budget", "media_store", "keepalive_sec", "probe_sec", "stream_commit_sec")
 
     def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None, backend_key=None,
-                 nets=None, limits=None, media_root=None, keepalive_sec=None, probe_sec=None):
+                 nets=None, limits=None, media_root=None, keepalive_sec=None, probe_sec=None,
+                 stream_commit_sec=None):
         self.ctx = ctx
         self.facade = facade            # {name: callable}，键集 == T1_FACADE
         self.view = routes.RouteView()
@@ -53,6 +54,7 @@ class Gateway:
         self.media_store = media.Store(media_root)
         self.keepalive_sec = relay.KEEPALIVE_SEC if keepalive_sec is None else keepalive_sec
         self.probe_sec = relay.PROBE_SEC if probe_sec is None else probe_sec
+        self.stream_commit_sec = relay.STREAM_COMMIT_SEC if stream_commit_sec is None else stream_commit_sec
         # `backend_key_missing` 去重：按「模型 + 当前是否有密钥」——密钥状态翻转
         # （比如运行中改配置后重装配）就重新起算，翻转前的沉默不会漏掉新一轮缺钥匙
         self._key_missing_logged = set()

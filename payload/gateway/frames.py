@@ -57,6 +57,39 @@ def _patch(obj, short_id):
 _ERROR_EVENTS = ("error", "response.failed")
 
 
+def track(frame, state):
+    # type: (bytes, dict) -> None
+    """记下已下发帧里的 `sequence_number`（Responses 的错误事件要接着编号）与是否已有错误帧。"""
+    event, data = parse(frame)
+    if not data or data.strip() == "[DONE]":
+        return
+    try:
+        obj = json.loads(data)
+    except ValueError:
+        return
+    if isinstance(obj, dict):
+        seq = obj.get("sequence_number")
+        if isinstance(seq, int) and not isinstance(seq, bool) and seq > state["seq"]:
+            state["seq"] = seq
+    if is_error_frame(event, obj):
+        state["errored"] = True
+
+
+def error_event(family, message, err_type="upstream_error", code="upstream_aborted", seq=0):
+    # type: (str, str, str, str, int) -> bytes
+    """响应头已发之后的错误，按各协议的原生格式写成一帧（客户端 SDK 据此报错，而不是当成正常结束）。"""
+    if family == "messages":
+        api_type = "invalid_request_error" if err_type == "invalid_request_error" else "api_error"
+        event, obj = "error", {"type": "error", "error": {"type": api_type, "message": message}}
+    elif family == "responses":
+        event, obj = "error", {"type": "error", "code": code, "message": message, "param": None,
+                               "sequence_number": seq}
+    else:
+        event, obj = None, {"error": {"message": message, "type": err_type, "code": code}}
+    head = "event: " + event + "\n" if event else ""
+    return (head + "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n").encode("utf-8")
+
+
 def is_error_frame(event, obj):
     # type: (object, object) -> bool
     """帧是否带上游错误内容（rewrite 的净化判据与 Aggregator 的出错判据共用）。
