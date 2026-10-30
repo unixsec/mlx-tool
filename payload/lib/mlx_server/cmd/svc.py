@@ -542,6 +542,55 @@ def _tool_status(ctx):
     })
 
 
+def _logs(ctx, inv, deps):
+    # type: (object, object, dict) -> object
+    """`mlx logs <服务>`：日志最后 N 行；`--follow` 之后持续输出新写入的部分，Ctrl-C 结束。"""
+    import os
+    import time
+
+    from .. import supervisor
+    path = supervisor.log_path(ctx, inv.target)
+    if not os.path.exists(path):
+        return Refused(6, "logs.none", service=inv.target, path=path)
+    n = int((inv.args or {}).get("lines") or 50)
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            end = fh.tell()
+            fh.seek(max(0, end - max(65536, n * 512)))
+            tail = fh.read().decode("utf-8", "replace").splitlines()[-n:]
+    except OSError as exc:
+        return Refused(3, "logs.unreadable", service=inv.target, path=path, detail=str(exc)[:120])
+    if not (inv.args or {}).get("follow"):
+        return Done({"kind": "logs", "service": inv.target, "path": path,
+                     "text": "\n".join(tail)})
+    emit = deps.get("emit") or (lambda s: None)
+    for line in tail:
+        emit(line)
+    pos, buf = end, b""
+    try:
+        while True:
+            time.sleep(0.5)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            if size < pos:                    # 被截断或轮转：从头读
+                pos = 0
+            if size == pos:
+                continue
+            with open(path, "rb") as fh:
+                fh.seek(pos)
+                buf += fh.read(size - pos)
+            pos = size
+            *done, buf = buf.split(b"\n")
+            for raw in done:
+                emit(raw.decode("utf-8", "replace"))
+    except KeyboardInterrupt:
+        pass
+    return Done({"kind": "logs", "service": inv.target, "path": path, "text": "", "followed": True})
+
+
 def run(ctx, stack, inv, deps):
     # type: (object, object, Invocation, dict) -> object
     """服务动词的编排。**先按 verb 分派** —— 上一版把 down/status 也走了 up 的路径。"""
@@ -583,6 +632,9 @@ def run(ctx, stack, inv, deps):
         return Failed(4, "svc.some_not_stopped",
                       [f"run/{s}.json" for s in services],
                       results=results)
+
+    if inv.verb == "logs":
+        return _logs(ctx, inv, deps)
 
     if inv.verb == "status" and not inv.target:
         # **不带目标 = 工具自身状态。** 判据（`verbs.tsv` 第 4 行）：必须输出

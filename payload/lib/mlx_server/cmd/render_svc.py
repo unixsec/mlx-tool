@@ -196,7 +196,14 @@ def _down_dry_run(p):
             f"  去掉 --dry-run 执行")
 
 
+def _logs(p):
+    # type: (dict) -> str
+    """日志正文**原样**输出（不加缩进、不加表头）—— 用户要的就是能 grep 的原文。"""
+    return p.get("text") or ""
+
+
 ui.register({
+    "logs": _logs,
     "svc_down_dry_run": _down_dry_run,
     "svc": _svc_change,
     "tool": _tool_status,

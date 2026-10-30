@@ -29,6 +29,8 @@ api.plaintext_warning	TLS 未开启：同一网段上的其他设备能看到请
 status.gateway.not_running	未运行   `mlx up api` 起它
 status.gateway.token_env_unknown	令牌由环境变量设置，当前 shell 未设 MLX_GATEWAY_TOKEN，无法比较是否已变更
 bootstrap.manifest_missing	分发清单缺失：{missing}
+logs.none	{service} 还没有日志（{path} 不存在）—— 它从来没起过，或者数据根换过位置
+logs.unreadable	读不了 {service} 的日志 {path}：{detail}
 check.failed	有检查项未通过（见上）。每一项的下一步写在它自己那行
 check.undeterminable	有检查项无法判定（见上）。通常是探测工具不可用，不代表那一项坏了
 meta.confirm_declined	确认未通过
@@ -62,6 +64,7 @@ help.up	起一个服务（模型 id 或 api）。已在跑则幂等返回
 help.down	停一个服务；--all 停掉全部有运行记录的服务
 help.restart	先校验、检查，全部通过才停旧服务、再起新的；被拒时旧服务照常在跑
 help.status	不带目标：工具自身状态（三根·版本·PATH·清单）；带目标：那个服务的状态
+help.logs	看一个服务的日志（最后 50 行；--follow 持续输出）
 help.chat	与一个模型多轮对话（`--prompt=<问题>` 只发一轮）
 help.bench	跑一次基准，输出吞吐与提示词指纹
 help.check	十二项健康检查，各项独立求值后聚合
@@ -94,6 +97,8 @@ flag.json	输出机读 JSON（默认输出是给人看的）
 flag.ignore_fitness	容量判定说装不下也照样启动（起完可能开始换页，机器会很慢）
 flag.no_wait	不等模型真正加载成功就返回（默认：mlx_lm 模型会发一次 1 token 补全确认能用）
 flag.value_stdin	从标准输入读值（终端上不回显）。设密钥时用它：值不会出现在进程列表与 shell 历史里
+flag.lines	打印最后多少行（默认 50）
+flag.follow	打印完继续输出新写入的内容，Ctrl-C 结束
 flag.dry_run	只打印将要做什么，不真的做：不改任何状态、不留进程（判定模型模板时会起一个有时限、在沙箱里的只读子进程）
 flag.all	作用于全部有运行记录的服务
 flag.yes	跳过确认（仅在非交互场景使用）
@@ -130,6 +135,7 @@ help.caps.show.long	看当前缓存的后端能力：依赖三包、指纹、采
 help.caps.refresh.long	重新采集后端能力，输出**这次采集改变了什么**（无变化则是空数组）。\n首次使用必须先跑一次 —— 能力从未采集时工具会拒绝启动服务，\n而本命令就是那条拒绝指名的恢复动作。
 help.api.info.long	读网关运行记录：每个放行接口的 OpenAI 与 Anthropic base URL、绑定与 TLS、解释器、令牌来源与是否需要重启、放行网段与排除接口、可用模型 id。
 help.bench.long	对一个在跑的模型做一次基准，输出吞吐与提示词指纹。
+help.logs.long	打印 `<数据根>/logs/<服务>.log` 的最后 N 行（`--lines=<N>`，默认 50）。\n`--follow` 打印完之后持续输出新写入的内容，Ctrl-C 结束。\n服务可以是模型 id，也可以是 `api`（网关）。日志里不会出现密钥。
 help.chat.long	与一个模型对话。不给 `--prompt` 就进入**多轮模式**：一行一句，`/exit` 或 Ctrl-D 结束。\n每一轮都会存进会话，中途断了不丢；用 `--session=<id>` 接着上次聊。\n**回复正文走 stdout，提示符走 stderr** —— `mlx chat x > out.txt` 存下来的是纯回复。
 help.bootstrap.render.long	渲染补全脚本与自启描述文件到指定目录。
 help.bootstrap.verify.long	按分发清单校验安装产物是否齐全。

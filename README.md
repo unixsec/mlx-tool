@@ -240,7 +240,7 @@ See the guide's [uninstall section](docs/USER-GUIDE.md#uninstall).
 | Group | Commands |
 |---|---|
 | Tool | `install` · `uninstall` · `status` · `check` · `version` · `help` |
-| Services | `up` · `down` · `restart` |
+| Services | `up` · `down` · `restart` · `logs` |
 | Models | `model install` · `register` · `ls` · `info` · `rm` · `gc` · `repair` · `trash ls / restore / empty` |
 | Config | `config get` · `set` · `unset` · `ls` · `diff` · `export` · `import` · `validate` |
 | Gateway and keys | `api info` · `bootstrap keys` · `bootstrap verify` · `caps refresh` · `caps show` |

@@ -267,6 +267,10 @@ def _domain_error(domain, value):
         return ""
     if value == "":
         return "不能为空"
+    if domain == "#count":
+        if not value.isdigit() or int(value) < 1:
+            return "要一个正整数"
+        return ""
     if domain == "#port_range":
         if not value.isdigit():
             return "端口必须是数字"

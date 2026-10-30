@@ -15,6 +15,7 @@ up		cmd.svc		+	enter_execute	0,1,2,3,4,5,6,7,9,10	每目标一行结论	--json	�
 down		cmd.svc		+	enter_execute	0,1,2,4,5,6	每目标一行结论	--json	同上	终止阶梯、端口释放验证	yes	supervisor.running(<id>)类型核对：running 返回 Probe[bool]，映射 Ok(DEAD)\	public	USER-GUIDE.md#down	#service
 restart		cmd.svc		+	enter_execute	0,1,2,3,4,5,6,7,9,10	每目标一行结论	--json	同上	三段各自的进度	yes	supervisor.snapshot(<id>).started_at类型核对：started_at 是 T-26 命令输出直接派生的字面	public	USER-GUIDE.md#restart	#service
 status		cmd.svc		?		0,2,3	带目标：该服务一行；不带目标：工具状态+模型行+网关行	--json	不带目标恒非空；带目标无记录→空对象	探测降级说明、Unknown 列的原因	no	supervisor.snapshot(<service>) 的集合 + tables.manifest()	public	USER-GUIDE.md#status	#service
+logs		cmd.svc		1		0,2,3,5,6	日志正文	否	空日志 → 零字节 + stderr 说明	日志路径、跟随模式的退出提示	no	supervisor.log_path(<id>) 的字节	public	USER-GUIDE.md#logs	#service
 chat		cmd.chat		1		0,1,2,3,4,5,6	逐字节只含回复正文	否	空回复 → 零字节，且必须 rc≠0	会话 id、元命令回显、中断提示	cond:chat.persist	chat.persist==yes ? sessions.load(<sid>).turns[-1] : @stdout	public	USER-GUIDE.md#chat	#model
 bench		cmd.bench		1		0,1,2,3,4,6	吞吐 + 提示词指纹	--json	n/a	预热说明	no	@stdout 登记：02 §5.4.6 的规则 2 未给 @stdout 的例，本格是三条前提直接求值的结果	public	USER-GUIDE.md#bench	#model
 check		cmd.check		0		0,2,64,65	十二项各一行 name<TAB>verdict<TAB>detail，verdict ∈ verdicts.tsv	是 / --json	n/a	每项的测量说明、Unknown 的原因、补集	no	十二个 health.* 的返回值集合	public	USER-GUIDE.md#check	无

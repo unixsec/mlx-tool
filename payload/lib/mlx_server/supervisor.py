@@ -33,6 +33,12 @@ def _record_path(ctx, service):
     return os.path.join(_run_dir(ctx), f"{service}.json")
 
 
+def log_path(ctx, service):
+    # type: (object, str) -> str
+    """服务日志 `<数据根>/logs/<服务>.log`（spawn 时把子进程 fd 1/2 重定向到这里）。"""
+    return os.path.join(ctx.root_data, "logs", f"{service}.log")
+
+
 class RunRecordUnreadable(Exception):
     """运行记录存在但读不了/解析不了。**不是「没在跑」** —— 两者处置相反。"""
 

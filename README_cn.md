@@ -236,7 +236,7 @@ bash deployer/install.sh
 | 分组 | 命令 |
 |---|---|
 | 工具 | `install` · `uninstall` · `status` · `check` · `version` · `help` |
-| 服务 | `up` · `down` · `restart` |
+| 服务 | `up` · `down` · `restart` · `logs` |
 | 模型 | `model install` · `register` · `ls` · `info` · `rm` · `gc` · `repair` · `trash ls / restore / empty` |
 | 配置 | `config get` · `set` · `unset` · `ls` · `diff` · `export` · `import` · `validate` |
 | 网关与密钥 | `api info` · `bootstrap keys` · `bootstrap verify` · `caps refresh` · `caps show` |

@@ -35,3 +35,5 @@
 --yes	model rm	no	-	-	false	confirm.skip	flag.yes
 --from	config import	yes	<路径>	-	-	config.import_source	flag.from
 --reveal	config get	no	-	-	false	config.reveal_secret	flag.reveal
+--lines	logs	yes	#count	-	50	logs.lines	flag.lines
+--follow	logs	no	-	-	false	logs.follow	flag.follow
