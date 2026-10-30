@@ -283,7 +283,7 @@ def test_l3_falls_back_to_system_python_when_venv_gone(installed):
 
 
 def test_l3_reinstall_removes_retired_types_table(tmp_path, repo):
-    """spec §6.4：`cp -R` 只增不删 —— 1.0.0 留下的 `types.tsv` 要由安装器显式删掉。"""
+    """spec §6.4：`cp -R` 只增不删 —— 1.0.0 留下的 `types.tsv` 要由安装器删掉（按源码对齐，不靠清单；全部受管树见 test_l3_install_rerun）。"""
     roots = {k: tmp_path / v for k, v in
              (("MLX_ROOT_CODE", "code"), ("MLX_ROOT_DATA", "data"),
               ("MLX_ROOT_WEIGHTS", "weights"))}

@@ -138,15 +138,22 @@ _backup() {                         # _backup <file> → stdout: 备份路径
 # 安装器可以反复跑：**代码逐文件相同 + constants.env 相同 + 每个 rc 里都有 PATH 行 + 自检通过**
 # 才跳过。四项缺一就照常重装 —— 判据宁可多装一次，也不能漏掉一处该修的。
 # 自升级（`mlx install`，源即代码根）比较必然相同，不判。
+#
+# **受管树与生成物只在这里定义一次**：「要不要重装」的比较与拷贝后的对齐（`_prune`）读同一份。
+# 两边各写一份时，比较要求逐文件相同、拷贝却只增不删 —— 旧版装过、新版删掉的文件让比较永远不等
+# （2026-10-28 真机：1.0.0 的 `payload/share/types.tsv`，每次重跑都停服务重装）。
+# 「源目录:代码根目录」；生成物是安装器在 share/ 里写出来、源码树里没有的文件。
+TREES="payload/bin:bin payload/lib:lib payload/gateway:gateway payload/share:share payload:payload deployer:deployer"
+SHARE_GENERATED="constants.env caps.json"
 _up_to_date() {
-  local d f
+  local t f x gen=""
   [ "$FORCE" = 0 ] && [ "$SRC" != "$CODE_ROOT" ] && [ -x "$CODE_ROOT/bin/mlx" ] || return 1
-  for d in bin lib gateway; do
-    diff -rq -x .gitkeep -x __pycache__ "$SRC/payload/$d" "$CODE_ROOT/$d" >/dev/null 2>&1 || return 1
+  for f in $SHARE_GENERATED; do gen="$gen -x $f"; done
+  for t in $TREES; do
+    x=""; [ "${t#*:}" = share ] && x=$gen
+    # shellcheck disable=SC2086  # $x 是有意分词的选项列表
+    diff -rq -x .gitkeep -x __pycache__ $x "$SRC/${t%%:*}" "$CODE_ROOT/${t#*:}" >/dev/null 2>&1 || return 1
   done
-  diff -rq -x .gitkeep -x __pycache__ -x constants.env -x caps.json "$SRC/payload/share" "$CODE_ROOT/share" >/dev/null 2>&1 || return 1
-  diff -rq -x .gitkeep -x __pycache__ "$SRC/payload" "$CODE_ROOT/payload" >/dev/null 2>&1 || return 1
-  diff -rq -x .gitkeep "$SRC/deployer" "$CODE_ROOT/deployer" >/dev/null 2>&1 || return 1
   [ "$(cat "$CODE_ROOT/share/constants.env" 2>/dev/null)" = "$CONSTANTS" ] || return 1
   for f in $RC_FILES; do grep -qxF "$PATH_LINE" "$f" 2>/dev/null || return 1; done
   CHECK_OUT=$(MLX_SHARE_ROOT="$CODE_ROOT/share" "$CODE_ROOT/bin/mlx" check 2>&1) || return 1
@@ -217,13 +224,6 @@ cp -R "$SRC/payload/bin/." "$CODE_ROOT/bin/"
 cp -R "$SRC/payload/lib/." "$CODE_ROOT/lib/"
 cp -R "$SRC/payload/gateway/." "$CODE_ROOT/gateway/"
 cp -R "$SRC/payload/share/." "$CODE_ROOT/share/"
-# **退役文件**（spec §6.4）：`cp -R` 只增不删，旧版装过的表会一直躺在 share/ 里，
-# 而卸载器按**本版** manifest 删文件，永远扫不到它们。不进 manifest ——
-# manifest 是本版产物清单，退役文件恰恰不是。
-RETIRED=(share/types.tsv)
-for _r in "${RETIRED[@]}"; do
-  rm -f "$CODE_ROOT/$_r"
-done
 # 部署器与载荷副本进代码根（R-DEPLOY-37）：
 # · 没有 deployer/ ⇒ 源码树一删，用户手上只剩一堆无法收敛的文件
 # · 没有 payload/  ⇒ `mlx install` 找不到重装的源（install.sh 用 $0/.. 定位载荷，
@@ -239,6 +239,30 @@ if [ "$SRC" != "$CODE_ROOT" ]; then
 else
   say "   · 源即目标（自升级），跳过 deployer/payload 自拷"
 fi
+# **退役文件**（spec §6.4）：`cp -R` 只增不删，旧版装过、本版删掉的文件会一直留着 —— 比较永远不等、
+# 卸载器按**本版** manifest 删也扫不到它们。此前用手写的退役清单补，清单只写了 `share/types.tsv`，
+# 漏了同一个文件在 `payload/` 下的副本。改为按源码对齐：受管树里源码没有的文件逐个删掉。
+# 逐文件 `rm -f` + 只收源码里也没有的空目录，不递归删（INV-08）；路径都由 `$CODE_ROOT/<受管树>` 拼出。
+_prune() {
+  local src=$1 dst=$2 rel d k
+  [ -d "$dst" ] || return 0
+  ( cd "$dst" && find . -type f ! -name .gitkeep ) | while IFS= read -r rel; do
+    rel=${rel#./}
+    if [ "$dst" = "$CODE_ROOT/share" ]; then
+      for k in $SHARE_GENERATED; do [ "$rel" = "$k" ] && continue 2; done
+    fi
+    case "/$rel" in            # 源码目录还在时，它的 __pycache__ 是 Python 自己的缓存，不碰
+      */__pycache__/*) d=${rel%__pycache__/*}; [ -d "$src/$d" ] && continue ;;
+    esac
+    [ -e "$src/$rel" ] || rm -f "$dst/$rel"
+  done
+  ( cd "$dst" && find . -mindepth 1 -depth -type d ) | while IFS= read -r rel; do
+    rel=${rel#./}
+    case "/$rel" in */__pycache__) [ -d "$src/${rel%__pycache__}" ] && continue ;; esac
+    [ -d "$src/$rel" ] || rmdir "$dst/$rel" 2>/dev/null || true
+  done
+}
+for _t in $TREES; do _prune "$SRC/${_t%%:*}" "$CODE_ROOT/${_t#*:}"; done
 chmod +x "$CODE_ROOT/deployer"/*.sh "$CODE_ROOT/payload/bin/mlx"
 find "$CODE_ROOT" -name .gitkeep -delete
 chmod +x "$CODE_ROOT/bin/mlx"

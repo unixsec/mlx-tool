@@ -83,6 +83,42 @@ def test_rerun_reinstalls_when_something_changed(repo, installed, tmp_path, chan
         assert (tmp_path / "code" / ".venv" / "bin" / "python3").exists()
 
 
+def test_upgrade_drops_files_the_new_version_no_longer_ships(repo, installed, tmp_path):
+    """升级的机器上有**旧版装过、新版删掉**的文件 —— 新装的机器永远造不出这种状态。
+
+    2026-10-28 真机：1.0.0 留下的 `payload/share/types.tsv` 让「没变就跳过」永远不成立，
+    每次重跑都停服务重装；卸载器只按本版 manifest 删，`share/`、`lib/` 里的残留也删不掉。
+    退役清单只写了 `share/types.tsv` 一处，漏了它在 `payload/` 下的副本。
+    这里不照任何清单放：代码根里**每一棵**受管树（`.venv` 除外）都种一个残留，含一层嵌套目录。
+    """
+    code = tmp_path / "code"
+    trees = sorted(p for p in code.iterdir() if p.is_dir() and p.name != ".venv")
+    assert {t.name for t in trees} >= {"bin", "lib", "gateway", "share", "payload", "deployer"}, trees
+    stale = []
+    for t in trees:
+        stale += [t / "retired_by_upgrade.txt", t / "retired_pkg" / "old.py",
+                  t / "retired_pkg" / "__pycache__" / "old.cpython-314.pyc"]
+    stale.append(code / "payload" / "share" / "types.tsv")              # 真机上的那一个
+    for f in stale:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("1.0.0\n")
+
+    r = _run(repo, installed)
+    assert r.returncode == 0 and _reinstalled(r), r.stderr[-600:]
+    left = [str(f.relative_to(code)) for f in stale if f.exists()]
+    assert not left, f"重装后旧版残留仍在：{left}"
+    assert not [t for t in trees if (t / "retired_pkg").exists()], "残留目录没收掉"
+    assert (code / "share" / "constants.env").exists() and (code / ".venv").is_dir(), "对齐删掉了生成物"
+
+    r = _run(repo, installed)
+    assert r.returncode == 0 and "已是当前版本" in r.stderr, f"清掉残留后仍不跳过：{r.stderr[-600:]}"
+
+    r = subprocess.run(["bash", str(repo / "deployer" / "uninstall.sh")], capture_output=True, text=True,
+                       timeout=60, check=False, env=dict(installed, MLX_ASSUME_YES="1"))
+    assert r.returncode == 0, f"升级过的机器卸载失败：{r.stderr[-600:]}"
+    assert not code.exists() or not any(code.rglob("*")), list(code.rglob("*"))[:10]
+
+
 def test_force_reinstalls_even_when_unchanged(repo, installed):
     r = _run(repo, installed, "--force")
     assert r.returncode == 0 and _reinstalled(r), r.stderr
