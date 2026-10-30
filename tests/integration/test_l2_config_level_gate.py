@@ -34,6 +34,8 @@ writable = sorted(k for k in defs if schema.writable(k, defs))
 
 def sample(k):
     d = defs[k]; dom = d["domain"].strip()
+    if k == "draft_model":
+        return "d1"        # 值是另一条记录：指向登记过、能当 drafter 的模型（set 会核对它）
     if d["type"] == "int":
         v = int(dom.partition("-")[0] or 0) + 1
         return v + 2 if v == dflt.get(k) else v
@@ -51,6 +53,7 @@ def disk():
     return out
 
 seed("m1", "org/m1", 8151, config="{}")
+seed("d1", "org/d1", 8152, config={"model_type": "qwen3", "architectures": ["Qwen3ForCausalLM"]})
 
 def takes_effect(k, v, form):
     if form == "global":

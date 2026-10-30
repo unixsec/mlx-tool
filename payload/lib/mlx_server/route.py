@@ -72,6 +72,21 @@ def key_fingerprint(value):
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
 
 
+def draft_refusal(model_id, vision, draft):
+    # type: (str, object, tuple) -> object
+    """drafter 的兼容性（U2 R0 R1）→ `Refused` 或 None。`decide` 与 `config set/validate` 共用 ——
+    此前只在 `decide` 里，`config` 对 `up` 必拒的 drafter 报 ok（2026-10-29 真机）。"""
+    draft_id, dfacts = draft
+    if dfacts is None or dfacts.get("vision") is None:
+        return Refused(9, "svc.draft_inspect_undeterminable", id=model_id, draft=draft_id)
+    if dfacts.get("attachment"):
+        return Refused(6, "svc.draft_unsupported", id=model_id, draft=draft_id,
+                       model_type=dfacts.get("model_type") or "?")
+    if vision:
+        return Refused(6, "svc.draft_backend_conflict", id=model_id, draft=draft_id)
+    return None
+
+
 def decide(model_id, facts, template, draft, cfg_values, packages, backends, size_mb):
     # type: (str, dict, object, object, dict, object, dict, object) -> object
     """→ `Route` 或 `Refused`。**按 S1 U1 U2 R0 R1 R2 R3 R4 P1 P2 P3 顺序短路。**"""
@@ -83,14 +98,9 @@ def decide(model_id, facts, template, draft, cfg_values, packages, backends, siz
         return Refused(9, "svc.inspect_undeterminable", id=model_id,
                        detail=facts.get("vision_src") or "")
     if draft is not None:
-        draft_id, dfacts = draft
-        if dfacts is None or dfacts.get("vision") is None:
-            return Refused(9, "svc.draft_inspect_undeterminable", id=model_id, draft=draft_id)
-        if dfacts.get("attachment"):
-            return Refused(6, "svc.draft_unsupported", id=model_id, draft=draft_id,
-                           model_type=dfacts.get("model_type") or "?")
-        if vision:
-            return Refused(6, "svc.draft_backend_conflict", id=model_id, draft=draft_id)
+        bad = draft_refusal(model_id, vision, draft)
+        if bad is not None:
+            return bad
         backend, rule = "mlx_lm", "R2"
     else:
         backend, rule = ("mlx_vlm", "R3") if vision else ("mlx_lm", "R4")

@@ -103,6 +103,21 @@ def _layers(ctx, target, deps=None, runtime=False):
     return layers
 
 
+def _draft_said(ctx, target, draft_id, modality):
+    # type: (object, str, str, object) -> str
+    """`up <target>` 对这个 drafter 的拒绝文案（与 `up` 同一个消息键），没有则空串。"""
+    from ..tables import open_tables
+    from .svc import draft_problem
+    bad = draft_problem(ctx, target, draft_id, modality)
+    if bad is None:
+        return ""
+    try:
+        tv = open_tables(ctx)
+        return tv.text(tv.msg(bad.msg_key), **bad.args)
+    except Exception:                                   # noqa: BLE001
+        return bad.msg_key
+
+
 def _level_mismatch(defs, key, per_model):
     # type: (dict, str, bool) -> object
     """`config set` / `import` 的 level 闸门：**用 `schema.build_layers` 同一个语义**。
@@ -210,6 +225,12 @@ def run(ctx, stack, inv, deps=None):
                 rows.append((key, "failed", f"{val}（来自 {src}）：{invalid[key]}"))
                 bad.append(key)
                 continue
+            if key == "draft_model" and val and inv.target and inv.target != "api":
+                why = _draft_said(ctx, inv.target, str(val).strip(), cfg.values.get("modality"))
+                if why:
+                    rows.append((key, "failed", f"{val}（来自 {src}）：{why}"))
+                    bad.append(key)
+                    continue
             rows.append((key, "ok", f"{val}（来自 {src}）"))
         payload = {"kind": "checks", "rows": rows, "failed": bad,
                    "undeterminable": []}
@@ -413,6 +434,15 @@ def run(ctx, stack, inv, deps=None):
         for r in store.load(ctx, store.MODELS).records:
             if r.id != inv.target and store.model_port(r) == int(val):
                 return Refused(7, "model.uniqueness", port=val, holder=r.id)
+    if per_model and key == "draft_model" and val:
+        # drafter 是另一条记录：`up` 必拒的（rc 6）当场拒、不落盘；判不出的（rc 9）不拦，
+        # 留给 `up` —— 那要看权重，set 不该因为探测不确定而拒绝写配置。
+        from .svc import draft_problem
+        modality = schema.effective(inv.target, _layers(ctx, inv.target, deps),
+                                    defaults=_factory(ctx, deps)).values.get("modality")
+        bad = draft_problem(ctx, inv.target, str(val).strip(), modality)
+        if bad is not None and bad.code == 6:
+            return bad
     if not per_model:
         store.commit(ctx, store.SETTINGS, store.SettingsTx({key: val}), stack)
         scope = "global"

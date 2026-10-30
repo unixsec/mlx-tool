@@ -167,19 +167,52 @@ def _v_weights(state, inv, deps):
     draft_id = (state.get("cfg_draft") or "").strip()
     if not draft_id:
         return None
-    if draft_id == inv.target:
-        return Refused(6, "svc.draft_is_self", id=inv.target)
-    drec = store.load(state["ctx"], store.MODELS).by_id(draft_id)
-    if drec is None:
-        return Refused(6, "svc.draft_not_found", id=inv.target, draft=draft_id)
-    dr = weights.resolve(state["ctx"], drec.user.get("repo", ""),
-                         drec.machine.get("revision"))
-    if is_unknown(dr) or not dr.value:
-        return Refused(6, "svc.draft_weights_missing", id=inv.target,
-                       draft=draft_id, repo=drec.user.get("repo", ""))
-    state["draft_path"] = dr.value["path"]
+    bad, drec, dpath = _draft_lookup(state["ctx"], inv.target, draft_id)
+    if bad is not None:
+        return bad
+    state["draft_path"] = dpath
     state["draft_record"] = drec
     return None
+
+
+def _draft_lookup(ctx, target, draft_id):
+    """drafter 这条记录本身的闸门（自指 / 未登记 / 权重不在盘）→ (Refused 或 None, 记录, 路径)。"""
+    if draft_id == target:
+        return Refused(6, "svc.draft_is_self", id=target), None, None
+    drec = store.load(ctx, store.MODELS).by_id(draft_id)
+    if drec is None:
+        return Refused(6, "svc.draft_not_found", id=target, draft=draft_id), None, None
+    dr = weights.resolve(ctx, drec.user.get("repo", ""), drec.machine.get("revision"))
+    if is_unknown(dr) or not dr.value:
+        return (Refused(6, "svc.draft_weights_missing", id=target, draft=draft_id,
+                        repo=drec.user.get("repo", "")), drec, None)
+    return None, drec, dr.value["path"]
+
+
+def draft_problem(ctx, target, draft_id, modality):
+    """`up <target>` 会因这个 drafter 给出的拒绝，没有则 None。供 `config set/validate` 用。
+
+    与 `up` 同一份实现：记录闸门走 `_draft_lookup`（`_v_weights` 也调它），兼容性走
+    `route.draft_refusal`（`route.decide` 也调它）。主模型自己的权重或 config 判不出时返回 None ——
+    `up` 另有一条与本键无关的拒绝。
+    """
+    from .. import route
+    from ..tables import open_tables
+    bad, _drec, dpath = _draft_lookup(ctx, target, draft_id)
+    if bad is not None:
+        return bad
+    rec = store.load(ctx, store.MODELS).by_id(target)
+    got = None if rec is None else weights.resolve(ctx, rec.user.get("repo", ""),
+                                                    rec.machine.get("revision"))
+    if got is None or is_unknown(got) or not got.value:
+        return None
+    attach = [r["model_type"] for r in open_tables(ctx).drafters()]
+    facts = weights.inspect_config(got.value["path"], attach)
+    if is_unknown(facts):
+        return None
+    d = weights.inspect_config(dpath, attach)
+    return route.draft_refusal(target, route.effective_vision(facts.value.get("vision"), modality),
+                               (draft_id, None if is_unknown(d) else d.value))
 
 
 def _v_config(state, inv, deps):
@@ -187,7 +220,7 @@ def _v_config(state, inv, deps):
 
     此前 cfg 在 `entry._spec` 里现造：user 层按硬编码 `DEFAULTS` 过滤（per-model
     `modality` 被静默丢掉），也没有 settings 层（`config set fit.*` 从不生效）。
-    层序（低→高）：出厂默认 < machine（settings ∪ 注册表端口）< user（记录 user 段）< cli。
+    层序（低→高）：出厂默认 < machine（settings ∪ 注册表端口）< user（记录 user 段）< install < env。
     """
     import os
 
