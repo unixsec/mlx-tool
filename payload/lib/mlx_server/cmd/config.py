@@ -307,6 +307,16 @@ def run(ctx, stack, inv, deps=None):
                     rejected.append({"key": key, "why": f"值非法（{bad}）"})
                 else:
                     plan.append(key)
+        if plan:
+            # 跨键约束按导入后的生效值判；冲突的那一组键整体拒，不逐条落一半
+            after = dict(schema.effective("api", _layers(ctx, None, deps), defaults=_factory(ctx, deps)).values)
+            after.update({k: schema.coerce(k, incoming[k], defs) for k in plan})
+            cross = schema.cross_errors(after)
+            if cross:
+                involved = {"api.inflight_max_mb", "api.media_max_mb"} & set(plan)
+                plan = [k for k in plan if k not in involved]
+                for k in sorted(involved):
+                    rejected.append({"key": k, "why": f"值非法（{next(iter(cross.values()))}）"})
         if inv.dry_run:
             return Done({"kind": "config_import", "planned": plan,
                          "rejected": rejected, "applied": [], "dry_run": True})
@@ -421,6 +431,14 @@ def run(ctx, stack, inv, deps=None):
     bad = schema.check_domain(key, val, defs) if defs else None
     if bad:
         return Refused(6, "config.invalid", key=key, kind=bad)
+    # 跨键约束：按写入后的全局生效值判（只对全局层的键；它们都是 level=global）
+    if inv.target == key:
+        after = dict(schema.effective("api", _layers(ctx, None, deps), defaults=_factory(ctx, deps)).values)
+        after[key] = val
+        cross = schema.cross_errors(after)
+        if cross:
+            k0 = sorted(cross)[0]
+            return Refused(6, "config.invalid", key=k0, kind=cross[k0])
     # **目标存在性前置到任何 commit 之前**。放在 else 分支里虽然语义上也是
     # 「零落地」，但 `L0·result-02` 的判据是 AST 行号（构造点 > 资源创建点即红），
     # 守卫宁可误红也不能漏 —— 前置之后判据过、语义也对。

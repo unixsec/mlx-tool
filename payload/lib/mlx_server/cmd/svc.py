@@ -662,10 +662,20 @@ def run(ctx, stack, inv, deps):
     # 而 caps.drift 仍留在执行段（BCR-R-27），两条同真。
     if inv.dry_run:
         from .. import schema as _schema
+        guess = deps.get("gateway_interpreter_guess")
+        interp_note = None
+        if inv.target == "api" and guess is not None:
+            # 真启动时才实测 venv 解释器能不能 import 网关；这里只按文件预测，并标明是预测
+            from .. import backendarg as _ba
+            g = guess()
+            spec = _ba.with_interpreter(spec, g["path"])
+            interp_note = g["source"]
         pay = {"argv": spec.argv, "sources": spec.sources,
                "env": {k: (_schema.MASK if k in spec.secret_env and val else val)
                        for k, val in sorted(spec.env.items())},
                "dropped": state.get("dropped") or []}
+        if interp_note is not None:
+            pay["interpreter_predicted"] = interp_note
         if state.get("route") is not None:
             pay["route"] = state["route"].to_dict()
             pay["ready_timeout_sec"] = ready_timeout(state["route"])

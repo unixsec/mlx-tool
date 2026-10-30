@@ -366,6 +366,7 @@ def build_deps(ctx):
         # `up api` 执行段首：端口上的外来监听者（spec D24）与网关解释器（D20）
         "foreign_listeners": lambda port: supervisor.foreign_listeners(ctx, port),
         "gateway_interpreter": lambda: gateway_interpreter(ctx, venv_py),
+        "gateway_interpreter_guess": lambda: predict_gateway_interpreter(venv_py),
         # `chat` 的多轮读取源与输出。**提示走 stderr、回复走 stdout** ——
         # 台账给 chat 的主产物是「逐字节只含回复正文」，把「你 > 」混进去
         # 会让 `mlx chat x > out.txt` 的文件里夹着提示符。
@@ -554,6 +555,24 @@ _GATEWAY_PROBE = (
     "import gateway.app, gateway.server\n"
     "print(json.dumps({'version': sys.version.split()[0],\n"
     "                  'tls_max': 'TLSv1.3' if getattr(ssl, 'HAS_TLSv1_3', False) else 'TLSv1.2'}))\n")
+
+
+def predict_gateway_interpreter(venv_python):
+    # type: (object) -> dict
+    """`up api --dry-run` 用的**预测**：只看文件、不起子进程（dry-run 零外部命令）。
+    venv 的 python 可执行、`pyvenv.cfg` 的 `home` 目录存在 ⇒ venv；否则系统解释器。
+    真启动仍由 `gateway_interpreter` 实测。"""
+    if venv_python and os.access(venv_python, os.X_OK):
+        cfg = os.path.join(os.path.dirname(os.path.dirname(venv_python)), "pyvenv.cfg")
+        try:
+            with open(cfg, encoding="utf-8") as fh:
+                for line in fh:
+                    k, _, v = line.partition("=")
+                    if k.strip() == "home" and os.path.isdir(v.strip()):
+                        return {"path": venv_python, "source": "venv"}
+        except OSError:
+            pass
+    return {"path": "/usr/bin/python3", "source": "system"}
 
 
 def gateway_interpreter(ctx, venv_python=None, timeout_sec=10.0):

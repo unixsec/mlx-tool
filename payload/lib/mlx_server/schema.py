@@ -123,6 +123,22 @@ def coerce(key, raw, defs=None):
     return raw
 
 
+def cross_errors(values):
+    # type: (dict) -> dict
+    """**跨键**约束 → `{键: 原因}`。各键自己的值域都合法、合在一起却必然失败的组合。
+
+    `api.inflight_max_mb` ≤ `api.media_max_mb`：每次代取都先按 media_max_mb 整额预留在途额度，
+    预留永远失败，所有代取（本机来源也一样）都回 503，看上去像网关一直很忙。
+    出厂值也参与判定（另一键改了，出厂值这一侧就可能不再成立）。
+    """
+    out = {}
+    inflight, media = values.get("api.inflight_max_mb"), values.get("api.media_max_mb")
+    if isinstance(inflight, int) and isinstance(media, int) and inflight <= media:
+        out["api.inflight_max_mb"] = (f"必须大于 api.media_max_mb（{media}）：每次代取都先按它整额预留，"
+                                      f"{inflight} 装不下一次代取")
+    return out
+
+
 def domain_errors(cfg, defs):
     # type: (object, dict) -> dict
     """合成后配置的**值域判定，全项目唯一实现点** → `{键: 原因}`（空 ⇒ 全部合法）。
@@ -139,6 +155,8 @@ def domain_errors(cfg, defs):
         bad = check_domain(k, cfg.values[k], defs)
         if bad:
             out[k] = bad
+    for k, bad in cross_errors(cfg.values).items():
+        out.setdefault(k, bad)
     return out
 
 

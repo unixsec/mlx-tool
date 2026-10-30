@@ -86,14 +86,21 @@ def main(argv):
         return 6
     backend_key = os.environ.get("MLX_BACKEND_API_KEY") or None
 
+    inflight_mb = _int_env("MLX_GATEWAY_INFLIGHT_MAX_MB", 2048)
+    media_mb = _int_env("MLX_GATEWAY_MEDIA_MAX_MB", 128)
+    if inflight_mb <= media_mb:
+        # 绕过 mlx 直接起网关、或环境变量覆盖了配置时的兜底：这个组合下所有代取必然 503
+        log_event("error", "config_invalid",
+                  detail=f"MLX_GATEWAY_INFLIGHT_MAX_MB={inflight_mb} 必须大于 MLX_GATEWAY_MEDIA_MAX_MB={media_mb}")
+        return 6
     nets = peers.NetView(peers.command_loader(c.bins),
                          allow_cidrs=os.environ.get("MLX_GATEWAY_ALLOW_CIDRS", ""),
                          allow_ifaces=os.environ.get("MLX_GATEWAY_ALLOW_IFACES", ""),
                          on_change=make_reporter(facade, c))
     gw = Gateway(c, facade, bind_addr=bind, token=token, backend_key=backend_key, nets=nets,
-                 limits={"media_max_mb": _int_env("MLX_GATEWAY_MEDIA_MAX_MB", 128),
+                 limits={"media_max_mb": media_mb,
                          "media_max_parts": _int_env("MLX_GATEWAY_MEDIA_MAX_PARTS", 32),
-                         "inflight_max_mb": _int_env("MLX_GATEWAY_INFLIGHT_MAX_MB", 2048)})
+                         "inflight_max_mb": inflight_mb})
 
     # 进程配置全部来自 `backendarg.spec("api")` 设的环境变量（spec §4.8）；缺失或非法用出厂值并记日志
     max_body_mb = _int_env("MLX_GATEWAY_MAX_BODY_MB", DEFAULT_MAX_BODY_MB)

@@ -34,6 +34,8 @@ writable = sorted(k for k in defs if schema.writable(k, defs))
 
 def sample(k):
     d = defs[k]; dom = d["domain"].strip()
+    if k == "api.inflight_max_mb":
+        return 4096        # 跨键约束：必须大于 api.media_max_mb（出厂 128）
     if k == "draft_model":
         return "d1"        # 值是另一条记录：指向登记过、能当 drafter 的模型（set 会核对它）
     if d["type"] == "int":

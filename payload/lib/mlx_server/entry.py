@@ -233,6 +233,9 @@ def main(argv, out=None, err=None):
                         else f"并发上限 {rt.get('max_concurrency')}")
                 err.write(f"  就绪  {rt['ready']} · 最多等 {pay.get('ready_timeout_sec')} 秒"
                           f" · {conc}\n")
+            if pay.get("interpreter_predicted"):
+                err.write(f"  解释器 {pay['argv'][0]}（按文件预测为 {pay['interpreter_predicted']}，"
+                          "启动时实测：venv 解释器 import 不了网关就回落系统解释器）\n")
             if pay.get("dropped"):
                 err.write("  已退役的键：" + "、".join(pay["dropped"])
                           + "（`mlx model repair` 清除）\n")
