@@ -419,7 +419,7 @@ def test_dry_run_ownership_equals_implementation(payload: Path):
 
 # ── `--dry-run` 零状态变化：按**类**守（verbs/cli 表派生，非手写清单）──────────
 #
-# 坏样本（本轮真实发生）：`mlx down --all --dry-run` 把全部服务真的停了 ——
+# 坏样本（真实发生过）：`mlx down --all --dry-run` 把全部服务真的停了 ——
 # `svc.run` 的 `--all` 分支调 `_collect(...)` 时漏了 `dry_run=`，而单目标与
 # 多目标两条分支都传了。此前的守卫（上面的 `test_gate1_*`）都只驱动
 # `up <单目标>`，于是「`--dry-run` 在某个**目标形态**上失效」这一整类没有求值面。

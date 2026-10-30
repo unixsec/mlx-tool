@@ -14,11 +14,9 @@ import pytest
 
 # **产品根** —— `payload/` `deployer/` `tests/` 的共同父目录，
 # 也就是 `tests/` 的上一级。**不是仓库根**，两者不一定相同：
-#   · 扁平布局（发布仓库）：产品根 == 仓库根
-#   · `v7/` 布局（开发仓库）：产品根 == `<仓库根>/v7`
-# 按「相对 tests 的位置」算而不是按「仓库根往下数」算，两种布局下
-# 同一份测试代码都对 —— 否则发布仓库一扁平化，测试就要改一遍，
-# 两边从此分叉。
+# 本仓库里两者相同；产品根嵌在更大的工作区里时不同。
+# 按「相对 tests 的位置」算而不是按「仓库根往下数」算，两种情况下
+# 同一份测试代码都对。
 REPO = Path(__file__).resolve().parents[1]
 SYS_PY = "/usr/bin/python3"
 
@@ -44,7 +42,7 @@ def sys_py() -> str:
 def _never_touch_real_rc(tmp_path_factory, monkeypatch):
     """**任何测试都不得写到真实的 shell rc。**
 
-    坏样本（本轮真实发生）：`cli` fixture 调 `install.sh` 时没设 `MLX_RC_FILES`，
+    坏样本（真实发生过）：`cli` fixture 调 `install.sh` 时没设 `MLX_RC_FILES`，
     安装器于是用默认值 `$HOME/.zshrc` —— 把一行指向 pytest 临时目录的 PATH
     写进了用户的真实配置文件。用户第二天才发现，而那时临时目录早已不存在。
 

@@ -128,7 +128,7 @@ def run(ctx, stack, inv, deps=None):
         # `dry-run` 放进 `flags`）。此前这里读 `inv.args.get("dry_run")` ——
         # 恒假，于是预览分支**不可达**：用户跑 `mlx model gc --dry-run`
         # 想先看看会回收什么，实际把全部孤儿权重移进了回收站，
-        # 还打印「实际回收 3.0 MB」。这是本轮最坏的一条：预览动作真的删数据。
+        # 还打印「实际回收 3.0 MB」。这是最坏的一类：预览动作真的删数据。
         if inv.dry_run:
             return Done({"kind": "gc", "reclaimable_mb": reclaimable_mb,
                          "reclaimed_mb": 0, "targets": [o["repo"] for o in orphans],

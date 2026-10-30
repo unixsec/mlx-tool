@@ -213,7 +213,7 @@ print(json.dumps(up("noventv")))
 
 
 def test_r2_real_up_success_payload_keeps_rule_for_serial_display(payload, sys_py):
-    """coverage gap（Task 8 修复轮 1）：R2「串行」显示此前只在 `--dry-run` 路径上
+    """覆盖缺口：R2「串行」显示此前只在 `--dry-run` 路径上
     被断言过（`tests/e2e/test_route_r2_serial_display_e2e.py`），唯一间接相关的
     非 dry-run 成功行用例（`test_l2_display.py`）手造了一个 R3 payload——丢了
     `rule` 字段对 R3 是字节不变的（`_concurrency_display` 只在 `rule == "R2"`

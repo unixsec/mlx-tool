@@ -61,7 +61,7 @@ def test_repair_clears_old_fields_and_retired_keys_only(payload, sys_py):
         "第二次 repair 应无事可做（幂等）"
 
 
-# Fix round 1（controller ruling）：`Failed.committed` 只能列**失败点之前已经
+# `Failed.committed` 只能列**失败点之前已经
 # 落地**的资源，绝不能列刚失败的那一个——`atomic.replace` 全有全无，抛异常时
 # 临时文件已被清掉，那次写什么都没落地。用一个假 `store.commit` 在第 N 次调用
 # 时抛异常，验证 `committed` 既不含失败的那个资源、又含它之前真落地的资源。
@@ -128,7 +128,7 @@ def test_repair_failed_committed_includes_a_and_b_when_settings_write_fails(payl
         "committed 里出现了刚失败、其实没落地的 settings.json"
 
 
-# `store.rebuild_machine` 自身的循环里（controller ruling，C3-2）：此前某条记录
+# `store.rebuild_machine` 自身的循环里（C3-2）：此前某条记录
 # 中途 commit 失败时一律 `committed=[]`，即便循环里更早的记录已经真的落地——
 # 与上面 `repair()` 整体编排里同一类缺陷（Fix round 1）同源，但发生在
 # `rebuild_machine` 自己的循环内部，PROG_FAIL 那个世界只有一条记录需要

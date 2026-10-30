@@ -100,7 +100,7 @@ def build_error(status, err_type, message=None, request_id=None):
     """网关自身错误的**唯一构造点**。**签名里没有 body 入参** ——
 
     有了它，上游的错误体就能顺着传出去（`X-T2-17-b` 的坏样本）。上游 4xx 的透传与净化
-    走 `upstream_error`（Task 6），不经这里。
+    走 `upstream_error`，不经这里。
     """
     body = {"error": {"message": message or err_type, "type": err_type}}
     if request_id:

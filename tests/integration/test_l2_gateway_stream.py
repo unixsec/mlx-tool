@@ -244,7 +244,7 @@ def test_log_event_reaches_redirected_file_immediately(payload, sys_py):
     assert got == {"info": True, "warn": True}, got
 
 
-# ── 计划 3 Task 8 携带裁决的补充断言（控制器 carry 注记 C 段）─────────────────────────────
+# ── 流式路径的补充断言 ──────────────────────────────
 EXTRA_PROG = r"""
 import base64, http.client, io, json, os, select, socket, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

@@ -91,7 +91,7 @@ def lock(name, stack, ctx, timeout_sec=10, poll_sec=0.05, owns=None):
     handle = stack.push(lambda: _force_release(lockdir)) if stack else None
     # ── 屏蔽窗口（`G-RES-09(b)` 的三个调用点之一）─────────────────
     # 覆盖「写 holder → 让出临界区 → 释放锁」整段。中间被 TERM 打断的后果是
-    # **锁目录留在盘上而持有者已经不在** —— 陈旧锁清理能收拾它（本轮已接线），
+    # **锁目录留在盘上而持有者已经不在** —— 陈旧锁清理能收拾它（已接线），
     # 但下一条写命令要先等满 10 秒才轮到清理，那段等待是白等的。
     # 更坏的一半：`atomic.replace` 的临时文件与 rename 之间被截断，
     # 留下一个半写的 `.tmp`。

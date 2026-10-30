@@ -110,7 +110,7 @@ def test_l3_uninstall_refuses_when_service_cannot_be_stopped(installed):
     **测试把缺陷固化成了期望。** 主路径（在跑 → 自动停 → 卸载成功）
     由 test_l3_uninstall_after_running_service 覆盖。
 
-    构造真正会被否决的形态需要**两个**进程，这一点容易读错（我读错过一次）：
+    构造真正会被否决的形态需要**两个**进程，这一点容易读错：
     「活着但端口没 bind」**不是**否决场景 —— 那是就绪超时的最常见形态，
     设计要求它**必须能被终止**（`may_kill` 的注释，E-7 逐字复现），
     所以拿一个不占端口的 sleep 当靶子只会看着它被正常杀掉。
@@ -206,7 +206,7 @@ def test_l3_install_surface_subset_of_manifest(installed):
 def test_l3_uninstall_confirm_path_expands_variables(installed):
     """**不设 `MLX_ASSUME_YES` 的交互确认路径** —— 此前零测试覆盖。
 
-    坏样本（本轮真实发生）：确认提示写作 `say "将删除：$CODE_ROOT（代码根）"`，
+    坏样本（真实发生过）：确认提示写作 `say "将删除：$CODE_ROOT（代码根）"`，
     而 bash 在这里会把全角括号的首字节并进变量名 ⇒ `set -u` 下
     `CODE_ROOT\\xef: unbound variable` ⇒ 用户**手动**卸载时第一行就崩。
     这三行只在 `MLX_ASSUME_YES != 1` 时执行，而所有既有测试都设了它
@@ -414,7 +414,7 @@ def test_l3_route_follows_config_on_installed_product(installed):
 
 
 def test_l3_keys_never_leak_into_files_or_output(installed):
-    """spec §8.3「密钥 · 泄漏」的计划 1 子集：跑遍会碰密钥的命令，再扫三根与全部输出。"""
+    """spec §8.3「密钥 · 泄漏」的子集：跑遍会碰密钥的命令，再扫三根与全部输出。"""
     code_root, data_root, env = installed
     settings = data_root / "settings.json"
     s = json.loads(settings.read_text())
@@ -428,7 +428,7 @@ def test_l3_keys_never_leak_into_files_or_output(installed):
         r = _mlx(code_root, env, *argv)
         if argv == ("up", "api", "--dry-run"):
             # 此前这一步的 rc 没人断言——密钥、settings 都齐全时它必须 rc 0；
-            # 不查 rc 就发现不了这一步本身悄悄坏掉（controller ruling，Task 11）。
+            # 不查 rc 就发现不了这一步本身悄悄坏掉。
             assert r.returncode == 0, f"`up api --dry-run` rc={r.returncode}：{r.stdout + r.stderr}"
         if argv == ("config", "get", "api.token"):
             # 此前这里跑的是 `config get --key=api.token`——缺位置参数，rc 2，输出只有用法，

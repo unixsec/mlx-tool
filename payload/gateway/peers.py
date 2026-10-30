@@ -229,7 +229,7 @@ class NetView:
     但也不能就此不管：本类记 `_report_pending`，`tick()` 在不到重算周期时若发现
     上一份还没送达，会**只重发那一份快照**（不跑 loader、不动 `_last_try`）——
     后台刷新线程每 `refresh_sec`（5 s）调一次 `tick()`，于是重发的粒度是 5 s，
-    不必等满 30 s 的重算周期（Task 11 的 L3 只等 15 s）。
+    不必等满 30 s 的重算周期（对应的 L3 用例只等 15 s）。
 
     **送达经单独一把锁串行化**（`_deliver_lock`，跟保护状态的 `_lock`分开）：
     `refresh()` 收尾时的送达、`tick()` 的补发送达，谁拿到 `_deliver_lock` 谁才能

@@ -32,7 +32,7 @@ from .weights import _dir_bytes
 
 # ── spawn ──────────────────────────────────────────────────────────
 
-# 子进程不得继承 shell 里的这两把密钥（评审 I-4；控制器裁决 P2-pre B1）：
+# 子进程不得继承 shell 里的这两把密钥（评审 I-4）：
 # `backend.api_key` 配置为空、而开发者 shell 导出了 `MLX_BACKEND_API_KEY` 时，
 # 若子进程仍从 `os.environ` 继承到它，网关（以及它拉起的 mlx_lm / mlx_vlm
 # 后端）就会在密钥「未声明」的情况下仍然工作 —— 运行记录写

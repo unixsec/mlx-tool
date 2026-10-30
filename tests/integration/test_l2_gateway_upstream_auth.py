@@ -2,7 +2,7 @@
 
 坏样本（评审）：`server.py` 流式转发附加 `upstream_headers` 的那行参数删掉后
 全套测试仍绿——没有任何用例真的用真 HTTP 发一次**流式**请求去看上游收到的
-`Authorization` 头。计划 3 会让所有上游调用都走流式，这条缝必须补上。
+`Authorization` 头。上游调用一律走流式，这条缝必须补上。
 
 起一个真上游（`ThreadingHTTPServer`）、一个真网关（`make_handler`），
 经真 HTTP 分别发流式与非流式请求，断言：
@@ -152,7 +152,7 @@ def test_gateway_attaches_backend_auth_upstream_only_streaming_and_nonstreaming(
     for auth in txt_auths:
         assert auth is None, f"txt（backend_auth=False）不该带鉴权头，实得 {auth!r}"
 
-    # **上游一律流式**（计划 3 / spec D22）：四种组合上游收到的 `stream` 都是 true。
+    # **上游一律流式**（spec D22）：四种组合上游收到的 `stream` 都是 true。
     for probe, rec in by_probe.items():
         assert rec["stream"] is True, f"{probe}：上游应一律收到流式请求：{rec}"
     # **确实走了两条不同的网关路径**（C9）：上游请求已经一样了，区分只剩回给客户端的形状——

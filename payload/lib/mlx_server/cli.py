@@ -71,8 +71,7 @@ def usage(verb_rows, tables=None):
     # **带值的 flag 一律 `--k=v`**（解析器只认这一种，见 337-341 的缺值分支）。
     # 这句话此前全工具没有一个地方说过：顶层 help、man 页的用法行、未知参数
     # 提示三处都印裸 `--flag`，只有 `mlx help <命令>` 的参数段隐含着形态。
-    # 于是用户按 GNU 习惯敲 `--repo x` 撞一次 rc 2 才学会 ——
-    # 2026-09-02 Alex 就是这样撞的，而那条命令还是我给他的。
+    # 于是用户按 GNU 习惯敲 `--repo x`，要撞一次 rc 2 才学会。
     lines += ["", "  带值的参数写成 --key=value（如 --repo=mlx-community/xxx）",
               "  mlx help <命令>   看单条详解"]
     return "\n".join(lines) + "\n"

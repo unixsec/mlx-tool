@@ -27,9 +27,9 @@ DATA_ROOT="${MLX_ROOT_DATA:-$HOME/.local/state/mlx_server}"
 WEIGHTS_ROOT="${MLX_ROOT_WEIGHTS:-$HOME/.local/share/mlx_models}"
 GATEWAY_PORT="${MLX_GATEWAY_PORT:-8080}"
 INSTANCE_ID="${MLX_INSTANCE_ID:-mlx}"
-# 标记串是 INSTANCE_ID 派生的**完整串**（T5 第 12 行 · G-RES-15）。
+# 标记串是 INSTANCE_ID 派生的**完整串**（G-RES-15）。
 # 这里是全项目唯一的构造点；写进 constants.env 后，所有读者（uninstall.sh /
-# ctx / ui）只读完整串，**禁止再拼接** —— v6 与 v7 共存时前缀匹配会让它们
+# ctx / ui）只读完整串，**禁止再拼接** —— 两个实例共存时前缀匹配会让它们
 # 互相误删，那是数据丢失路径。
 RC_BEGIN="# >>> mlx_server:${INSTANCE_ID} >>>"
 RC_END="# <<< mlx_server:${INSTANCE_ID} <<<"
@@ -190,11 +190,9 @@ fi
 # 必须在动任何盘之前、且 run/ 仍可读时执行。
 STOPPED=""
 if [ -x "$CODE_ROOT/bin/mlx" ] && [ -d "$DATA_ROOT/run" ]; then
-  # **先记下停的是谁**，装完要报出来。此前只停不记：用户（和我自己）
-  # 重装一次之后服务就没了，而安装器最后一行只说「完成」——
-  # 下一条 `mlx chat` 报「连不上」，没有任何线索指向这次重装。
-  # 2026-09-02 我自己踩了：验证通过后又部署一次，把 qwen38 停掉，
-  # 然后告诉 Alex「服务没有问题」。
+  # **先记下停的是谁**，装完要报出来。此前只停不记：重装一次之后服务就没了，
+  # 而安装器最后一行只说「完成」—— 下一条 `mlx chat` 报「连不上」，
+  # 没有任何线索指向这次重装。
   # 没有服务在跑时 `ls` 无匹配返回 1 —— 不兜住，pipefail + set -e 会让安装器在这里
   # 一行不打地 rc 1 退出（2026-10-26 真机重装踩到：`run/` 里只剩 `alias/`）。
   STOPPED=$({ ls "$DATA_ROOT/run"/*.json 2>/dev/null || true; } \

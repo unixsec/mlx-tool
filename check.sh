@@ -1,10 +1,9 @@
 #!/bin/bash
-# 提交前必跑。把「记得跑复检」变成一条命令（归档 checklist 第 8 条）。
+# 提交前必跑：ruff、pytest、最低版本解释器编译检查，一条命令跑完。
 set -uo pipefail
 cd "$(dirname "$0")"
-# **venv 自己找，不假设布局**。它可能在产品根（扁平仓库）或产品根的
-# 上一级（`v7/` 布局的开发仓库）。写死任一边，另一边就跑不了 ——
-# 2026-09-02 扁平化时踩过：改成 `$(pwd)` 之后源仓库的 pre-commit 当场断。
+# **venv 自己找，不假设布局**：先找产品根下的 `.venv`，再找上一级
+# （产品根嵌在更大的工作区里时）。
 VENV=""
 for _c in "$(pwd)/.venv" "$(cd .. && pwd)/.venv"; do
   [ -x "$_c/bin/python3" ] && { VENV="$_c/bin"; break; }

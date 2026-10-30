@@ -85,9 +85,8 @@ def spec(service, cfg, route):
             # `-u`：网关的 stdout 被 supervisor 重定向到 `logs/api.log`（普通文件），
             # 不加 `-u` 时 CPython 对非 tty 的 stdout 是块缓冲（8 KB）——`log_event`
             # 从不 flush，`down` 的 SIGTERM 默认处理器直接终止进程、不走 atexit，
-            # 缓冲区里的 `info`（含每条 http 访问事件）会原样丢失，泄漏扫描扫不到它们
-            # （Task 11 controller ruling OS1）。选在这里加而不是改 `log_event` 里
-            # flush：plan 3 Task 8 要重写 `log_event`，不在这提前占那处改动。
+            # 缓冲区里的 `info`（含每条 http 访问事件）会原样丢失，泄漏扫描扫不到它们。
+            # 选在这里加而不是在 `log_event` 里 flush：后者被所有事件共用，改动面更大。
             argv=("/usr/bin/python3", "-u", "-m", "gateway"),
             env=env, cwd_rel="", model_arg=None, self_id_expected=None,
             sources=dict(cfg.sources), secret_env=secret,

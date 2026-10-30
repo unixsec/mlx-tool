@@ -18,9 +18,9 @@ from cardinality import Cardinality  # noqa: E402
 
 
 # 设计文档的位置**随仓库而异**，而且它可能根本不在：
-#   · 开发仓库：`_local/design/v7/`（本地保留，不发布）
-#   · 历史布局：`docs/design/v7/`
-#   · 发布仓库：不存在 —— 那时本层整体 skip（见下面的 skipif）
+#   · 本地开发目录：`_local/design/v7/`（不发布）
+#   · 旧位置：`docs/design/v7/`
+#   · 公开仓库：不存在 —— 那时本层整体 skip（见下面的 skipif）
 # 逐个候选去找，别写死任何一个。
 def _find_design_docs():
     for d in Path(__file__).resolve().parents:
@@ -276,7 +276,7 @@ def test_ls_design_impl_modules_exist_in_arch_member_table():
 
 # ── 以下三条是「产物表 ↔ 设计 ↔ 实现」的对账。
 # 在两张表补齐列之前，它们**写在设计里却无从跑起** ——
-# 而我这两轮手工修的 20 多条缺陷里，至少 8 条本该由它们自动抓到。
+# 而此前手工修的 20 多条缺陷里，至少 8 条本该由它们自动抓到。
 
 def _product_verbs():
     import csv
@@ -367,7 +367,7 @@ def test_g_ssot_09_product_table_matches_design_ledger():
 def test_g_cli_03_code_literals_subset_of_registered():
     """**`G-CLI-03`**：实现中出现的退出码字面量 ⊆ 该动词登记的集合。
 
-    坏样本（本轮真实发生过两次）：`check` 返回 `Failed(3)/(4)` 而登记集合是
+    坏样本（真实发生过两次）：`check` 返回 `Failed(3)/(4)` 而登记集合是
     `{0,2,64,65}`；`mlx install` 会透传 70–74 而登记集合里没有。
     两次都是人眼在跑命令时偶然发现的 —— 这条守卫存在的意义就是不靠偶然。
     """
@@ -432,7 +432,7 @@ def _read_sites(src):
 
 
 @pytest.mark.parametrize("src,expect", [
-    # 字符串字面量里的子串 `args` 不是读点（计划 1 Task 8 为此拆过一行）
+    # 字符串字面量里的子串 `args` 不是读点（为此拆过一行）
     ('row = ("concurrency_args", v.get("max_concurrency", 8))', set()),
     ('x = my_flags.get("reveal")', set()),
     ('x = argsx.get("reveal")', set()),
@@ -492,8 +492,7 @@ def test_g_cli_01_flags_match_read_sites():
 def test_every_public_verb_has_a_man_page():
     """**每个 public 动词都要有详解**，且详解的每一段都有内容。
 
-    Alex 的要求：「mlx help 要对每条命令都进行解释用途，
-    类似 linux 里面的 man 命令输出结果一样有详细的命令使用介绍」。
+    需求：`mlx help` 要像 man 页一样，对每条命令给出用途与详细用法。
 
     这条守卫盯的是「新增动词却忘了写说明」——那会让 help 页只剩一行 summary，
     而用户看 help 正是因为他不知道这条命令干什么。
@@ -590,7 +589,7 @@ def test_g_res_11_config_reads_environ_only_in_ctx():
       ③ **网关进程自己的那一次** —— 独立进程，有自己的 `ctx` 构造。
 
     豁免集写成 `(文件, 理由)` 而不是一个文件名列表：**每一条都要说得出理由**，
-    否则它就是让守卫闭嘴的后门（本轮已经在 `G-CLI-01` 的排除表上踩过一次）。
+    否则它就是让守卫闭嘴的后门（已经在 `G-CLI-01` 的排除表上踩过一次）。
     """
     root = Path(__file__).resolve().parents[2] / "payload"
     exempt = {
@@ -654,7 +653,7 @@ _LAYER = {
 def test_g_dep_02_no_reverse_layer_edges():
     """**INV-14：import 图跨层只向下**（`G-DEP-02` 的双向差集）。
 
-    坏样本（本轮真实存在过五条）：`checks`(B)→`store`,`ports`(C)、
+    坏样本（真实存在过五条）：`checks`(B)→`store`,`ports`(C)、
     `checks`(B)→`cmd.caps`(D)、`runtime`(B)→`supervisor`(C)、
     `runtime`(B)→`cmd.caps`(D)、`cmd.meta`(D)→`cmd.caps`(D)。
 
@@ -827,7 +826,7 @@ def test_config_domain_comes_from_table_not_hardcoded():
          / "cmd" / "config.py")
     # **在 AST 上查**，不扫文本 —— 文档串里提到 `schema.DEFAULTS` 是说明，
     # `dict(schema.DEFAULTS)` 是兜底回落，两者都不是「拿它当配置域用」。
-    # 文本扫描把这三类混在一起，报的是假阳性（本轮第 N 次同一形态）。
+    # 文本扫描把这三类混在一起，报的是假阳性（同一形态反复出现过）。
     bad = []
     for node in ast.walk(ast.parse(f.read_text())):
         if not (isinstance(node, ast.Attribute) and node.attr == "DEFAULTS"
@@ -860,7 +859,7 @@ def test_draft_model_value_is_an_alias_not_a_path():
     """
     # 单独跑这一条时 sys.path 里未必有产品包 —— 自己补上，
     # 否则守卫会以 ModuleNotFoundError 失败，那看起来像「守卫红了」
-    # 而实际它一个字节都没测到（本轮踩过：坏样本注进去了却没红）。
+    # 而实际它一个字节都没测到（踩过：坏样本注进去了却没红）。
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "payload" / "lib"))
     from mlx_server import backendarg, schema  # noqa: PLC0415
     from mlx_server.tables import TablesView  # noqa: PLC0415

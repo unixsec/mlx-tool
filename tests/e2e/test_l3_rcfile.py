@@ -137,11 +137,10 @@ def test_l3_rc_backup_exists_and_matches_original(repo, tmp_path, rc):
 
 
 def test_l3_rc_no_marker_literal_in_scripts(repo):
-    """**脚本里不得出现标记串字面量**（G-RES-15 / T5 第 12 行）。
+    """**脚本里不得出现标记串字面量**（G-RES-15）。
 
     标记串必须取自 `constants.env` 的完整串。写死字面量会废掉这条防护：
-    v6 与 v7 共存时，前缀匹配会让它们互相误删 —— T5 原话「这是数据丢失路径，
-    不是洁癖」。
+    两个实例共存时，前缀匹配会让它们互相误删 —— 这是数据丢失路径。
     """
     counts = {}
     for name in ("install.sh", "uninstall.sh"):
@@ -154,7 +153,7 @@ def test_l3_rc_no_marker_literal_in_scripts(repo):
         f"install.sh 里标记串出现 {counts['install.sh']} 次；"
         f"构造点应只有一处（begin/end 各一行）")
     # `uninstall.sh` 是**读者**，一次都不该有 —— 它必须从 constants.env 读完整串。
-    # 写死字面量会让 v6/v7 共存时互相误删（T5 第 12 行：这是数据丢失路径）。
+    # 写死字面量会让两个实例共存时互相误删（数据丢失路径）。
     assert counts["uninstall.sh"] == 0, (
         "uninstall.sh 里写死了标记串字面量；它是读者，必须从 constants.env 读")
 
@@ -251,7 +250,7 @@ def test_l3_rc_rejects_partial_output_with_zero_exit(repo, tmp_path, rc):
 def test_l3_rc_uninstall_when_file_contains_only_our_block(repo, tmp_path):
     """rc 文件**只含本工具标记块**时，卸载必须清得掉。
 
-    坏样本（本轮真实发生）：卸载侧用 `[ -s "$tmp" ]` 判过滤结果 ——
+    坏样本（真实发生过）：卸载侧用 `[ -s "$tmp" ]` 判过滤结果 ——
     全删后为空是**正确结果**，却被判为「过滤失败」⇒ 标记块永远留着，
     指向一个已被删除的目录。安装侧修过同一个坑，卸载侧漏了：
     **同一条判据写在两处，只改一处。**
@@ -277,7 +276,7 @@ def test_l3_rc_uninstall_when_file_contains_only_our_block(repo, tmp_path):
 def test_l3_rc_when_file_contains_only_our_lines(repo, tmp_path):
     """rc 文件**只含本工具的内容**时，安装仍须成功。
 
-    坏样本（本轮真实发生）：「产出非空」检查写作 `[ ! -s "$tmp" ] && [ "$nold" -gt 0 ]`
+    坏样本（真实发生过）：「产出非空」检查写作 `[ ! -s "$tmp" ] && [ "$nold" -gt 0 ]`
     —— 全删之后 tmp 为空是**正确结果**，而 nold>0 恒成立 ⇒ 正常场景被误拒，
     用户看到「rc 过滤产出为空，未改动」而 PATH 始终没进去。
     判据必须是 `want`（预期剩余行数），不是「原文件非空」。

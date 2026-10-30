@@ -206,7 +206,7 @@ def make_handler(gw, max_body_bytes=DEFAULT_MAX_BODY_MB * 1024 * 1024, tls_conte
 
             不构成新的放大面：每条被拒连接至多占一个工作线程 `LINGER_SEC`（2 s），排空的字节
             按 64 KB 一块读出即丢、不缓冲、不计入在途预算；而未鉴权客户端本来就能用慢速请求头
-            无限期占住一个线程（`ThreadingHTTPServer` 线程数无上限，计划 2 遗留），这里的上界更紧。
+            无限期占住一个线程（`ThreadingHTTPServer` 线程数无上限，已知遗留），这里的上界更紧。
             """
             sock = self.connection
             try:

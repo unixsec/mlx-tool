@@ -92,7 +92,7 @@ def _collect(ctx, stack, deps, verb, targets, args=None, dry_run=False):
     两条批量路径（显式多目标 与 `--all`）共用它。此前各写一份几乎相同的循环，
     于是给结论补 `args` 时只补了一处 —— `mlx down --all` 的失败行仍旧渲染成
     笼统的「失败」，而显式多目标那条已经能打出「进程所有权不可证（PS_FAILED）」。
-    同一逻辑两份实现必然漂移，这是本轮第三次遇到同一形态。
+    同一逻辑两份实现必然漂移，这一形态已反复出现。
     """
     results, worst, committed, failed_codes = {}, 0, [], []
     for t in targets:

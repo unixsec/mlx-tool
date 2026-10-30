@@ -321,7 +321,7 @@ def test_shell_vars_braced_before_multibyte(repo: Path):
 def test_self_deploy_preload_imports_exist(payload: Path):
     """`cmd.self._preload` 里的每个模块都必须真实存在。
 
-    坏样本（本轮真实发生）：预加载列表里写了一个**不存在的 `paths` 模块** ⇒
+    坏样本（真实发生过）：预加载列表里写了一个**不存在的 `paths` 模块** ⇒
     `mlx uninstall` 在 `_preload()` 就 ImportError ⇒ 一键卸载完全不可用。
     而 dry-run 在 `_preload` 之前就 return 了，所以既有用例照不到它。
 
@@ -357,7 +357,7 @@ def test_no_test_writes_to_real_home_rc(repo: Path):
       ② 本用例静态断言：调用 `install.sh` 的测试代码里，凡是自己构造 env 的，
          要么设了 `MLX_RC_FILES`，要么继承了 fixture 的设置（不显式清空它）。
 
-    坏样本（本轮真实发生）：`cli` fixture 用
+    坏样本（真实发生过）：`cli` fixture 用
     `env = dict(os.environ, PATH=..., MLX_ROOT_*=...)` 造环境却没有 `MLX_RC_FILES`
     ⇒ 安装器回落默认值 `$HOME/.zshrc` ⇒ **写了用户的真实配置文件**。
     """
@@ -380,7 +380,7 @@ def test_message_keys_used_are_all_declared(payload: Path):
     """**代码里用的每个文案键都必须在 `messages.tsv` 里**。
 
     这是 12 个对账维度里的「messages 表 ↔ 实现中的文案」。
-    坏样本（本轮真实发生）：19 个键代码在用而表里没有 ⇒ 用户遇到这 19 种
+    坏样本（真实发生过）：19 个键代码在用而表里没有 ⇒ 用户遇到这 19 种
     错误时，拿到的是 `config.unknown_key` 这样的机器标识符，
     而**出错正是他最需要看懂的时刻**。
 
@@ -443,7 +443,7 @@ def test_ui_text_keys_are_all_declared(payload: Path):
 def test_every_message_renders_with_its_own_params(payload: Path):
     """**表里每条文案都能用它自己声明的参数渲染出来**。
 
-    坏样本（本轮真实发生）：`tables.text(self, key, **args)` 的形参叫 `key`，
+    坏样本（真实发生过）：`tables.text(self, key, **args)` 的形参叫 `key`，
     而 `config.unknown_key` 的文案参数**也叫 `{key}`** ⇒
     `TypeError: got multiple values for argument 'key'` ⇒ 那条永远渲染不出来。
     这类冲突只在「参数名恰好撞上形参名」时发生，靠读代码看不出来。
@@ -529,7 +529,7 @@ def test_message_params_match_construction_sites(payload: Path):
 def test_g_pc_05_commands_in_messages_exist(payload: Path):
     """**`G-PC-05`**：文案里提到的 `mlx <命令>` 必须真的存在于 `verbs.tsv`。
 
-    坏样本（本轮真实发生）：`svc.spawn_failed` 的文案是
+    坏样本（真实发生过）：`svc.spawn_failed` 的文案是
     「启动 {service} 失败。看日志：**mlx logs** {service}」，
     而 `logs` 这个动词**本版没有实现** —— 用户照做会得到「未知命令」。
     错误文案把人指向一个不存在的命令，比不给下一步还糟。
@@ -697,7 +697,7 @@ def test_d7_fitness_is_pure_no_probe_calls(payload: Path):
     assert "subprocess" not in src, "fitness 不得碰外部命令"
     # 禁止浮点：**在 AST 上查**，不扫源码文本。
     # 文本扫描会命中文档串里的 `fit.reserve_pct / fit.tight_pct` 这种斜杠 ——
-    # 守卫的提取面比被测对象宽，报的是假阳性（本轮第四次遇到同一形态）。
+    # 守卫的提取面比被测对象宽，报的是假阳性（同一形态反复出现过）。
     div = [n.lineno for n in ast.walk(tree)
            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)]
     assert div == [], f"判档禁止浮点除法（银行家舍入会让两个消费者算出不同档位）：行 {div}"
@@ -895,7 +895,7 @@ def test_d12_record_segments_reject_wrong_side_reads(payload: Path, sys_py: str)
       · `weights` 产 `bytes` 而 `rebuild_machine` 找 `size_mb` ⇒ 体积那一格永远是「—」
       · `model rm --weights` 从 user 段读 `revision` ⇒ 永远 `None` ⇒
         `resolve` 退化成「取最新的那个 revision」，同一 repo 存了两个版本时
-        删的可能不是这条记录登记的那一个（本轮修）
+        删的可能不是这条记录登记的那一个（已修）
 
     根因是 `dict.get` 打错键静默返回 `None`，而这个项目里 `None` 到处是
     合法值（未设置 / 未下载 / 不可判定）—— 它不会以异常的形式暴露。
@@ -999,10 +999,9 @@ def test_value_flags_are_shown_in_equals_form(payload, repo):
     一律 rc 2）。所以任何印给用户看的 `--repo <值>` 都是一条照抄就报错的
     指令 —— 用户没有理由怀疑我们自己印出来的命令。
 
-    这条立在一次现行犯上：2026-09-02 我在 `caps.py` 写下
+    这条立在一次真实缺陷上：`caps.py` 里曾写着
     `"仅 --type vision 需要"`，它经 `cmd/meta.py` 直接印进 `mlx version`
-    的主产物。**同一次会话里我刚因为给错形态让 Alex 的命令失败过**，
-    转头又把错形态写进了产品输出 —— 靠记性防不住，得靠判据。
+    的主产物 —— 靠记性防不住，得靠判据。
 
     只查 `takes_value=yes` 的 flag：布尔 flag 后面跟空格是正常中文行文
     （「`--weights` 连权重一起删」），不是形态错误。
@@ -1055,10 +1054,10 @@ def test_target_existence_checked_before_any_resource_creation(payload):
     """按外部输入索引注册表的命令，**存在性校验必须在任何资源创建之前**。
 
     `R-SAFETY-11` 逐字：「任何按外部输入索引内部映射之前必须有存在性校验」，
-    来源栏点名的 v6 症状是「详情命令对未注册短名崩溃」。
+    常见症状是「详情命令对未注册短名崩溃」。
 
     这条守卫立在一次真实误用上：`mlx chat` 的第一个位置参数是**模型 id**，
-    而用户很自然会把问题写在那儿 —— 2026-09-02 Alex 敲了
+    而用户很自然会把问题写在那儿 —— 例如
     `mlx chat "如何查询手机sn号"`。校验缺席时那句话被当成服务名，一路走到
     「连不上后端 如何查询手机sn号」，还报出 `logs/如何查询手机sn号.log`
     这样一个不存在的路径；`sessions.new` 又在校验之前就落了盘，
@@ -1128,7 +1127,7 @@ def test_running_state_is_not_inferred_from_port(payload):
     它照样返回一个端口 —— 以 `port is None` 为判据的代码在服务停止时
     **一次都不会命中**。
 
-    2026-09-02 实测：我按 `port is None` 写了「没在跑」的分支，服务确实停着，
+    实测过：按 `port is None` 写「没在跑」的分支，服务确实停着，
     而用户看到的仍是「进程在跑，但连不上它的端口 8100」。
     **能拿到端口不等于有人在监听它** —— 前者是登记事实，后者是运行事实。
 
@@ -1233,10 +1232,7 @@ def test_version_string_is_single_sourced(payload, repo):
 def test_documented_absolute_paths_exist(payload, repo):
     """文档与文案里写出的 `~/dev/projects/...` 绝对路径必须真实存在。
 
-    2026-09-03 抓到两处死路径：`~/dev/projects/mlx-toolkit/v7/deployer/install.sh`
-    （扁平化后 `v7/` 没了）和 `~/dev/projects/mlx-tool/...`（那个目录要删）。
-    前者是我替换 `.git` 之后 `git add -A` 把工作区的旧文件提交上去造成的 ——
-    工作区相对新 HEAD 显示为「修改」，而我没看内容就提交了。
+    曾经抓到过两处目录调整后留下的死路径。
 
     **文案里给出的路径，用户会照着敲。** 指向一个不存在的位置，
     比不给路径更糟：他会以为是自己的环境有问题。

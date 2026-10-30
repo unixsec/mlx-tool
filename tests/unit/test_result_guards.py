@@ -216,7 +216,7 @@ _R02_SAMPLES = [
      'def f():\n    open(p)\n    return Refused(6, "k")\n', False),
     ("write-mode-open-before",
      'def f():\n    open(p, "w")\n    return Refused(6, "k")\n', True),
-    # 计划 1 为之改写 `cmd/config.py::_coerce` 的假阳性形态：
+    # 为之改写过 `cmd/config.py::_coerce` 的假阳性形态：
     # 早返回分支里的 commit 行号更前、AST 更浅，旧判定误报 except 里的 Refused。
     ("early-return-commit-then-refused-in-except",
      'def f(v):\n    if v == "u":\n        store.commit(x)\n        return Done(1)\n'

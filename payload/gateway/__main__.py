@@ -80,7 +80,7 @@ def main(argv):
     bind = os.environ.get("MLX_GATEWAY_BIND", "127.0.0.1")
     token = os.environ.get("MLX_GATEWAY_TOKEN") or None
     if not token:
-        # D12：没有令牌就不起。`mlx up api` 在校验段已经拒绝（Task 8）；
+        # D12：没有令牌就不起。`mlx up api` 在校验段已经拒绝；
         # 这里挡的是绕过 `mlx` 直接 `python3 -m gateway` 的启动
         log_event("error", "token_missing", detail="MLX_GATEWAY_TOKEN 为空，网关拒绝启动")
         return 6

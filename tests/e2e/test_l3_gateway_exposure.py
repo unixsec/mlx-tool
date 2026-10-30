@@ -3,8 +3,8 @@
 REMOTE 来源**真实触发**：客户端 socket 绑定本机 Wi-Fi / 有线 / 虚拟机网桥上的 IPv4 再连网关，
 网关看到的对端地址就是它 —— 产品代码里没有「把回环当远端」的测试钩子。
 
-2 MB 请求体不真的发：见 controller ruling —— 只发**超限 Content-Length 的请求头**、
-不写体、只读状态行断 413，跟 Task 7（`tests/integration/test_l2_gateway_server.py`）的
+2 MB 请求体不真的发：只发**超限 Content-Length 的请求头**、
+不写体、只读状态行断 413，跟 `tests/integration/test_l2_gateway_server.py` 的
 `raw_request` 用同一形状。真发 2 MB 体在这台机器上会在 server 判 413 不读体、
 client 自己的 write 卡住再 ECONNRESET（预检 10/10 复现），测的是传输巧合不是行为。
 """
@@ -120,7 +120,7 @@ def _headers_only_status(host, port, token, content_length, path="/v1/chat/compl
                          timeout=5):
     """发只带请求头的 POST（声明 `content_length` 字节的体，一个字节体都不写），只读状态行。
 
-    controller ruling 1 的替代形状：不真的发一个超大体 —— server 看 `Content-Length`
+    替代形状：不真的发一个超大体 —— server 看 `Content-Length`
     立刻判超限就回 413 且不读体，client 若真写体会在这条连接上卡住再被 RST。
     这里连体都不构造、不 sendall，规避同一条竞态。
     """

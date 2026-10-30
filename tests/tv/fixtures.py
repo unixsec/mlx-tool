@@ -8,9 +8,8 @@ import json
 from pathlib import Path
 
 # **录制的真实命令输出**（`provenance: recorded`、`sample_stdout_b64`）——
-# 它是**测试资产**，不是设计文档。此前放在 `docs/design/v7/shapes/` 下，
-# 那是阶段 4 的历史位置；后果是发布仓库（不含设计文档）里这两个模块
-# 直接 FileNotFoundError，10 条测试全红。资产要跟使用它的代码走。
+# 它是**测试资产**，不是设计文档，所以跟使用它的代码放在一起 ——
+# 放在设计文档目录下时，公开仓库（不含设计文档）里 10 条测试直接 FileNotFoundError。
 SHAPES = Path(__file__).resolve().parent / "shapes.json"
 
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# T0 · 卸载器。**卸载前必须先收敛服务**（裁决 R3-1：本轮最重的一条）。
+# T0 · 卸载器。**卸载前必须先收敛服务**（裁决 R3-1）。
 set -euo pipefail
 
 CODE_ROOT="${MLX_ROOT_CODE:-$HOME/.local/share/mlx_server}"
@@ -40,7 +40,7 @@ fi
 if [ -x "$CODE_ROOT/bin/mlx" ] && [ -d "$DATA_ROOT/run" ]; then
   say "== 收敛正在运行的服务"
   # stderr **不重定向**：这条命令的失败是「拒绝卸载」的唯一依据，
-  # 吞掉它等于让用户和维护者都看不见拒绝的理由（本轮就是这么丢了两小时）
+  # 吞掉它等于让用户和维护者都看不见拒绝的理由（排查时就因此丢过两小时）
   if ! "$CODE_ROOT/bin/mlx" down --all; then
     say "!! 以下服务未能停止，拒绝卸载（rc 6）——"
     say "   否则工具被删掉之后你将失去停止它们的手段："
@@ -57,7 +57,7 @@ fi
 
 # ── 清 rc 标记块（R-DEPLOY-24）·**必须在删 constants.env 之前** ──
 # 标记串与扫描面都从 constants.env 读**完整串**，本脚本不构造、不拼接
-# （T5 第 12 行 / G-RES-15：写死字面量会让 v6/v7 共存时互相误删）。
+# （G-RES-15：写死字面量会让两个实例共存时互相误删）。
 CONST="${CODE_ROOT}/share/constants.env"
 if [ -f "$CONST" ]; then
   RC_BEGIN=$(sed -n 's/^MLX_RC_BEGIN=//p' "$CONST")

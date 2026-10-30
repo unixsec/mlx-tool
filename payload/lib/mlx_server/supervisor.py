@@ -80,7 +80,7 @@ def services_with_record(ctx):
     「在跑」用了（`mid in list_running(ctx)`），把**文件存在**当成**进程活着**。
     症状：后端崩掉之后 `mlx status` 一直显示绿勾说它在跑，而同一秒的
     `mlx status <id>` 说未运行 —— 同一个工具对同一个事实给出相反答案。
-    裁决 G1 点名过这个形态：「v6 的第二份 `running` 恰恰不叫 running」。
+    裁决 G1 点名过这个形态：「第二份 `running` 恰恰不叫 running」。
     改名是为了让它读起来不再像判定词；判定唯一实现点是下面的 `running()`。
 
     没起过的服务没有运行记录，`down --all` 无从停止它，也不该报错。
@@ -364,7 +364,7 @@ def down(ctx, service, ps_path=None, lsof_path=None):
     # ── 屏蔽窗口（`G-RES-09(b)` 的三个调用点之一）─────────────────
     # 覆盖「终止 → 删运行记录」这一段。中间被 TERM 打断的后果是
     # **进程已经死了而记录还在** —— 下一条 `status` 说它在跑、`down` 说它
-    # 已停止，两个命令对同一事实给出相反答案（这个形态本轮修过一次）。
+    # 已停止，两个命令对同一事实给出相反答案（这个形态修过一次）。
     # 窗口内允许的可阻塞调用：`kill_tree` 的 TERM→等→KILL 阶梯，
     # 它的等待有 `down.term_grace_sec` 封顶（J-2：不得存在没有上界的停留）。
     with proc.masked():

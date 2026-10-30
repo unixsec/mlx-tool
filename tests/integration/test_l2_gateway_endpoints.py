@@ -63,7 +63,7 @@ r["body_route_query_dropped"] = [st, calls[-1][2] if len(calls) > n else None]
 
 # Important 3：handle() 把扇出的上游状态码翻成网关自己的错误类型。
 # 5xx 一律映射成 502 且体不透传；非 404 的 4xx 原样透传状态码，体按来源处理
-# （这里的调用方是回环来源，Task 6 / D21 订正后应原文收到上游错误体）。
+# （这里的调用方是回环来源，按 D21 应原文收到上游错误体）。
 canned[(8100, "GET", "/v1/responses/resp_500")] = (500, {"internal": "SECRET_500"})
 canned[(8102, "GET", "/v1/responses/resp_500")] = (500, {"internal": "SECRET_500"})
 st, body = g.handle("GET", "/v1/responses/resp_500", headers=H, forward=fwd)
@@ -112,7 +112,7 @@ def test_gateway_endpoint_routing(payload, sys_py):
     assert got["fanout_500"] == [502, "upstream_error", False], \
         "扇出全 5xx 应映射成 502 upstream_error，且不透传上游错误体"
     assert got["fanout_400"] == [400, {"internal": "SECRET_400"}], \
-        "非 404 的 4xx 原样透传状态码；回环来源应原文收到上游错误体（Task 6 / D21 订正）"
+        "非 404 的 4xx 原样透传状态码；回环来源应原文收到上游错误体（D21）"
     assert got["fanout_404"] == [404, "not_found"]
     assert got["fanout_timeout"] == [504, "upstream_timeout"]
 

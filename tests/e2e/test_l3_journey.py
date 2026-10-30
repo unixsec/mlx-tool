@@ -213,7 +213,7 @@ def test_l3_uninstall_leaves_no_files(cli, tmp_path, repo):
 def test_l3_no_mlx_env_vars_at_all(cli, tmp_path):
     """产品必须在**零 MLX_* 环境变量**下工作 —— 这是真实用户的唯一形态。
 
-    坏样本（本轮真实发生）：`entry` 用 `environ.get("MLX_SHARE_ROOT", "")`，
+    坏样本（真实发生过）：`entry` 用 `environ.get("MLX_SHARE_ROOT", "")`，
     取不到时传空串 ⇒ constants.env 变成相对路径 ⇒ open 失败被当作「文件缺失」
     吞掉 ⇒ 三根全部落空 ⇒ 任何命令都 rc=6。
     错误实现能否通过：不能 —— 空串版本在这里第一条断言就红。
@@ -234,7 +234,7 @@ def test_l3_no_mlx_env_vars_at_all(cli, tmp_path):
 def test_l3_uninstall_after_running_service(cli, tmp_path, repo):
     """**起过服务之后**再卸载 —— 与「装完就卸」是两条不同的代码路径。
 
-    坏样本（本轮真实发生）：uninstall.sh 的服务收敛块里
+    坏样本（真实发生过）：uninstall.sh 的服务收敛块里
     `left=$(ls "$RUN"/*.json | wc -l)` 在 set -euo pipefail 下，
     glob 无匹配时 ls 返回 2 ⇒ pipefail 判负 ⇒ **脚本静默退出**，
     删除步骤一行不跑，而输出看起来和成功一样。
@@ -269,7 +269,7 @@ def test_l3_uninstall_after_running_service(cli, tmp_path, repo):
 def test_l3_dry_run_never_crashes_for_any_verb(cli, tmp_path):
     """**每个动词的 `--dry-run` 都不得崩。**
 
-    坏样本（本轮真实发生）：`entry` 的 dry-run 分支无条件取 `payload["argv"]`，
+    坏样本（真实发生过）：`entry` 的 dry-run 分支无条件取 `payload["argv"]`，
     那是启动类动词的形态；`mlx install --dry-run` 于是 KeyError ——
     而 `--dry-run` 正是用户在**不确定会发生什么**时才用的那个开关，
     在那里给他一个 traceback 是最坏的时机。
@@ -330,7 +330,7 @@ def test_l3_default_output_is_human_readable(cli):
     """**默认输出给人看，`--json` 才给机器看。**
 
     附录 A 的「机读」列写的是 `--json` —— 意思就是默认**不是** JSON。
-    坏样本（本轮真实发生）：实现反了，`mlx status` 默认吐一行压缩 JSON，
+    坏样本（真实发生过）：实现反了，`mlx status` 默认吐一行压缩 JSON，
     用户第一次跑就说「一点也不直观」。
 
     错误实现能否通过：默认吐 JSON ⇒ 本用例第一条断言红。
@@ -350,7 +350,7 @@ def test_l3_default_output_is_human_readable(cli):
 def test_l3_check_failure_keeps_the_twelve_rows(cli):
     """**`check` 失败时主产物不得丢。**
 
-    坏样本（本轮真实发生）：失败走 `Failed` ⇒ 十二行主产物被丢掉，
+    坏样本（真实发生过）：失败走 `Failed` ⇒ 十二行主产物被丢掉，
     用户只看到一行 Python repr（`check.failed（failed=[...]；rows=[(...)]）`），
     看不出是哪几项挂了、更不知道该做什么。
     `Aggregate` 携带 payload 就是为了这个。
@@ -376,7 +376,7 @@ def test_l3_check_failure_keeps_the_twelve_rows(cli):
 def test_l3_no_bare_message_keys_in_human_output(cli, tmp_path):
     """**人类可读输出里不得出现裸文案键**（L1·ui-10）。
 
-    坏样本（本轮真实发生）：`mlx api info` 打印 `api.honest_no_boundary` ——
+    坏样本（真实发生过）：`mlx api info` 打印 `api.honest_no_boundary` ——
     那是 messages.tsv 的键，表里明明有文案，只是没人去查。
     成因是 `ui._text` 依赖 `ui.bind()` 的装配，而 `entry` 从未调用它 ⇒
     查表恒失败、恒回落到 key 本身。渲染是纯函数，不该因装配顺序时灵时不灵。
@@ -419,7 +419,7 @@ def test_l3_no_bare_message_keys_in_human_output(cli, tmp_path):
 def test_l3_no_verb_crashes_on_real_invocation(cli, tmp_path):
     """**每个只读动词真跑一次都不得 Traceback**（不是 dry-run，是真调用）。
 
-    坏样本（本轮真实发生，两个）：
+    坏样本（真实发生过两个）：
       · `mlx bench <id>` 把模型 id 当端口传给 `send_chat(port, messages)` ⇒
         URL 变成 `http://127.0.0.1:demo1/…` ⇒ ValueError 崩到用户脸上；
       · `mlx bootstrap verify` 要的 `tables` 从没被 `build_deps` 注入 ⇒
@@ -458,14 +458,14 @@ def test_l3_no_verb_crashes_on_real_invocation(cli, tmp_path):
 def test_l3_up_reports_failure_when_port_is_taken(cli, tmp_path):
     """**端口被别的进程占着时，`up` 必须报失败，不得报 started。**
 
-    坏样本（本轮真实发生）：`spawn` 成功就 `Done` ⇒ rc=0、stdout「已启动」，
+    坏样本（真实发生过）：`spawn` 成功就 `Done` ⇒ rc=0、stdout「已启动」，
     而进程三秒后因 `Address already in use` 退出，下一条 `mlx status` 说「未运行」。
-    这是 v6 那 18 条「报成功但没产生效果」的形态在 v7 的复现。
+    这是「报成功但没产生效果」这一类缺陷的典型形态。
 
-    Task 8 之后：`up api` 在**执行段首**先查端口上的外来监听者（spec D24）——
+    `up api` 在**执行段首**先查端口上的外来监听者（spec D24）——
     这是回环地址（`127.0.0.1`）上的一个真实占用者，`up api` 必须在 spawn 之前
     就看到它并拒绝（rc 7 `ports.foreign_listener`），而不是等 spawn 之后
-    因「起来后立刻退出」才发现（那是 Task 8 之前的过渡态，rc 10）。
+    因「起来后立刻退出」才发现（那是早先的过渡态，rc 10）。
 
     错误实现能否通过：不查外来监听者、spawn 完就 Done ⇒ rc=0 ⇒ 本用例红；
     仍走「spawn 后才发现端口被占」这条旧路径 ⇒ rc 10 而非 7 ⇒ 本用例红。
@@ -495,7 +495,7 @@ def test_l3_model_rm_confirm_works_on_real_tty(cli, tmp_path):
     """**确认通道必须在真 tty 上可用**（附录 A `model rm` 的过程流：
     「逐行列出目标 + 确认串」）。
 
-    坏样本（本轮真实发生）：`open("/dev/tty", "r+")` 打得开，但同一个
+    坏样本（真实发生过）：`open("/dev/tty", "r+")` 打得开，但同一个
     buffered 流上 write 之后 readline 需要 seek，而 tty 不可 seek ⇒
     抛 `io.UnsupportedOperation`；它继承自 `OSError`，被 `except OSError`
     吞掉 ⇒ 恒返回 False ⇒ **`mlx model rm` 完全不可用，提示串一次都没打印过**。
@@ -560,7 +560,7 @@ def test_l3_status_and_api_info_have_all_contracted_fields(cli):
       PATH 生效性至少四个字段」）—— 它不是装饰，是下限。
     · `api info`：附录 A 2829 要求三项「base url + **可用 id 列表** + 诚实陈述」。
 
-    坏样本（本轮真实发生）：两者各缺一项，而 `mlx help status` 的 summary
+    坏样本（真实发生过）：两者各缺一项，而 `mlx help status` 的 summary
     还对用户承诺着「三根·版本·PATH·清单」—— **命令自己的帮助与自己的输出对不上**。
     """
     cli("model", "register", "fieldcheck", "--repo=x/y", "--type=text", "--port=8100")
@@ -591,7 +591,7 @@ def test_l3_status_and_api_info_have_all_contracted_fields(cli):
 def test_l3_nonexistent_id_is_refused_not_silently_ok(cli):
     """**按外部输入索引内部映射之前必须有存在性校验**（R-SAFETY-11 第三层）。
 
-    坏样本（本轮真实发生）：`model gc <不存在的 id>` / `model repair <同>`
+    坏样本（真实发生过）：`model gc <不存在的 id>` / `model repair <同>`
     的分支**全程一次都没读过 `inv.target`** —— 不是校验写错，是根本没有；
     对不存在的 id 静默返回 rc 0，用户以为做了什么。
     R-SAFETY-11 的来源栏点名的 v6 症状正是同一形态：「详情命令对未注册短名崩溃」。
@@ -609,7 +609,7 @@ def test_l3_caps_refresh_reports_diff_not_full_view(cli):
     """`caps refresh` 的主产物是**采集结果差异**（附录 A 2831），
     空结果表现是「无变化 → 合法空数组」。
 
-    坏样本（本轮真实发生）：返回全量视图 ⇒ 连跑两次输出逐字节相同，
+    坏样本（真实发生过）：返回全量视图 ⇒ 连跑两次输出逐字节相同，
     用户看不出这次采集**改变了什么**，而这正是 refresh 的全部意义。
     """
     # **安装器现在会采集一次**（边 #3：install.sh 子进程调 `caps refresh`），
@@ -634,7 +634,7 @@ def test_l3_config_validate_is_one_row_per_item(cli):
     """`config validate` 的主产物是**每检查项一行**（附录 A 2827），
     退出码 `0,2,6,64,65`（与 check 共用 64/65 那对聚合码）。
 
-    坏样本（本轮真实发生）：只返回一个布尔 `{"valid": true}` ——
+    坏样本（真实发生过）：只返回一个布尔 `{"valid": true}` ——
     用户不知道校验了哪些项，失败时更不知道是哪一项。
     """
     rc, out, err = cli("config", "validate")
@@ -651,7 +651,7 @@ def test_l3_multi_target_reports_every_target(cli):
 
     依据：附录 A 2807 的动词形态逐字是 `up <service>...`（可变长），
     主产物列逐字是「**每个**目标一行结论（id、port、verdict）」。
-    坏样本（本轮真实发生）：实现只取 `positional[0]`，第二个目标被**静默忽略** ——
+    坏样本（真实发生过）：实现只取 `positional[0]`，第二个目标被**静默忽略** ——
     用户以为两个都起了。
 
     另一半同样重要：元数 `1` 的动词必须有**上界**。不补它，多给的 token
@@ -679,7 +679,7 @@ def test_l3_multi_target_reports_every_target(cli):
 def test_l3_commands_survive_real_weights_on_disk(cli, tmp_path):
     """**权重真的在盘上**时，各命令仍须工作。
 
-    坏样本（本轮真实发生）：`weights.resolve` 找到时返回 `Ok(...)`（Probe），
+    坏样本（真实发生过）：`weights.resolve` 找到时返回 `Ok(...)`（Probe），
     找不到时返回 `Refused(...)`（Outcome）—— **一个函数返回两个正交类型**，
     而设计第 2 条裁决正是把 `Probe` 与 `Outcome` 拆开的。
     调用方写 `r.rc` 就在找到权重时崩（Probe 没有 `.rc`），
@@ -715,7 +715,7 @@ def test_l3_commands_survive_real_weights_on_disk(cli, tmp_path):
 def test_l3_model_install_does_not_claim_success_without_downloading(cli):
     """**没有下载器时 `model install` 不得报「installed」**。
 
-    坏样本（本轮真实发生）：`weights.download` 的最后一行是
+    坏样本（真实发生过）：`weights.download` 的最后一行是
     `return Done(fetch(...))` —— 无条件把 fetch 的返回包成 `Done`，
     而 `fetch` 在 `hf` 不存在时明确返回 `{"ok": False, "reason": "tool_unavailable"}`。
     于是对一个**根本不存在的 repo** 也返回 rc 0 并报「installed」，

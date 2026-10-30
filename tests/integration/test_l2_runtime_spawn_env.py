@@ -5,7 +5,7 @@
 （以及它拉起的 mlx_lm / mlx_vlm 后端）仍会拿到这把密钥，而运行记录写
 `backend_key_fp=None`，轮换检测据此误报「没变」。`MLX_GATEWAY_TOKEN` 同理。
 
-控制器裁决：`spawn` 构造子进程环境时，先复制 `os.environ`，**移除**这两个
+`spawn` 构造子进程环境时，先复制 `os.environ`，**移除**这两个
 名字，再叠加 `spec.env`——`spec.env` 显式给出的值不受影响。
 """
 import sys

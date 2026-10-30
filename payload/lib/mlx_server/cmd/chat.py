@@ -24,11 +24,11 @@ def run(ctx, stack, inv, deps=None):
         return Refused(3, "chat.no_transport")
 
     # ── 存在性校验必须在**任何东西被创建之前**（`R-SAFETY-11`）───────────
-    # 来源栏点名的 v6 症状是「详情命令对未注册短名崩溃」；这里的症状更隐蔽：
+    # 常见症状是「详情命令对未注册短名崩溃」；这里的症状更隐蔽：
     # `chat` 的第一个位置参数是**模型 id**，而用户很自然会把问题写在那儿
     # （`mlx chat "如何查询手机sn号"`）。校验缺席时，那句话被当成服务名，
     # 一路走到「连不上后端 如何查询手机sn号」，还报出一个
-    # `logs/如何查询手机sn号.log` 的荒谬路径 —— 2026-09-02 Alex 实测撞到。
+    # `logs/如何查询手机sn号.log` 的荒谬路径（真机实测撞到过）。
     #
     # **位置在 `sessions.new` 之前**：那一行会在盘上建一个会话文件，
     # 放在校验之后等于每敲错一次就留一份垃圾，且违反 BCR-R-01
@@ -51,7 +51,7 @@ def run(ctx, stack, inv, deps=None):
     # **「在不在跑」要问 `running`，不能拿「有没有端口」当代理**。
     # `effective_port` 在没有运行记录时**回落到注册表登记的端口**
     # （`supervisor.py:213`），所以服务停着它照样返回 8100 ——
-    # 我第一版按 `port is None` 判，实测毫无作用，报的仍是
+    # 早先按 `port is None` 判，实测毫无作用，报的仍是
     # 「进程在跑但连不上」。**能拿到端口不等于有人在监听它。**
     alive = supervisor.running(ctx, inv.target)
     if not is_unknown(alive) and alive.value is False:

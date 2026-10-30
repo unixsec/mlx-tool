@@ -181,7 +181,7 @@ def on_change(snap):
         # **这一处的超时是判据本身，不是 A2 说的那种**：有 `_deliver_lock` 时
         # t2 在本次调用返回前送不出去，所以**超时到期才是正确行为**；
         # 没有那把锁的旧代码里 t2 会抢在到期前置位这个事件，顺序随之翻转。
-        # 去掉它会让**修好的**代码在这里永久阻塞，故保留（已报控制器）。
+        # 去掉它会让**修好的**代码在这里永久阻塞，故保留。
         evt.wait(timeout=2.0)
         delivered.append(tag)
         return True
@@ -268,7 +268,7 @@ print(json.dumps({"loader_calls": len(calls), "res": res,
 
 
 def test_netview_concurrent_unknown_peers_start_only_one_recompute(payload, sys_py):
-    """Task 3 评审：`classify()` 的「是否到期」与 `_last_try` 更新曾分两次持锁，
+    """评审发现：`classify()` 的「是否到期」与 `_last_try` 更新曾分两次持锁，
     多个请求线程上同时来的未知来源会各自起一次重算（每次最长数秒）。
     断言：并发的两个未知来源只触发**一次** loader，没抢到的那个直接判不放行。"""
     got = run_floor(payload, sys_py, PROG_CLASSIFY_RACE, with_gateway=True, timeout=30, NET=NET)
