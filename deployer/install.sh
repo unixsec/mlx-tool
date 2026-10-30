@@ -98,7 +98,7 @@ _tilde() {
 # `MLX_VENV_PYTHON` 可显式指定（注入面，测试与特殊环境用）。
 # **只认 Homebrew（与 /usr/local 上的第三方安装），不认 /usr/bin/python3**
 # 〔BCR-2026-09-02，`00-inheritance` §0.4.2〕。系统解释器建的 venv 有两个问题：
-#   ① 3.9 装不上 `mlx ≥ 0.30`（只发 cp310+）⇒ 新模型架构永远跑不了
+#   ① 3.9 装不上 0.29.3 之后的 mlx（只发 cp310+）⇒ 新模型架构永远跑不了
 #   ② venv 绑在系统解释器上，macOS 升级替换它时 venv 会坏
 # 这里**刻意不把 `/usr/bin/python3` 放进候选**：即便将来 macOS 自带 3.12，
 # 上面第 ② 条仍然成立 —— 那不是版本问题，是「谁来管这个解释器」的问题。
@@ -280,7 +280,7 @@ printf '%s\n' "$CONSTANTS" > "$CODE_ROOT/share/constants.env"
 # ── 建 venv 并装推理依赖（R-DEPLOY-40）──────────────────────────
 # **venv 的解释器要 ≥ 3.10**，否则推理后端被锁死在旧版本：
 #   · `mlx 0.29.3` 是最后一个有 cp39 wheel 的版本
-#   · `mlx 0.30.4` 起只发 cp310+
+#   · `mlx 0.30.0` 起只发 cp310+（2026-10-31 查 PyPI：0.30.0 / 0.30.3 / 0.30.4 都没有 cp39）
 #   · `mlx-lm ≥ 0.31.0`（新架构如 `qwen3_5` 所需）依赖 `mlx ≥ 0.30.4`
 # ⇒ 用 3.9 建 venv，`pip install -U mlx-lm` 会以 ResolutionImpossible 失败，
 #   而错误信息只说「依赖冲突」，一个字都不提解释器版本（实测踩过）。
@@ -289,6 +289,8 @@ printf '%s\n' "$CONSTANTS" > "$CODE_ROOT/share/constants.env"
 # 那个理由针对的是**工具本体**，而 venv 只服务下载与推理（§0.4.1/§0.4.2 的
 # 区分）。T1 仍跑在 3.9.6 下限上，那部分一个字节都没变。
 say "== 建 venv"
+# 版本要求的**唯一说法**（各处提示都引用它，不各写一份）
+MLX_PY_REQ="0.29.3 之后的 mlx 只发 cp310+，而 mlx-lm ≥ 0.31（qwen3_5 等新架构所需）依赖它：推理 venv 要 Python ≥ 3.10"
 
 
 if [ -x "$VENV/bin/python3" ]; then
@@ -299,11 +301,19 @@ if [ -x "$VENV/bin/python3" ]; then
   else
     # **就地升级**：3.9 的 venv 装不了新 mlx，留着它等于留一个装不了后端的环境。
     # 权重在权重根、注册表在数据根，重建 venv 一个都不动。
-    say "   ! 已存在的 venv 是 Python $_V —— 装不了 mlx ≥ 0.30（只发 cp310+）"
+    say "   ! 已存在的 venv 是 Python $_V —— $MLX_PY_REQ"
     if _PY=$(_pick_python); then
-      say "   · 用 $($_PY -V 2>&1) 重建（旧 venv 移除，权重与注册表不受影响）"
-      rm -rf "$VENV"
-      "$_PY" -m venv "$VENV" && say "   ✓ $VENV  $($VENV/bin/python3 -V 2>&1)"
+      say "   · 用 $($_PY -V 2>&1) 重建（权重与注册表不受影响）"
+      # **先建新的、成功了再换掉旧的**：此前先 rm -rf 旧 venv，新的建失败就一个都没有了
+      rm -rf "$VENV.rebuild"
+      if "$_PY" -m venv "$VENV.rebuild" && [ -x "$VENV.rebuild/bin/python3" ]; then
+        rm -rf "$VENV"
+        mv "$VENV.rebuild" "$VENV"
+        say "   ✓ $VENV  $($VENV/bin/python3 -V 2>&1)"
+      else
+        rm -rf "$VENV.rebuild"
+        say "   ! 新 venv 建立失败 —— 保留旧的 Python $_V venv，新模型架构跑不了"
+      fi
     else
       say "   ! 找不到 ≥3.10 的解释器 —— 保留旧 venv，但新模型架构跑不了"
       say "     装一个：brew install python@3.13"
@@ -319,7 +329,7 @@ elif /usr/bin/python3 -m venv "$VENV" 2>/dev/null && [ -x "$VENV/bin/python3" ];
   # 依赖冲突时才发现（§0.4.2「明说的降级，不是静默失败」）。
   say "   ✓ $VENV  $($VENV/bin/python3 -V 2>&1)（macOS 自带）"
   say "   ! 没找到 Homebrew 的 Python —— 下载可用，但**新模型架构跑不了**"
-  say "     mlx ≥ 0.30 只发 cp310+，而 mlx-lm ≥ 0.31（qwen3_5 等所需）依赖它"
+  say "     $MLX_PY_REQ"
   say "     修：brew install python@3.13，然后重跑本安装器（会自动重建 venv）"
 else
   say "   ! venv 建立失败 —— 工具仍可用（回落系统 python3），但下载与推理不可用"
@@ -519,6 +529,10 @@ PY
     say "  · 网关      http://127.0.0.1:${GATEWAY_PORT}/v1，也对局域网与虚拟机开放、均需令牌（启动：mlx up api）"
   fi
   say "  · 模型      已登记 ${n:-0} 个"
+  _VV=$("$VENV/bin/python3" -c 'import sys;print(1 if sys.version_info[:2]>=(3,10) else 0)' 2>/dev/null || echo 0)
+  if [ "$_VV" != "1" ]; then
+    say "  ! 推理 venv  Python 低于 3.10，新模型架构跑不了 —— brew install python@3.13 后重跑安装器"
+  fi
   if [ -n "$STOPPED" ]; then
     say "  ! 重装前停掉了：${STOPPED}（没有自动起回来）"
     next="mlx up $STOPPED"

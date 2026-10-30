@@ -139,7 +139,7 @@ OpenAI 兼容的应用都能接入，多模态模型还提供 Anthropic 接口�
 ### 前置条件
 
 - **Apple Silicon（M 系列芯片）的 Mac。** 在 Intel Mac 上安装器会直接停下，不改动任何东西。
-- **Homebrew 的 Python 3.10 及以上。** macOS 自带的 3.9.6 装不上当前的 `mlx`（它从 0.30.4 起不再提供 3.9 的安装包）。
+- **Homebrew 的 Python 3.10 及以上。** macOS 自带的 3.9.6 装不上当前的 `mlx`（0.29.3 之后不再提供 3.9 的安装包，而 mlx-lm 0.31 要求 mlx ≥ 0.30.4）。
 - 足够的磁盘空间：小模型几百 MB，大模型几十 GB。
 
 ```bash

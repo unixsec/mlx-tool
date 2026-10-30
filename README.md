@@ -139,7 +139,7 @@ Before deploying, make sure these are acceptable:
 ### Requirements
 
 - **A Mac with Apple Silicon (M-series).** On an Intel Mac the installer stops without changing anything.
-- **Homebrew Python 3.10 or newer.** The macOS system Python 3.9.6 can't install current `mlx` (no 3.9 wheels since 0.30.4).
+- **Homebrew Python 3.10 or newer.** The macOS system Python 3.9.6 can't install current `mlx` (no 3.9 wheels after 0.29.3, and mlx-lm 0.31 needs mlx ≥ 0.30.4).
 - Disk space for models: hundreds of MB for small ones, tens of GB for large ones.
 
 ```bash
