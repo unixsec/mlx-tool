@@ -121,17 +121,25 @@ _pick_python() {
 # 备份进数据根（卸载时保留 ⇒ 天然可回滚）。**不写 $HOME 根。**
 # 与同名的最近一份备份逐字节相同就不再复制 —— 重装多少次，备份只随内容变化增加。
 # `cp -p` 保留权限：settings.json 是 0600、里面有密钥，备份不能比原件更宽。
-_backup() {                         # _backup <file> → stdout: 备份路径
+# 输出带上是哪一种：只给路径时调用方分不清，屏幕上「（备份 <几天前的时间戳>）」读起来像备份没做。
+_backup() {                         # _backup <file> → stdout: 「new <路径>」或「same <路径>」
   local f="$1" name last
   name=$(basename "$f")
   mkdir -p "$DATA_ROOT/backups" || return 1
-  last=$({ ls -1d "$DATA_ROOT/backups/$name".* 2>/dev/null || true; } | tail -n 1)
+  # 只认「<名>.<时间戳>」：`<名>.*` 会把 `zshrc.fresh.<时间戳>` 也算进来，字典序还排在最后
+  last=$({ ls -1d "$DATA_ROOT/backups/$name".[0-9]*-[0-9]* 2>/dev/null || true; } | tail -n 1)
   if [ -n "$last" ] && [ -f "$last" ] && cmp -s "$f" "$last"; then
-    echo "$last"; return 0
+    echo "same $last"; return 0
   fi
   last="$DATA_ROOT/backups/$name.$(date +%Y%m%d-%H%M%S)"
   cp -p "$f" "$last" || return 1
-  echo "$last"
+  echo "new $last"
+}
+_backup_said() {                    # _backup_said <_backup 的输出> → 给人看的半句
+  case "$1" in
+    same\ *) echo "内容与上次备份相同，沿用 ${1#same }" ;;
+    *)       echo "已备份到 ${1#new }" ;;
+  esac
 }
 
 # ── 已是当前版本？──────────────────────────────────────────────────
@@ -209,7 +217,7 @@ _done=""
 for _p in "$DATA_ROOT/settings.json" "$DATA_ROOT/models.jsonl"; do
   [ -f "$_p" ] || continue
   _f=${_p##*/}
-  if _b=$(_backup "$_p"); then _done="$_done $_f"; printf '%s → %s\n' "$_p" "$_b" >> "${INSTALL_LOG:-/dev/null}"
+  if _b=$(_backup "$_p"); then _done="$_done $_f"; printf '%s → %s\n' "$_p" "${_b#* }" >> "${INSTALL_LOG:-/dev/null}"
   else say "!! ${_f} 备份失败 —— 拒绝继续（数据根不可写？）"; exit 73; fi
 done
 if [ -n "$_done" ]; then say "   ✓${_done} → $DATA_ROOT/backups/（内容没变的不重复备份）"
@@ -437,13 +445,13 @@ _rc_write() {                       # _rc_write <rc-file>
   nnew=$(wc -l < "$tmp" | tr -d " ")
   if [ "$nnew" != "$want" ]; then
     rm -f "$tmp"
-    say "   ! rc 过滤删掉的行数不对（${nold} → ${nnew}，应为 ${want}），${rc} 未改动（备份在 ${bak}）"
+    say "   ! rc 过滤删掉的行数不对（${nold} → ${nnew}，应为 ${want}），${rc} 未改动（备份在 ${bak#* }）"
     return 1
   fi
 
   printf '%s\n%s\n%s\n' "$RC_BEGIN" "$PATH_LINE" "$RC_END" >> "$tmp"
   mv -f "$tmp" "$rc" || { rm -f "$tmp"; return 1; }
-  say "   ✓ ${rc}（备份 ${bak}）"
+  say "   ✓ ${rc}（$(_backup_said "$bak")）"
   return 0
 }
 

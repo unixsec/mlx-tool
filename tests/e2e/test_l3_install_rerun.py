@@ -124,6 +124,18 @@ def test_force_reinstalls_even_when_unchanged(repo, installed):
     assert r.returncode == 0 and _reinstalled(r), r.stderr
 
 
+def test_rc_backup_line_says_whether_it_was_reused(repo, installed):
+    """rc 内容没变时沿用上次的备份 —— 屏幕上要说「沿用」，不能只甩一个几天前的时间戳
+    （2026-10-29 真机：「✓ ~/.zshrc（备份 …zshrc.20261027-001241）」读起来像备份没做）。"""
+    first = _run(repo, dict(installed, MLX_RC_FILES=installed["MLX_RC_FILES"] + ".fresh"), "--force")
+    line = [ln for ln in first.stderr.splitlines() if ".fresh（" in ln]
+    assert line and "已备份" in line[0] and "沿用" not in line[0], first.stderr[-800:]
+    _run(repo, installed, "--force")      # 备份的是写 PATH 块之前的 rc；装完 rc 变了，这次备份装后的样子
+    r = _run(repo, installed, "--force")  # rc 与上一份备份相同
+    line = [ln for ln in r.stderr.splitlines() if "zshrc（" in ln]
+    assert line and "内容与上次备份相同，沿用" in line[0], r.stderr[-800:]
+
+
 def test_unknown_argument_refused_before_touching_disk(repo, env, tmp_path):
     r = _run(repo, env, "--frce")
     assert r.returncode == 2 and "未知参数" in r.stderr, r.stderr
