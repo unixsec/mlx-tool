@@ -136,6 +136,10 @@ def port_owner(ctx, service, lsof_path=None, ps_path=None):
     return Ok(True)
 
 
+# 端口上有监听者、但 lsof 给不出 pid（属于其他用户）时，报给用户看的占位
+OTHER_USER = "其他用户的进程"
+
+
 def foreign_listeners(ctx, port, lsof_path=None):
     # type: (object, int, str) -> object
     """端口上现有的监听 pid。无人监听 ⇒ `Ok([])`；探测失败 ⇒ `Unknown`（**不当作无人**）。
@@ -143,9 +147,15 @@ def foreign_listeners(ctx, port, lsof_path=None):
     `up api` 在 spawn 之前调它（此刻网关尚未启动，任何监听者都是外来的）。
     """
     lp = probe.listener_pids(port, _bin(ctx, "lsof", lsof_path))
-    if is_unknown(lp):
-        return Ok([]) if lp.kind == "NO_LISTENER" else lp
-    return lp
+    if is_unknown(lp) and lp.kind != "NO_LISTENER":
+        return lp
+    if not is_unknown(lp) and lp.value:
+        return lp
+    # lsof 说没人：**它看不到其他用户的进程**（`-t` 隐含 `-w`，rc 1、stderr 为空）。
+    # 补一道与属主无关的 connect：连得上 ⇒ 有人在听，只是 pid 不可见
+    if probe.accepts_connections(port):
+        return Ok([OTHER_USER])
+    return Ok([])
 
 
 def may_kill(ctx, service, ps_path=None, lsof_path=None):

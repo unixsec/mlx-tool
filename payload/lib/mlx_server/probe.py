@@ -111,6 +111,24 @@ def children_of(pid, pgrep_path="/usr/bin/pgrep", timeout_sec=5):
     return Unknown("PS_FAILED", r.stderr.strip()[:80])
 
 
+def accepts_connections(port, hosts=("127.0.0.1", "::1"), timeout_sec=0.2):
+    # type: (int, tuple, float) -> bool
+    """本机这几个回环地址上的 `port` 有没有人接受连接。**与属主无关**（lsof 看不到别的用户）。"""
+    import socket
+    for host in hosts:
+        fam = socket.AF_INET6 if ":" in host else socket.AF_INET
+        s = socket.socket(fam, socket.SOCK_STREAM)
+        s.settimeout(timeout_sec)
+        try:
+            if s.connect_ex((host, int(port))) == 0:
+                return True
+        except OSError:
+            pass
+        finally:
+            s.close()
+    return False
+
+
 def physical_mem_mb():
     # type: () -> object
     """物理内存（MB）。`sysconf`，不起子进程。"""
