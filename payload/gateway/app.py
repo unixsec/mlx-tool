@@ -9,6 +9,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 from urllib.parse import urlsplit
 
 from mlx_server.wire import SseDecoder
@@ -27,12 +29,16 @@ LIMIT_DEFAULTS = {"media_max_mb": 128, "media_max_parts": 32, "inflight_max_mb":
 _NO_SNAP = object()
 
 
+MISS_REFRESH_SEC = 1.0              # 路由不中时当场刷新的最小间隔
+
+
 class Gateway:
     """网关进程内状态。**日志两条流写本进程 fd 1/2**，文件由 supervisor 重定向。"""
 
     __slots__ = ("ctx", "facade", "view", "bind_addr", "_token", "_backend_key", "nets",
                  "_key_missing_logged", "_key_missing_had_key", "limits",
-                 "budget", "media_store", "keepalive_sec", "probe_sec", "stream_commit_sec")
+                 "budget", "media_store", "keepalive_sec", "probe_sec", "stream_commit_sec",
+                 "_miss_at", "_miss_lock")
 
     def __init__(self, ctx, facade, bind_addr="127.0.0.1", token=None, backend_key=None,
                  nets=None, limits=None, media_root=None, keepalive_sec=None, probe_sec=None,
@@ -58,6 +64,9 @@ class Gateway:
         self.keepalive_sec = relay.KEEPALIVE_SEC if keepalive_sec is None else keepalive_sec
         self.probe_sec = relay.PROBE_SEC if probe_sec is None else probe_sec
         self.stream_commit_sec = relay.STREAM_COMMIT_SEC if stream_commit_sec is None else stream_commit_sec
+        # 上一次「路由不中当场刷新」的时刻（限频）。初值不能是 0.0：macOS 上 monotonic() 从进程启动起算
+        self._miss_at = float("-inf")
+        self._miss_lock = threading.Lock()
         # `backend_key_missing` 去重：按「模型 + 当前是否有密钥」——密钥状态翻转
         # （比如运行中改配置后重装配）就重新起算，翻转前的沉默不会漏掉新一轮缺钥匙
         self._key_missing_logged = set()
@@ -82,6 +91,22 @@ class Gateway:
             lambda sid: self.facade["supervisor.running"](self.ctx, sid),
             owner_of=lambda sid: self.facade["supervisor.port_owner"](self.ctx, sid))
         return self.view
+
+    def _refresh_on_miss(self):
+        # type: () -> bool
+        """路由不中时当场刷新一次路由表，**每秒最多一次**（陌生 model 名刷屏也只多这么点开销）。
+        → 是否值得再判一次（刚刷新过、或别的线程刚刷新过）。"""
+        with self._miss_lock:
+            now = time.monotonic()
+            if now - self._miss_at < MISS_REFRESH_SEC:
+                return False
+            self._miss_at = now
+            try:
+                self.refresh_routes()
+            except Exception as e:                      # noqa: BLE001
+                log_event("error", "route_refresh_failed", detail=str(e)[:200])
+                return False
+            return True
 
     def upstream_headers(self, short_id, snap=_NO_SNAP):
         """转发给后端时附加的请求头（spec §4.8）。
@@ -229,6 +254,9 @@ class Gateway:
             return ("fanout", targets, upstream, peer_class)
 
         blocked = guard.route_guard(path, body, self.view.route_keys())
+        if blocked and blocked[0] == 404 and self._refresh_on_miss():
+            # 后台每 5 秒才刷新一次：`mlx up` 刚起来的模型在那几秒里会被判「不存在」
+            blocked = guard.route_guard(path, body, self.view.route_keys())
         if blocked:
             return ("reply", blocked)
         short_id = (body or {}).get("model")
