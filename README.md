@@ -32,41 +32,82 @@ Running models locally on a Mac is easy. Everything around the inference is not:
 
 ## 💎 Why it matters
 
-1. **Your data stays on your Mac.** Inference runs entirely locally; prompts and outputs never pass through a third party.
-   The tool itself only goes online to install dependencies, download weights, and fetch remote media a request asks for.
-2. **One endpoint for every client.** OpenAI Chat Completions / Responses and Anthropic Messages side by side:
-   Cherry Studio, Claude Code, Codex CLI and Qwen Code connect directly.
-3. **Secure by default, with a visible attack surface.** A token is generated at install and required from every source;
-   `mlx api info` shows who can connect and at which address.
-4. **Check first, act second.** When an operation should be refused, it is refused before anything is created.
-   Deleted weights go to a trash you can restore from.
-5. **Problems you can diagnose yourself.** 12 built-in checks (`mlx check`), each with a fix you can run as-is;
-   every install leaves a log.
+| Value | In short |
+|---|---|
+| 🔒 **Your data stays on your Mac** | Inference runs entirely locally; prompts and outputs never pass through a third party. The tool itself only goes online to install dependencies, download weights, and fetch remote media a request asks for |
+| 🔌 **One endpoint for every client** | One address and one token serve both the OpenAI and the Anthropic APIs; Cherry Studio, Claude Code, Codex CLI and Qwen Code connect directly |
+| 🛡️ **Secure by default** | A token is generated at install and required from every source; model processes listen on loopback only; `mlx api info` shows the attack surface |
+| 🧯 **Nothing broken by accident** | An operation that should be refused is refused before anything is created; a model that won't fit in memory doesn't start; deleted weights can be restored from the trash |
+| 🩺 **Self-service troubleshooting** | 12 built-in checks, each with a fix you can run as-is; every install leaves a log |
 
 ---
 
 ## ✨ Features
 
-**Models and inference**
-- `mlx model install`: download and register in one step, resumable, with progress measured from bytes on disk
-- On every `mlx up` the model's `config.json` decides: multimodal goes to `mlx_vlm`, text-only to `mlx_lm`; override per model with `modality`
-- Memory is estimated before start and an oversized model is refused; `--dry-run` shows the backend and why
-- Thinking switch and effort are normalized to the values each model's template accepts, then written in the backend's format
-
-**Gateway and clients**
-- Endpoints: `/v1/chat/completions`, `/v1/completions` (text models), `/v1/responses` and Anthropic `/v1/messages` (multimodal models), `/v1/models`; the `/v1` prefix is optional
-- Three kinds of source: this Mac, VMs (Parallels / VMware shared networking), devices on the same Wi-Fi / wired network; `mlx api info` gives each one its address
-- Streaming requests get keepalive frames while the model is silent, and generation is cancelled when the client disconnects; `http(s)://` images, audio and video are fetched by the gateway
-
-**Operations**
-- The installer is safe to re-run: if nothing changed it finishes in seconds without stopping services; otherwise it backs up, then reinstalls
-- `mlx status` shows it all on one screen: registered models, what's running, memory, backend
-- `mlx model rm <id> --weights` moves weights to a trash; `mlx model trash restore` brings them back
-- The CLI uses only the Python standard library: when the inference environment breaks, `mlx check` still runs and still tells you how to fix it
+| Feature | In short |
+|---|---|
+| 📦 **One-command model install** | `mlx model install` downloads and registers, resumable, with progress measured from bytes on disk |
+| 🧭 **Backend picked from the weights** | On every `mlx up` the model's `config.json` decides: multimodal goes to `mlx_vlm`, text-only to `mlx_lm`; override with `modality` |
+| 📏 **Capacity check before start** | Memory is estimated and an oversized model is refused with the numbers; `--dry-run` shows the backend and why |
+| 🌐 **Unified gateway** | `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, Anthropic `/v1/messages`, `/v1/models`; the `/v1` prefix is optional |
+| 🖥️ **Multiple sources** | This Mac, VMs (Parallels / VMware shared networking), devices on the same Wi-Fi / wired network; `mlx api info` gives each its address |
+| 🧠 **Thinking normalization** | Thinking switch and effort are normalized to the values each model's template accepts, then written in the backend's format |
+| 🖼️ **Multimodal media** | `http(s)://` images, audio and video are fetched by the gateway and handed to the model; videos go to a temp file deleted when the request ends |
+| 📡 **Streaming and cancel on disconnect** | Keepalive frames while the model is silent; generation is cancelled when the client disconnects, so no compute is wasted |
+| ♾️ **Re-runnable installer** | If nothing changed it finishes in seconds without stopping services; otherwise it backs up settings and the registry, then reinstalls; upgrades remove files the old version left behind |
+| 🗂️ **Code, data and weights kept apart** | Three independent directories; a reinstall replaces only the code, tens of GB of weights and your settings stay put |
+| ♻️ **Trash** | `mlx model rm <id> --weights` moves weights to a trash; `mlx model trash restore` brings them back |
+| 🔋 **Zero-dependency CLI** | The CLI and gateway use only the Python standard library: when the inference environment breaks, `mlx check` still runs and tells you how to fix it |
 
 ---
 
-## 🛡️ Security design
+## 🛡️ Security features
+
+### Access control
+
+| Feature | In short |
+|---|---|
+| **Token auth for every source** | Every request needs the gateway token, local ones included; only CORS preflight and `GET /healthz` are exempt. The gateway won't start without a token; tokens must be 32–128 characters |
+| **Source network filtering** | Only loopback, Wi-Fi / wired networks and VM bridges are allowed; VPN and Thunderbolt bridge interfaces are refused; networks are recomputed as they change, and `api.allow_cidrs` adds more |
+| **Endpoint allowlist** | Anything off the list is a 404 and never reaches a model; `POST` must be `application/json` |
+| **Models listen on loopback only** | Backends bind to `127.0.0.1` explicitly, so the gateway is the only exposed port; the `mlx_vlm` backend also has its own backend key |
+| **Optional TLS** | Set `api.tls_cert` / `api.tls_key` to enable it; TLS 1.2 minimum |
+
+### Protocol hardening
+
+| Feature | In short |
+|---|---|
+| **Request smuggling defense** | Chunked request bodies, malformed or oversized `Content-Length` and folded header lines are refused, and the connection is closed so leftover bytes are never parsed as a second request |
+| **Auth before body** | Auth and endpoint checks happen before the request body is read; `Expect: 100-continue` is authenticated and budgeted first |
+| **Error sanitization** | Upstream errors returned to VMs and Wi-Fi devices keep only allowlisted fields, with local absolute paths and exception text removed; local clients see the original for debugging |
+
+### Abuse and resource protection
+
+| Feature | In short |
+|---|---|
+| **SSRF-safe media fetch** | Every redirect hop is re-checked; loopback, link-local, multicast, reserved and any of this Mac's own addresses are always refused; remote sources can't reach private addresses outside the allowed networks; IDN hostnames are refused |
+| **Slow-request defense** | Request bodies have a total read deadline; drip-fed uploads get 408 and their budget back |
+| **In-flight budget** | Request bodies and media being processed share a memory cap; over it, 503 with `Retry-After`; media size and count have their own limits |
+| **Capacity refusal** | A model that won't fit in memory is refused instead of pushing the whole machine into swap |
+
+### Data and secret protection
+
+| Feature | In short |
+|---|---|
+| **Secrets on disk at 0600** | `settings.json` and run records are written atomically at 0600; chat history files are created at 0600 |
+| **Masked everywhere** | Secrets show as `****` in `status`, `config ls` and elsewhere, the original only with `--reveal`; `mlx bootstrap keys` only fills empty values and never prints them |
+| **Export without secrets** | `config export` always leaves secret fields out, so a config is safe to copy to another machine |
+| **Clean child environments** | Model and gateway processes don't inherit the token or backend key from your shell; they get only the values the tool computes |
+| **No secrets in logs or output** | A test runs every command that touches a key, then scans all three directories and all output for it; install output shows your home as `~`, so pasted logs don't carry your username |
+
+### Local process and file safety
+
+| Feature | In short |
+|---|---|
+| **Stops only its own processes** | Process-group ownership decides whether a service on a port is one the tool started; other people's processes are never killed |
+| **No port sharing with strangers** | If another program already listens on the gateway port, the gateway refuses to start instead of sharing it |
+| **Refusals have no side effects** | A refused operation is guaranteed to have created no file or process, enforced by static checks; `--dry-run` only previews |
+| **Bounded deletion** | Irreversible recursive deletes are allowed only on the tool's own directories; deleted weights go to the trash first |
 
 ### Trust boundary
 
@@ -79,18 +120,6 @@ Gateway :8080     the only exposed port: source filter → token auth → endpoi
    ▼
 Model process     loopback only; never goes online, remote media is fetched by the gateway and handed over
 ```
-
-### Controls
-
-| Control | How |
-|---|---|
-| Authentication | Every request needs the token, local ones included (only CORS preflight and `GET /healthz` are exempt); the gateway refuses to start without one |
-| Source filtering | Only loopback, Wi-Fi / wired networks and VM bridges; VPN and Thunderbolt bridge interfaces are refused; add networks with `api.allow_cidrs` |
-| Endpoint allowlist | Anything off the list is a 404 and never reaches a model; `POST` must be `application/json` |
-| Media fetch | Every redirect hop is re-checked; loopback, link-local, multicast and similar addresses are always refused, and remote sources can't reach private addresses outside the allowed networks |
-| Resource limits | A total deadline for reading request bodies (slow drip gets 408), an in-flight memory budget (503 with `Retry-After` when full), media size and count limits |
-| Secrets | `settings.json` and run records are mode 0600; secrets are masked on screen and shown only with `--reveal`; model processes don't inherit keys from your shell |
-| Transport | Optional TLS (`api.tls_cert` / `api.tls_key`), TLS 1.2 minimum |
 
 ### Not covered by default
 
