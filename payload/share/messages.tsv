@@ -167,7 +167,7 @@ help.model.trash.empty	清空回收站（不可恢复）
 help.model.trash.empty.long	永久删除回收站里的全部条目。**不可恢复**，会要求键入 empty 确认。
 chat.nothing_said	会话 {session} 一轮都没聊成 —— 没有输入。多轮模式一行一句，`/exit` 结束；或用 `--prompt=<问题>` 发单轮
 chat.no_reader	多轮模式需要一个输入源（{detail}）
-fit.over	{id} 装不下：它的体积加上已在跑的模型，超过了这台机器的可分配内存预算。先 `mlx down <别的模型>` 腾出内存，或换一个更小/量化更狠的版本。确实要试就加 --ignore-fitness（起完可能开始换页，机器会很慢）
+fit.over	{id} 装不下：模型 {size_gb} GB（已在跑的模型另占 {running_gb} GB），按{bound}计需要约 {need_gb} GB，预算只有 {budget_gb} GB（物理内存 {phys_gb} GB、当前可用 {avail_gb} GB，各先预留 {reserve_pct}%）。先 `mlx down <别的模型>` 或关掉占内存的应用腾出空间，或换一个更小/量化更狠的版本。确实要试就加 --ignore-fitness（起完可能开始换页，机器会很慢）
 fit.undeterminable	容量判定不出来（{detail}）—— **不在容量不明时启动一个装不下的模型**。修好探测再试，或加 --ignore-fitness 跳过判档
 weights.scan_undeterminable	权重目录扫不完整（{detail}）—— **不用部分事实覆盖记录**，那会把扫不到的模型当成孤儿。检查权重根的权限与挂载后重试
 run.unreadable	运行记录存在但读不出来（{detail}）。这**不等于「没在跑」**：后端可能还活着。先看 `mlx status`，必要时手工确认进程后删掉那个 run 记录

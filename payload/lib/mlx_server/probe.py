@@ -2,6 +2,7 @@
 
 `Unknown` 的 kind 是**闭集**（`result.UNKNOWN_KINDS`）—— 不用自由文本区分态。
 """
+import os
 import subprocess
 
 from .result import Ok, Unknown
@@ -108,6 +109,16 @@ def children_of(pid, pgrep_path="/usr/bin/pgrep", timeout_sec=5):
     if not r.stderr.strip():
         return Ok(())                  # rc=1 + 无 stderr ⇒ 确知无子进程
     return Unknown("PS_FAILED", r.stderr.strip()[:80])
+
+
+def physical_mem_mb():
+    # type: () -> object
+    """物理内存（MB）。`sysconf`，不起子进程。"""
+    try:
+        n = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError) as exc:
+        return Unknown("TOOL_UNAVAILABLE", f"sysconf 取不到物理内存：{exc}")
+    return Ok(n // (1024 * 1024)) if n > 0 else Unknown("PARSE_FAILED", "物理内存为 0")
 
 
 def available_mem_mb(vm_stat_path="/usr/bin/vm_stat", timeout_sec=5):

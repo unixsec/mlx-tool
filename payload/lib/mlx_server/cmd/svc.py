@@ -8,7 +8,7 @@
   这就是 `BCR-4-08`「`--dry-run` 要不要跑 venv 探测」的答案：**不跑，因为它根本到不了那一段**。
 """
 from .. import fitness, store, weights
-from ..result import Done, Failed, Ok, Refused, is_unknown
+from ..result import Done, Failed, Ok, Refused, Unknown, is_unknown
 
 # `BCR-R-27` 钉死的求值顺序。写成数据而不是散在代码里的 if：
 # 不钉死的后果是「端口冲突 + 容量 OVER」时 rc 在 6/7 之间随实现顺序漂移。
@@ -48,40 +48,37 @@ def enter_execute():
     return None
 
 
-def _fit_verdict(ctx, target, deps, cfg):
-    # type: (object, str, dict, object) -> object
-    """把三个探针值喂给 `fitness.classify`。**探针在这里取，判定在那里做**
-    （`fitness` 是纯函数，不调探针 —— 那是它能被逐样例对拍的前提）。"""
+def _fit_verdict(ctx, target, deps, cfg, size_mb=None):
+    # type: (object, str, dict, object, object) -> object
+    """把探针值喂给 `fitness.classify_detail`。**探针在这里取，判定在那里做**
+    （`fitness` 是纯函数，不调探针 —— 那是它能被逐样例对拍的前提）。
+
+    `size_mb`：校验段 `route.decide` 已经算好的体积（登记值优先、缺失就现场量，**含 drafter**
+    —— 投机解码时两者同时驻留）。为 0 或测不出 ⇒ `Unknown`：此前按 0 MB 算，判档一律「装得下」。
+    """
     from .. import fitness, store, supervisor
-    avail = deps["avail_mem_mb"]()
+    size = Ok(int(size_mb)) if size_mb and size_mb > 0 else Unknown("NOT_COLLECTED", "模型体积测不出（登记里没有、权重目录量出来是 0）")
     recs = store.load(ctx, store.MODELS)
-    rec = recs.by_id(target)
-    need = int((rec.machine.get("size_mb") or 0) if rec is not None else 0)
-    # **drafter 的体积也要算进去**：投机解码时它与主模型**同时驻留内存**。
-    # 不算的话，一个刚好卡在 TIGHT 边界的主模型加上 drafter 就越界了，
-    # 而判档会说「宽裕」—— 那正是这道闸门要防的情形。
-    draft_id = (rec.user.get("draft_model") if rec is not None else None) or ""
-    if draft_id:
-        drec = recs.by_id(draft_id)
-        if drec is not None:
-            need += int(drec.machine.get("size_mb") or 0)
-    size = Ok(need)
-    # 已在跑的模型占用之和：判档要看的是**剩余**预算
+    # 已在跑的模型：按 max(RSS, 登记体积) 计。RSS 不含 MLX 的 Metal 缓冲（真机只有一半），
+    # mlx_lm 首次请求前还没加载权重 —— 只看 RSS 两种情况都会低估
     rss_of, total = deps.get("rss_mb_of"), 0
-    if rss_of is not None:
-        for sid in supervisor.services_with_record(ctx):
-            if sid == target:
-                continue
-            snap = supervisor.snapshot(ctx, sid) or {}
-            if not snap.get("pid"):
-                continue
-            m = rss_of(snap["pid"])
-            if not is_unknown(m) and m.value:
-                total += int(m.value) // 1024
+    for sid in supervisor.services_with_record(ctx):
+        if sid == target:
+            continue
+        snap = supervisor.snapshot(ctx, sid) or {}
+        if not snap.get("pid"):
+            continue
+        r = recs.by_id(sid)
+        reg = int((r.machine.get("size_mb") or 0) if r is not None else 0)
+        m = rss_of(snap["pid"]) if rss_of is not None else None
+        rss = int(m.value) // 1024 if m is not None and not is_unknown(m) and m.value else 0
+        total += max(rss, reg)
+    phys = deps.get("phys_mem_mb")
     th = fitness.FitThresholds(cfg.values["fit.reserve_pct"],
                                cfg.values["fit.tight_pct"],
                                cfg.values["fit.over_pct"])
-    return fitness.classify(avail, size, Ok(total), th)
+    return fitness.classify_detail(phys() if phys is not None else Ok(1 << 40),
+                                   deps["avail_mem_mb"](), size, Ok(total), th)
 
 
 def _collect(ctx, stack, deps, verb, targets, args=None, dry_run=False):
@@ -693,11 +690,17 @@ def run(ctx, stack, inv, deps):
     # 所以 `Unknown` 也拒绝（rc 9），并指名是哪个输入不确定。
     avail = deps.get("avail_mem_mb")
     if avail is not None and inv.target != "api":
-        verdict = _fit_verdict(ctx, inv.target, deps, state["cfg"])
+        verdict = _fit_verdict(ctx, inv.target, deps, state["cfg"],
+                               getattr(state.get("route"), "size_mb", None))
         if is_unknown(verdict):
             return Refused(9, "fit.undeterminable", detail=verdict.reason)
-        if verdict.value == fitness.OVER and not (inv.args or {}).get("ignore_fitness"):
-            return Refused(6, "fit.over", id=inv.target)
+        v = verdict.value
+        if v["cls"] == fitness.OVER and not (inv.args or {}).get("ignore_fitness"):
+            gb = lambda mb: f"{mb / 1024:.1f}"
+            return Refused(6, "fit.over", id=inv.target, need_gb=gb(v["need_mb"]),
+                           size_gb=gb(v["size_mb"]), running_gb=gb(v["running_mb"]),
+                           bound=v["bound"], budget_gb=gb(v["budget_mb"]), phys_gb=gb(v["phys_mb"]),
+                           avail_gb=gb(v["avail_mb"]), reserve_pct=state["cfg"].values["fit.reserve_pct"])
 
     api_extra = None
     if inv.target == "api":

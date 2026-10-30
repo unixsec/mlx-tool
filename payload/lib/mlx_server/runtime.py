@@ -372,6 +372,7 @@ def build_deps(ctx):
         "emit": _emit,
         # 容量判档：**探针值由调用方注入**（`fitness` 是纯函数，不调探针）。
         "avail_mem_mb": probe.available_mem_mb,
+        "phys_mem_mb": probe.physical_mem_mb,
         "rss_mb_of": probe.rss_kb,
     }
 

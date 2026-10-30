@@ -60,3 +60,34 @@ def classify(mem_budget_mb, size_mb, running_sum_mb, th):
     if need * 100 >= budget * th.tight_pct:
         return Ok(TIGHT)
     return Ok(FIT)
+
+
+_RANK = {FIT: 0, TIGHT: 1, OVER: 2}
+
+
+def classify_detail(phys_mb, avail_mb, size_mb, running_mb, th):
+    # type: (object, object, object, object, FitThresholds) -> object
+    """两道检查取更严的那一档，并给出拒绝文案要用的数字。→ `Probe[dict]`。
+
+    · **物理内存上限**：预算 = 物理内存 × (1 − 预留)；需求 = 新模型 + 在跑模型（调用方按
+      max(RSS, 登记体积) 计 —— 2026-10-31 真机：27 GB 的 mlx_vlm 模型 RSS 只有 14 GB）。
+    · **当前余量**：预算 = 当前可用内存 × (1 − 预留)；需求 = 新模型。可用内存**已经**扣掉了
+      在跑模型的占用，这一道不能再加它们（此前加了，同时跑两个模型就会被误拒）。
+    任一输入 `Unknown` ⇒ `Unknown`（指名哪个输入）。
+    """
+    for name, probe in (("phys_mem_mb", phys_mb), ("avail_mem_mb", avail_mb),
+                        ("size_mb", size_mb), ("running_sum_mb", running_mb)):
+        if is_unknown(probe):
+            return Unknown(probe.kind, f"{name}: {probe.reason}")
+    size, running = int(size_mb.value), int(running_mb.value)
+    phys, avail = int(phys_mb.value), int(avail_mb.value)
+    checks = (("物理内存", phys, size + running), ("当前可用内存", avail, size))
+    worst = None
+    for bound, total, need in checks:
+        cls = classify(Ok(total), Ok(need), Ok(0), th).value
+        if worst is None or _RANK[cls] > _RANK[worst[0]]:
+            worst = (cls, bound, total, need)
+    cls, bound, total, need = worst
+    return Ok({"cls": cls, "bound": bound, "need_mb": need,
+               "budget_mb": total * (100 - th.reserve_pct) // 100,
+               "phys_mb": phys, "avail_mb": avail, "size_mb": size, "running_mb": running})

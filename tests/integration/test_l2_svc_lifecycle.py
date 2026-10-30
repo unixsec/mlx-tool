@@ -134,3 +134,43 @@ def test_restart_forwards_its_flags_to_the_up_phase(payload, sys_py):
     assert got["without"] == "fit.over", f"容量闸门本身失效了：{got}"
     assert got["with"] == "svc.no_spawner", (
         f"--ignore-fitness 在 restart 上是死的（args 没透传）：{got}")
+
+
+FIT_REAL = WORLD + r"""
+import os
+from mlx_server import backendarg
+from mlx_server.cmd.svc import Invocation, run
+from mlx_server.result import Ok
+put_settings({})
+put_caps(["mlx_lm", "mlx_vlm", "mlx"])
+seed("new", "org/new", 8100, config="{}", machine={"size_mb": 8000})
+seed("big", "org/big", 8101, config="{}", machine={"size_mb": 27000})
+seed("nosize", "org/nosize", 8102, config="{}", machine={"size_mb": None})   # 量出来 0.0 MB（只有 4 KB 桩权重）
+os.makedirs(os.path.join(DATA, "run"), exist_ok=True)
+with open(os.path.join(DATA, "run", "big.json"), "w") as fh:
+    json.dump({"pid": 424242, "port": 8101}, fh)
+# 2026-10-31 真机：27 GB 的 mlx_vlm 模型 ps rss 只有 14 GB（Metal 缓冲不计入），vm_stat 可用量却少了 29.5 GB
+base = {"backendarg_spec": backendarg.spec, "avail_mem_mb": lambda: Ok(28000),
+        "phys_mem_mb": lambda: Ok(131072), "rss_mb_of": lambda pid: Ok(14000 * 1024)}
+def up(target, **over):
+    out = run(ctx, None, Invocation("up", target), dict(base, **over))
+    return [getattr(out, "msg_key", None), dict(getattr(out, "args", None) or {})]
+print(json.dumps({"room": up("new"),
+                  "phys_over": up("new", phys_mem_mb=lambda: Ok(40000)),
+                  "avail_over": up("new", avail_mem_mb=lambda: Ok(9000)),
+                  "nosize": up("nosize")}))
+"""
+
+
+def test_capacity_counts_running_models_once_and_by_their_real_size(payload, sys_py):
+    """A2：可用内存本来就扣掉了在跑模型的占用，判档又把它们的 RSS 加了一遍 ⇒ 误拒；
+    而 RSS 只有真实占用的一半 ⇒ 物理上限又被低估。改成两道检查取严：
+    物理内存上限（在跑模型按 max(RSS, 登记体积) 计）与当前余量（只看新模型）。"""
+    got = run_floor(payload, sys_py, FIT_REAL, timeout=60)
+    assert got["room"][0] != "fit.over", f"空闲 28 GB 起一个 8 GB 模型不该被拒：{got}"
+    key, args = got["phys_over"]
+    assert key == "fit.over", f"物理内存装不下（8 + 27 > 40×0.8×0.95）应拒：{got}"
+    assert args.get("bound") == "物理内存" and args.get("need_gb") == "34.2", args
+    key, args = got["avail_over"]
+    assert key == "fit.over" and args.get("bound") == "当前可用内存", got
+    assert got["nosize"][0] == "fit.undeterminable", f"体积为 0 / 缺失不能当成装得下：{got}"
