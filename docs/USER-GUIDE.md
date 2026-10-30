@@ -928,6 +928,11 @@ env_key = "MLX_GATEWAY_TOKEN"          # 在 shell 里 export MLX_GATEWAY_TOKEN=
 wire_api = "responses"
 ```
 
+Codex 启动时会打一行 `ERROR codex_models_manager::manager: failed to refresh available models: … missing field `models``，
+**可以忽略**，对话照常进行。原因是 Codex 用自定义 provider 时，会按它自家模型目录的私有格式（`{"models": [...]}`）去解析 `GET /v1/models`，
+而网关按 OpenAI 标准回 `{"object": "list", "data": [...]}`。解析失败后 Codex 改用内置的模型元数据。
+网关不去迎合这个格式：它没有公开的版本承诺，照抄的话，Codex 一升级就可能变成别的报错（2026-10 在 Codex 0.149 上确认）。
+
 **端点按后端能力开放**（后端由权重自动判定，见[自动选择后端](#backend)）：
 
 | 端点 | 文本模型（mlx_lm） | 多模态模型（mlx_vlm） |
