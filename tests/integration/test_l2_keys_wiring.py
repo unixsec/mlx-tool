@@ -59,7 +59,7 @@ def test_api_spec_carries_keys_masked_and_record_stores_only_fingerprints(payloa
             (fp_tok, fp["key"], src)
         assert tok not in g["record_text"] and KEY not in g["record_text"], "运行记录里有密钥原值"
     assert got["config"]["dry"]["sources"]["api.token"] == "machine"
-    assert got["env"]["dry"]["sources"]["api.token"] == "cli", "shell 里的 MLX_GATEWAY_TOKEN 应覆盖配置"
+    assert got["env"]["dry"]["sources"]["api.token"] == "env", "shell 里的 MLX_GATEWAY_TOKEN 应覆盖配置"
 
 
 GW_PROG = AS_STREAM + r'''

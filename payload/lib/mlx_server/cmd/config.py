@@ -85,10 +85,10 @@ def _layers(ctx, target, deps=None, runtime=False):
     # type: (object, str, dict, bool) -> dict
     """`schema.effective` 的输入层。**不自己构造** —— 转给 `schema.build_layers`，
     与 `up` 的求值点（`svc._v_config`）是同一份实现；此前两处各一份，读侧缺登记端口、
-    缺网关 cli 层、不看 `level`，于是 `config get` 与 `up` 对同一个键各说各的。
+    缺网关的 install/env 层、不看 `level`，于是 `config get` 与 `up` 对同一个键各说各的。
 
     `runtime=True`（get/ls/validate/diff）把进程环境带来的值（网关端口、
-    `MLX_GATEWAY_TOKEN`）算进去，来源标 `cli` —— 那就是 `up api` 会用的值；
+    `MLX_GATEWAY_TOKEN`）算进去，来源标 `install` / `env` —— 那就是 `up api` 会用的值；
     set/unset 回读与 export 用 `runtime=False`，说的是落盘状态。
     """
     defs = _defs(ctx, deps)
@@ -224,8 +224,8 @@ def run(ctx, stack, inv, deps=None):
         rows = []
         for key in sorted(cfg.values):
             src = cfg.sources.get(key, "default")
-            if src in ("default", "cli"):
-                # cli 层（安装时写定的网关端口、shell 里的 MLX_GATEWAY_TOKEN）不是「你改过的配置」：
+            if src in ("default", "install", "env"):
+                # install / env 层（安装时写定的网关端口、shell 里的 MLX_GATEWAY_TOKEN）不是「你改过的配置」：
                 # 列进来的话全局 diff 永远多一行网关端口（终审 C M4）。生效值照常见 `config get/ls`
                 continue
             # 出厂值取自表；表里没有该键时回落 —— `_factory` 已经算好了这份

@@ -77,7 +77,7 @@ class Ctx:
         object.__setattr__(self, "share_root",
                            share_root or os.path.join(root_code, "share"))
         # shell 里显式给的网关令牌（spec §3.4 `token_source=env`）。**只在这里读环境**（G-RES-11），
-        # 校验段「生效配置」把它放进 cli 层覆盖 `api.token`。
+        # 校验段「生效配置」把它放进 env 层覆盖 `api.token`。
         object.__setattr__(self, "gateway_token_env", gateway_token_env or "")
         object.__setattr__(self, "self_started_at", self_started_at)
 

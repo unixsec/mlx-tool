@@ -464,7 +464,7 @@ $ mlx up qwen05b --dry-run
   就绪  bind · 最多等 20 秒 · 并发上限 8
 ```
 
-来源层：`default` = 内置默认值，`machine` = 全局设置或注册表里登记的，`user` = 这个模型自己的设置。
+来源层：`default` = 内置默认值，`machine` = 全局设置或注册表里登记的，`user` = 这个模型自己的设置，`install` = 安装时写定的（网关端口），`env` = 当前 shell 的环境变量（`MLX_GATEWAY_TOKEN`）。`config ls` 末尾会对出现过的层逐个说明。
 `port: machine` 说明端口来自你登记的 8150，而不是内置的 8100。
 
 ### 它会等到真的就绪才返回
@@ -1444,7 +1444,7 @@ mlx config diff
 
 `mlx config get <模型> --key=port` 显示的就是 `up` 会用的端口：模型自己设过的值（来源 user），否则是登记时给的端口（来源 machine）。
 
-`config get port`（不带模型、即网关）显示的是安装时写进 `constants.env` 的**网关端口**，来源 `cli`。
+`config get port`（不带模型、即网关）显示的是安装时写进 `constants.env` 的**网关端口**，来源 `install`。
 `port` 是模型级键，`mlx config set port --value=…`（全局）会被拒绝；旧版留下的全局 `port` 用 `mlx config unset port` 清掉。
 
 每个键有**作用范围**（见下表）：作用范围为「全局」的键（`api.*`、`backend.api_key`、`fit.*`）
@@ -1484,7 +1484,7 @@ $ mlx config diff
   max_tokens   4096        machine   81920
 ```
 
-`diff` 只列你改过的：来自安装或环境的值（来源 `cli`，如网关端口）不列。带模型时（`config diff <模型>`）登记端口会作为一行出现（来源 machine）。
+`diff` 只列你改过的：来自安装或环境的值（来源 `install` / `env`，如网关端口）不列。带模型时（`config diff <模型>`）登记端口会作为一行出现（来源 machine）。
 
 ### 搬到另一台机器
 

@@ -8,6 +8,15 @@
 """
 from .. import ui
 
+# 层名 → 屏幕上的一句话。层序与含义见 `schema.build_layers`。
+_LAYER_SAID = {
+    "default": "出厂值",
+    "machine": "全局设置（mlx config set）",
+    "user": "本模型的设置（mlx config set <模型>）",
+    "install": "安装时写定（改它要带环境变量重装）",
+    "env": "当前 shell 的环境变量",
+}
+
 
 def _config_ls(p):
     # type: (dict) -> str
@@ -23,6 +32,10 @@ def _config_ls(p):
     lines = [f"  {ui._pad(k, w)}  {ui._pad(ui._flat(v), 12)}{srcs.get(k, '')}"
              for k, v in sorted(vals.items())]
     tail = ["", f"  共 {len(vals)} 个键；右列是取值来源的层"]
+    # 层名是 `--json` 的接口，不改；屏幕上给出现过的每个层名一句人话（2026-10-29：`cli` 被读成命令行）
+    used = [n for n in _LAYER_SAID if n in set(srcs.values())]
+    if used:
+        tail.append("  来源：" + " · ".join(f"{n} {_LAYER_SAID[n]}" for n in used))
     if p.get("dropped"):
         tail += ["", "  已退役的键：" + "、".join(p["dropped"]) + "（`mlx model repair` 清除）"]
     return "\n".join(lines + tail)

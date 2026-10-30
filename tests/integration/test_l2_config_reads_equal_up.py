@@ -102,9 +102,9 @@ def _expected_source(key, level, target, env_token):
     """只从 scope/level 推出的期望来源（不看实现）。"""
     if target == "api":
         if key == "port":
-            return "cli"
+            return "install"          # 安装时写进 constants.env 的网关端口
         if key == "api.token" and env_token:
-            return "cli"
+            return "env"              # shell 里导出的 MLX_GATEWAY_TOKEN
         return "machine" if level in ("global", "both") else "default"
     if target == "full":
         return "user" if level in ("model", "both") else "machine"
@@ -137,8 +137,8 @@ def test_config_reads_equal_what_up_uses_for_every_key(payload, sys_py):
     # 阳性：登记端口 / 网关端口 / 环境令牌 / 模型自设值都真的出现过
     s = got["scenarios"]
     assert s["no_env_token"]["plain"]["get"]["port"] == [8151, "machine"]
-    assert s["no_env_token"]["api"]["get"]["port"] == [8340, "cli"]
-    assert s["env_token"]["api"]["get"]["api.token"][1] == "cli"
+    assert s["no_env_token"]["api"]["get"]["port"] == [8340, "install"]
+    assert s["env_token"]["api"]["get"]["api.token"][1] == "env"
     assert s["no_env_token"]["api"]["get"]["api.token"][1] == "machine"
     assert s["no_env_token"]["full"]["get"]["modality"] == [got["model_user"]["modality"], "user"]
     # 密钥永不以原值出现在读侧

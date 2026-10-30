@@ -233,7 +233,7 @@ def write_record(ctx, spec, pid, pgid, port, started_at, nonce, extra=None):
         env = spec.env or {}
         rec.update({"token_fp": key_fingerprint(env.get("MLX_GATEWAY_TOKEN")),
                     "backend_key_fp": key_fingerprint(env.get("MLX_BACKEND_API_KEY")),
-                    "token_source": ("env" if (spec.sources or {}).get("api.token") == "cli"
+                    "token_source": ("env" if (spec.sources or {}).get("api.token") == "env"
                                      else "config")})
     if extra:
         rec.update(extra)          # 调用方判定的启动事实（api：绑定、TLS、解释器）

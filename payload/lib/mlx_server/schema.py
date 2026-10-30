@@ -225,12 +225,14 @@ def build_layers(defs, settings, is_model, rec_user=None, registered_port=None,
     `level` 列 —— 同一个键两个命令两个答案（`config get <模型> --key=port` 报
     8100，`up` 用登记端口）。两份实现必然漂移，所以合并成这一份。
 
-    层序（低→高）：出厂默认 < machine < user < cli。
+    层序（低→高）：出厂默认 < machine < user < install < env。
       · machine = settings 里 scope==user 且 level∈(global,both) 的键；
                   模型目标**不吃全局 `port`**，改用注册表登记端口
       · user    = 模型记录 user 段里 scope==user 且 level∈(model,both) 的键
-      · cli     = 仅网关（`is_model` 假）且 `runtime`：`ctx.gateway_port`，
-                  以及 shell 里显式给的 `MLX_GATEWAY_TOKEN`（→ `api.token`）。
+      · install = 仅网关（`is_model` 假）且 `runtime`：`ctx.gateway_port`（安装时写进 constants.env）
+      · env     = 同上条件：shell 里显式给的 `MLX_GATEWAY_TOKEN`（→ `api.token`）
+                  两者原本合成一层叫 `cli`，可哪一样都不是命令行给的 —— 一层装两种出处，
+                  起什么名字都说错一半；层名就是 `config ls` 的「来源」列（2026-10-29 真机易误读）。
                   `runtime=False` 给 set/unset 回读与 export：它们说的是**落盘状态**，
                   不该把进程环境当成用户设过的值。
     返回 `(layers, dropped)`；`dropped` = 被忽略的表外键（已退役的键）。
@@ -243,11 +245,10 @@ def build_layers(defs, settings, is_model, rec_user=None, registered_port=None,
     layers = {}
     if not is_model:
         if runtime:
-            layers["cli"] = {}
             if gateway_port is not None:
-                layers["cli"]["port"] = gateway_port
+                layers["install"] = {"port": gateway_port}
             if gateway_token_env:
-                layers["cli"]["api.token"] = gateway_token_env
+                layers["env"] = {"api.token": gateway_token_env}
     else:
         if registered_port is not None:
             machine["port"] = int(registered_port)
@@ -271,7 +272,7 @@ def effective(service, layers, venv_python="", defaults=None):
     # type: (str, dict, str, dict) -> ServiceConfig
     """把分层配置合成生效值。**纯函数**：同样入参任意次调用返回逐字节相同。
 
-    层序（低→高）：出厂默认 < machine < user < cli。
+    层序（低→高）：出厂默认 < machine < user < install < env。
     每项记来源层，`--dry-run` 要逐项打印它（`BCR-R-27`）。
 
     `defaults` 由调用方注入（来自 `schema.tsv`）—— **纯函数不自己读表**。
@@ -287,7 +288,7 @@ def effective(service, layers, venv_python="", defaults=None):
     values, sources = {}, {}
     for k, v in base.items():
         values[k], sources[k] = v, "default"
-    for layer in ("machine", "user", "cli"):
+    for layer in ("machine", "user", "install", "env"):
         for k, v in (layers.get(layer) or {}).items():
             if k not in base:
                 raise ConfigError(f"未知配置键 {k}（层 {layer}）", kind="domain", key=k)

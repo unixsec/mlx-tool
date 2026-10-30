@@ -69,6 +69,13 @@ def test_display_surfaces(payload, sys_py):
 
     assert got["config_dropped"] == ["backend"]
     assert "已退役的键：backend" in got["config_text"]
+    # 「来源」列是层名；出现过的每个层名都要在图例里有一句人话（2026-10-29 真机：`cli` 被读成命令行）
+    rows = [ln.split() for ln in got["config_text"].splitlines() if ln.startswith("  ") and len(ln.split()) >= 3]
+    used = {r[-1] for r in rows if r[-1] in {"default", "machine", "user", "install", "env", "cli"}}
+    assert used >= {"default", "machine", "install"}, (used, got["config_text"])
+    legend = [ln for ln in got["config_text"].splitlines() if "来源：" in ln]
+    assert legend, got["config_text"]
+    assert all(f"{u} " in legend[0] for u in used), (used, legend)
 
     assert len(got["tool_row"]) == 1, "status 的模型行里没有 vis（注册表读取失败？）"
     row = got["tool_row"][0]
